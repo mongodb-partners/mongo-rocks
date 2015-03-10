@@ -42,12 +42,13 @@
 #include "mongo/db/global_environment_experiment.h"
 #include "mongo/db/namespace_string.h"
 #include "mongo/db/operation_context_impl.h"
-#include "mongo/db/storage/rocks/rocks_engine.h"
-#include "mongo/db/storage/rocks/rocks_record_store.h"
-#include "mongo/db/storage/rocks/rocks_recovery_unit.h"
 #include "mongo/util/background.h"
 #include "mongo/util/exit.h"
 #include "mongo/util/log.h"
+
+#include "rocks_engine.h"
+#include "rocks_record_store.h"
+#include "rocks_recovery_unit.h"
 
 namespace mongo {
 

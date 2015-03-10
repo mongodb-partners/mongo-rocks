@@ -45,8 +45,9 @@
 #include "mongo/base/disallow_copying.h"
 #include "mongo/bson/ordering.h"
 #include "mongo/db/storage/kv/kv_engine.h"
-#include "mongo/db/storage/rocks/rocks_transaction.h"
 #include "mongo/util/string_map.h"
+
+#include "rocks_transaction.h"
 
 namespace rocksdb {
     class ColumnFamilyHandle;

@@ -30,7 +30,7 @@
 
 #include "mongo/platform/basic.h"
 
-#include "mongo/db/storage/rocks/rocks_index.h"
+#include "rocks_index.h"
 
 #include <boost/scoped_ptr.hpp>
 #include <boost/shared_ptr.hpp>
@@ -47,12 +47,13 @@
 #include "mongo/bson/bsonobjbuilder.h"
 #include "mongo/db/concurrency/write_conflict_exception.h"
 #include "mongo/db/storage/index_entry_comparison.h"
-#include "mongo/db/storage/rocks/rocks_engine.h"
-#include "mongo/db/storage/rocks/rocks_record_store.h"
-#include "mongo/db/storage/rocks/rocks_recovery_unit.h"
-#include "mongo/db/storage/rocks/rocks_util.h"
 #include "mongo/util/log.h"
 #include "mongo/util/mongoutils/str.h"
+
+#include "rocks_engine.h"
+#include "rocks_record_store.h"
+#include "rocks_recovery_unit.h"
+#include "rocks_util.h"
 
 namespace mongo {
 

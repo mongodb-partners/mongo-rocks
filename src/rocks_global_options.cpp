@@ -30,8 +30,9 @@
 
 #include "mongo/platform/basic.h"
 
+#include "rocks_global_options.h"
+
 #include "mongo/base/status.h"
-#include "mongo/db/storage/rocks/rocks_global_options.h"
 #include "mongo/util/log.h"
 #include "mongo/util/options_parser/constraints.h"
 

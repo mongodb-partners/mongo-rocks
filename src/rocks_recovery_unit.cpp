@@ -31,7 +31,7 @@
 #include "mongo/platform/basic.h"
 #include "mongo/platform/endian.h"
 
-#include "mongo/db/storage/rocks/rocks_recovery_unit.h"
+#include "rocks_recovery_unit.h"
 
 #include <rocksdb/comparator.h>
 #include <rocksdb/db.h>
@@ -44,9 +44,10 @@
 #include "mongo/base/checked_cast.h"
 #include "mongo/db/concurrency/write_conflict_exception.h"
 #include "mongo/db/operation_context.h"
-#include "mongo/db/storage/rocks/rocks_transaction.h"
-#include "mongo/db/storage/rocks/rocks_util.h"
 #include "mongo/util/log.h"
+
+#include "rocks_transaction.h"
+#include "rocks_util.h"
 
 namespace mongo {
     namespace {

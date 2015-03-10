@@ -28,7 +28,7 @@
 
 #include "mongo/platform/basic.h"
 
-#include "mongo/db/storage/rocks/rocks_transaction.h"
+#include "rocks_transaction.h"
 
 #include <atomic>
 #include <map>

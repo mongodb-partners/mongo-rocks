@@ -31,8 +31,7 @@
 
 #include "mongo/platform/basic.h"
 
-#include "mongo/db/storage/rocks/rocks_server_status.h"
-#include "mongo/db/storage/rocks/rocks_recovery_unit.h"
+#include "rocks_server_status.h"
 
 #include "boost/scoped_ptr.hpp"
 
@@ -40,9 +39,11 @@
 
 #include "mongo/base/checked_cast.h"
 #include "mongo/bson/bsonobjbuilder.h"
-#include "mongo/db/storage/rocks/rocks_engine.h"
 #include "mongo/util/assert_util.h"
 #include "mongo/util/scopeguard.h"
+
+#include "rocks_engine.h"
+#include "rocks_recovery_unit.h"
 
 namespace mongo {
     using std::string;

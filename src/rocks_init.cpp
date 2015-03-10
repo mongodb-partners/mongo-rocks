@@ -29,15 +29,15 @@
 
 #include "mongo/platform/basic.h"
 
-#include "mongo/db/storage/rocks/rocks_engine.h"
-#include "mongo/db/storage/rocks/rocks_server_status.h"
-
 #include "mongo/base/init.h"
 #include "mongo/db/global_environment_experiment.h"
 #include "mongo/db/storage_options.h"
 #include "mongo/db/storage/kv/kv_storage_engine.h"
 #include "mongo/db/storage/storage_engine_metadata.h"
 #include "mongo/util/mongoutils/str.h"
+
+#include "rocks_engine.h"
+#include "rocks_server_status.h"
 
 namespace mongo {
     const std::string kRocksDBEngineName = "RocksDB";

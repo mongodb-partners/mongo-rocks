@@ -31,7 +31,7 @@
 
 #include "mongo/platform/basic.h"
 
-#include "mongo/db/storage/rocks/rocks_engine.h"
+#include "rocks_engine.h"
 
 #include <boost/filesystem/operations.hpp>
 #include <boost/make_shared.hpp>
@@ -51,13 +51,14 @@
 #include "mongo/db/catalog/collection_options.h"
 #include "mongo/db/index/index_descriptor.h"
 #include "mongo/db/operation_context.h"
-#include "mongo/db/storage/rocks/rocks_global_options.h"
-#include "mongo/db/storage/rocks/rocks_record_store.h"
-#include "mongo/db/storage/rocks/rocks_recovery_unit.h"
-#include "mongo/db/storage/rocks/rocks_index.h"
 #include "mongo/platform/endian.h"
 #include "mongo/util/log.h"
 #include "mongo/util/processinfo.h"
+
+#include "rocks_global_options.h"
+#include "rocks_record_store.h"
+#include "rocks_recovery_unit.h"
+#include "rocks_index.h"
 
 #define ROCKS_TRACE log()
 

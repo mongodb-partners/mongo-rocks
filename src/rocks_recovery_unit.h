@@ -42,7 +42,8 @@
 #include "mongo/base/owned_pointer_vector.h"
 #include "mongo/db/record_id.h"
 #include "mongo/db/storage/recovery_unit.h"
-#include "mongo/db/storage/rocks/rocks_transaction.h"
+
+#include "rocks_transaction.h"
 
 namespace rocksdb {
     class DB;

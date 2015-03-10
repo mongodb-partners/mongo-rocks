@@ -26,8 +26,6 @@
  *    it in the license file.
  */
 
-#include "mongo/db/storage/sorted_data_interface.h"
-
 #include <atomic>
 #include <boost/shared_ptr.hpp>
 #include <string>
@@ -36,6 +34,7 @@
 
 #include "mongo/bson/ordering.h"
 #include "mongo/db/storage/key_string.h"
+#include "mongo/db/storage/sorted_data_interface.h"
 
 #pragma once
 

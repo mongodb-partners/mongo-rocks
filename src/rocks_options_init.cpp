@@ -26,12 +26,13 @@
  *    it in the license file.
  */
 
-#include "mongo/util/options_parser/startup_option_init.h"
 
 #include <iostream>
 
+#include "mongo/util/options_parser/startup_option_init.h"
 #include "mongo/util/options_parser/startup_options.h"
-#include "mongo/db/storage/rocks/rocks_global_options.h"
+
+#include "rocks_global_options.h"
 
 namespace mongo {
 

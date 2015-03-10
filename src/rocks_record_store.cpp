@@ -31,7 +31,7 @@
 
 #include "mongo/platform/basic.h"
 
-#include "mongo/db/storage/rocks/rocks_record_store.h"
+#include "rocks_record_store.h"
 
 #include <boost/scoped_array.hpp>
 #include <boost/shared_ptr.hpp>
@@ -51,13 +51,14 @@
 #include "mongo/db/concurrency/write_conflict_exception.h"
 #include "mongo/db/namespace_string.h"
 #include "mongo/db/operation_context.h"
-#include "mongo/db/storage/rocks/rocks_engine.h"
-#include "mongo/db/storage/rocks/rocks_recovery_unit.h"
 #include "mongo/db/storage/oplog_hack.h"
 #include "mongo/platform/endian.h"
 #include "mongo/util/background.h"
 #include "mongo/util/log.h"
 #include "mongo/util/timer.h"
+
+#include "rocks_engine.h"
+#include "rocks_recovery_unit.h"
 
 namespace mongo {
 
