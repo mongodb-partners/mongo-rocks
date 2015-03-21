@@ -134,15 +134,10 @@ namespace mongo {
             _commit();
         }
 
-        try {
-            for (Changes::const_iterator it = _changes.begin(), end = _changes.end(); it != end; ++it) {
-                (*it)->commit();
-            }
-            _changes.clear();
+        for (Changes::const_iterator it = _changes.begin(), end = _changes.end(); it != end; ++it) {
+            (*it)->commit();
         }
-        catch (...) {
-            std::terminate();
-        }
+        _changes.clear();
 
         _releaseSnapshot();
     }
@@ -155,7 +150,12 @@ namespace mongo {
     }
 
     bool RocksRecoveryUnit::awaitCommit() {
-        // TODO
+        // Not sure what we should do here. awaitCommit() is called when WriteConcern is FSYNC or
+        // JOURNAL. In our case, we're doing JOURNAL WriteConcern for each transaction (no matter
+        // WriteConcern). However, if WriteConcern is FSYNC we should probably call Write() with
+        // sync option. So far we're just not doing anything. In the future we should figure which
+        // of the WriteConcerns is this (FSYNC or JOURNAL) and then if it's FSYNC do something
+        // special.
         return true;
     }
 
@@ -185,6 +185,7 @@ namespace mongo {
 
     void RocksRecoveryUnit::_releaseSnapshot() {
         if (_snapshot) {
+            _transaction.abort();
             _db->ReleaseSnapshot(_snapshot);
             _snapshot = nullptr;
         }
@@ -197,9 +198,8 @@ namespace mongo {
             auto& counter = pair.second;
             counter._value->fetch_add(counter._delta, std::memory_order::memory_order_relaxed);
             long long newValue = counter._value->load(std::memory_order::memory_order_relaxed);
-            int64_t littleEndian = static_cast<int64_t>(endian::littleToNative(newValue));
-            const char* nr_ptr = reinterpret_cast<const char*>(&littleEndian);
-            writeBatch()->Put(pair.first, rocksdb::Slice(nr_ptr, sizeof(littleEndian)));
+            int64_t storage;
+            writeBatch()->Put(pair.first, encodeCounter(newValue, &storage));
         }
 
         if (_writeBatch->GetWriteBatch()->Count() != 0) {
@@ -208,10 +208,7 @@ namespace mongo {
             rocksdb::WriteOptions writeOptions;
             writeOptions.disableWAL = !_durable;
             auto status = _db->Write(rocksdb::WriteOptions(), _writeBatch->GetWriteBatch());
-            if (!status.ok()) {
-                log() << "uh oh: " << status.ToString();
-                invariant(!"rocks write batch commit failed");
-            }
+            invariantRocksOK(status);
             _transaction.commit();
         }
         _deltaCounters.clear();
@@ -219,20 +216,12 @@ namespace mongo {
     }
 
     void RocksRecoveryUnit::_abort() {
-        try {
-            for (Changes::const_reverse_iterator it = _changes.rbegin(), end = _changes.rend();
-                    it != end; ++it) {
-                Change* change = *it;
-                LOG(2) << "CUSTOM ROLLBACK " << demangleName(typeid(*change));
-                change->rollback();
-            }
-            _changes.clear();
+        for (Changes::const_reverse_iterator it = _changes.rbegin(), end = _changes.rend();
+                it != end; ++it) {
+            (*it)->rollback();
         }
-        catch (...) {
-            std::terminate();
-        }
+        _changes.clear();
 
-        _transaction.abort();
         _deltaCounters.clear();
         _writeBatch.reset();
 
@@ -259,7 +248,6 @@ namespace mongo {
                 if (entry.type == rocksdb::WriteType::kDeleteRecord) {
                     return rocksdb::Status::NotFound();
                 }
-                // TODO avoid double copy
                 *value = std::string(entry.value.data(), entry.value.size());
                 return rocksdb::Status::OK();
             }
@@ -314,10 +302,8 @@ namespace mongo {
         auto s = db->Get(rocksdb::ReadOptions(), counterKey, &value);
         if (s.IsNotFound()) {
             return 0;
-        } else if (!s.ok()) {
-            log() << "Counter get failed " << s.ToString();
-            invariant(!"Counter get failed");
         }
+        invariantRocksOK(s);
 
         int64_t ret;
         invariant(sizeof(ret) == value.size());
@@ -330,4 +316,8 @@ namespace mongo {
         return checked_cast<RocksRecoveryUnit*>(opCtx->recoveryUnit());
     }
 
+    rocksdb::Slice RocksRecoveryUnit::encodeCounter(long long counter, int64_t* storage) {
+        *storage = static_cast<int64_t>(endian::littleToNative(counter));
+        return rocksdb::Slice(reinterpret_cast<const char*>(storage), sizeof(*storage));
+    }
 }

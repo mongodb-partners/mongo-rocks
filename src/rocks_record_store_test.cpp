@@ -204,7 +204,6 @@ namespace mongo {
         return res;
     }
 
-    // TODO remove from here once mongo made the test generic
     TEST(RocksRecordStoreTest, OplogHack) {
         RocksRecordStoreHarnessHelper harnessHelper;
         scoped_ptr<RecordStore> rs(harnessHelper.newNonCappedRecordStore("local.oplog.foo"));

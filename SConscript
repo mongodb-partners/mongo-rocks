@@ -9,6 +9,7 @@ env.Library(
         'src/rocks_recovery_unit.cpp',
         'src/rocks_index.cpp',
         'src/rocks_transaction.cpp',
+        'src/rocks_util.cpp',
         ],
     LIBDEPS= [
         '$BUILD_DIR/mongo/bson',
@@ -33,6 +34,7 @@ env.Library(
     source= [
         'src/rocks_init.cpp',
         'src/rocks_options_init.cpp',
+        'src/rocks_parameters.cpp',
         'src/rocks_record_store_mongod.cpp',
         'src/rocks_server_status.cpp',
         ],

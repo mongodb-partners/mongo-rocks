@@ -42,8 +42,9 @@
 #include "mongo/util/assert_util.h"
 #include "mongo/util/scopeguard.h"
 
-#include "rocks_engine.h"
 #include "rocks_recovery_unit.h"
+#include "rocks_engine.h"
+#include "rocks_transaction.h"
 
 namespace mongo {
     using std::string;
@@ -109,6 +110,10 @@ namespace mongo {
         }
         bob.append("total-live-recovery-units", RocksRecoveryUnit::getTotalLiveRecoveryUnits());
         bob.append("block-cache-usage", PrettyPrintBytes(_engine->getBlockCacheUsage()));
+        bob.append("transaction-engine-keys",
+                   static_cast<long long>(_engine->getTransactionEngine()->numKeysTracked()));
+        bob.append("transaction-engine-snapshots",
+                   static_cast<long long>(_engine->getTransactionEngine()->numActiveSnapshots()));
 
         return bob.obj();
     }

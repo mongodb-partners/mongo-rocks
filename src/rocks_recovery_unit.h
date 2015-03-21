@@ -38,6 +38,8 @@
 #include <boost/scoped_ptr.hpp>
 #include <boost/shared_ptr.hpp>
 
+#include <rocksdb/slice.h>
+
 #include "mongo/base/disallow_copying.h"
 #include "mongo/base/owned_pointer_vector.h"
 #include "mongo/db/record_id.h"
@@ -123,6 +125,8 @@ namespace mongo {
         static RocksRecoveryUnit* getRocksRecoveryUnit(OperationContext* opCtx);
 
         static int getTotalLiveRecoveryUnits() { return _totalLiveRecoveryUnits.load(); }
+
+        static rocksdb::Slice encodeCounter(long long counter, int64_t* storage);
 
     private:
         void _releaseSnapshot();

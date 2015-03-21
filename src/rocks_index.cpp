@@ -112,7 +112,7 @@ namespace mongo {
                 auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(txn);
                 _iterator.reset(ru->NewIterator(_prefix));
                 _currentSequenceNumber = ru->snapshot()->GetSequenceNumber();
-                checkStatus();
+                invariantRocksOK(_iterator->status());
             }
 
             int getDirection() const { return _forward ? 1 : -1; }
@@ -234,6 +234,7 @@ namespace mongo {
                 auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(txn);
                 if (_currentSequenceNumber != ru->snapshot()->GetSequenceNumber()) {
                     _iterator.reset(ru->NewIterator(_prefix));
+                    invariantRocksOK(_iterator->status());
                     _currentSequenceNumber = ru->snapshot()->GetSequenceNumber();
 
                     if (!_savedEOF) {
@@ -259,19 +260,19 @@ namespace mongo {
                 } else {
                     _iterator->Prev();
                 }
+                invariantRocksOK(_iterator->status());
             }
 
             // Seeks to query. Returns true on exact match.
             bool seekCursor(const KeyString& query) {
                 const rocksdb::Slice keySlice(query.getBuffer(), query.getSize());
                 _iterator->Seek(keySlice);
-                checkStatus();
                 if (!_iterator->Valid()) {
                     if (!_forward) {
                         // this will give lower bound behavior for backwards
                         _iterator->SeekToLast();
-                        checkStatus();
                     }
+                    invariantRocksOK(_iterator->status());
                     return false;
                 }
 
@@ -287,6 +288,7 @@ namespace mongo {
                     // were
                     // searching for.
                     _iterator->Prev();
+                    invariantRocksOK(_iterator->status());
                 }
 
                 return false;
@@ -298,8 +300,6 @@ namespace mongo {
                     return;
                 }
 
-                checkStatus();
-
                 auto key = _iterator->key();
                 _key.resetFromBuffer(key.data(), key.size());
                 _keyBsonCache = BSONObj();    // Invalidate cached BSONObj.
@@ -308,14 +308,6 @@ namespace mongo {
                 _locateCacheKey = BSONObj();  // Invalidate locate cache
 
                 updateLocAndTypeBits();
-            }
-
-            void checkStatus() {
-                if ( !_iterator->status().ok() ) {
-                    log() << _iterator->status().ToString();
-                    // TODO: SERVER-16979 Correctly handle errors returned by RocksDB
-                    invariant( false );
-                }
             }
 
             rocksdb::DB* _db;                                       // not owned
@@ -423,41 +415,121 @@ namespace mongo {
             }
         };
 
-        // TODO optimize and create two implementations -- one for unique and one for standard index
-        class RocksIndexBulkBuilder : public SortedDataBuilderInterface {
-        public:
-            RocksIndexBulkBuilder(RocksIndexBase* index, OperationContext* txn, bool dupsAllowed)
-                : _index(index), _txn(txn), _dupsAllowed(dupsAllowed) {
-                invariant(index->isEmpty(txn));
-            }
-
-            Status addKey(const BSONObj& key, const RecordId& loc) {
-                return _index->insert(_txn, key, loc, _dupsAllowed);
-            }
-
-            void commit(bool mayInterrupt) {
-                WriteUnitOfWork uow(_txn);
-                uow.commit();
-            }
-
-        private:
-            RocksIndexBase* _index;
-            OperationContext* _txn;
-            bool _dupsAllowed;
-        };
-
     } // namespace
+
+    /**
+     * Bulk builds a non-unique index.
+     */
+    class RocksIndexBase::StandardBulkBuilder : public SortedDataBuilderInterface {
+    public:
+        StandardBulkBuilder(RocksStandardIndex* index, OperationContext* txn) : _index(index), _txn(txn) {}
+
+        Status addKey(const BSONObj& key, const RecordId& loc) {
+            return _index->insert(_txn, key, loc, true);
+        }
+
+        void commit(bool mayInterrupt) {
+            WriteUnitOfWork uow(_txn);
+            uow.commit();
+        }
+
+    private:
+        RocksStandardIndex* _index;
+        OperationContext* _txn;
+    };
+
+    /**
+     * Bulk builds a unique index.
+     *
+     * In order to support unique indexes in dupsAllowed mode this class only does an actual insert
+     * after it sees a key after the one we are trying to insert. This allows us to gather up all
+     * duplicate locs and insert them all together. This is necessary since bulk cursors can only
+     * append data.
+     */
+    class RocksIndexBase::UniqueBulkBuilder : public SortedDataBuilderInterface {
+    public:
+        UniqueBulkBuilder(std::string prefix, Ordering ordering, OperationContext* txn, bool dupsAllowed)
+            : _prefix(std::move(prefix)), _ordering(ordering), _txn(txn), _dupsAllowed(dupsAllowed) {}
+
+        Status addKey(const BSONObj& newKey, const RecordId& loc) {
+            Status s = checkKeySize(newKey);
+            if (!s.isOK()) {
+                return s;
+            }
+
+            const int cmp = newKey.woCompare(_key, _ordering);
+            if (cmp != 0) {
+                if (!_key.isEmpty()) { // _key.isEmpty() is only true on the first call to addKey().
+                    invariant(cmp > 0); // newKey must be > the last key
+                    // We are done with dups of the last key so we can insert it now.
+                    doInsert();
+                }
+                invariant(_records.empty());
+            }
+            else {
+                // Dup found!
+                if (!_dupsAllowed) {
+                    return Status(ErrorCodes::DuplicateKey, dupKeyError(newKey));
+                }
+
+                // If we get here, we are in the weird mode where dups are allowed on a unique
+                // index, so add ourselves to the list of duplicate locs. This also replaces the
+                // _key which is correct since any dups seen later are likely to be newer.
+            }
+
+            _key = newKey.getOwned();
+            _keyString.resetToKey(_key, _ordering);
+            _records.push_back(std::make_pair(loc, _keyString.getTypeBits()));
+
+            return Status::OK();
+        }
+
+        void commit(bool mayInterrupt) {
+            WriteUnitOfWork uow(_txn);
+            if (!_records.empty()) {
+                // This handles inserting the last unique key.
+                doInsert();
+            }
+            uow.commit();
+        }
+
+    private:
+        void doInsert() {
+            invariant(!_records.empty());
+
+            KeyString value;
+            for (size_t i = 0; i < _records.size(); i++) {
+                value.appendRecordId(_records[i].first);
+                // When there is only one record, we can omit AllZeros TypeBits. Otherwise they need
+                // to be included.
+                if (!(_records[i].second.isAllZeros() && _records.size() == 1)) {
+                    value.appendTypeBits(_records[i].second);
+                }
+            }
+
+            std::string prefixedKey(RocksIndexBase::_makePrefixedKey(_prefix, _keyString));
+            rocksdb::Slice valueSlice(value.getBuffer(), value.getSize());
+
+            auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(_txn);
+            ru->writeBatch()->Put(prefixedKey, valueSlice);
+
+            _records.clear();
+        }
+
+        std::string _prefix;
+        Ordering _ordering;
+        OperationContext* _txn;
+        const bool _dupsAllowed;
+        BSONObj _key;
+        KeyString _keyString;
+        std::vector<std::pair<RecordId, KeyString::TypeBits>> _records;
+    };
 
     /// RocksIndexBase
 
     RocksIndexBase::RocksIndexBase(rocksdb::DB* db, std::string prefix, std::string ident,
                                    Ordering order)
         : _db(db), _prefix(prefix), _ident(std::move(ident)), _order(order) {}
-
-    SortedDataBuilderInterface* RocksIndexBase::getBulkBuilder(OperationContext* txn,
-                                                               bool dupsAllowed) {
-        return new RocksIndexBulkBuilder(this, txn, dupsAllowed);
-    }
 
     void RocksIndexBase::fullValidate(OperationContext* txn, bool full, long long* numKeysOut,
                                       BSONObjBuilder* output) const {
@@ -492,8 +564,7 @@ namespace mongo {
         _db->GetApproximateSizes(&wholeRange, 1, &storageSize);
         // There might be some bytes in the WAL that we don't count here. Some
         // tests depend on the fact that non-empty indexes have non-zero sizes
-        return static_cast<long long>(
-            std::max(storageSize, static_cast<uint64_t>(1)));
+        return static_cast<long long>(std::max(storageSize, static_cast<uint64_t>(1)));
     }
 
     std::string RocksIndexBase::_makePrefixedKey(const std::string& prefix,
@@ -527,9 +598,7 @@ namespace mongo {
         std::string currentValue;
         auto getStatus = ru->Get(prefixedKey, &currentValue);
         if (!getStatus.ok() && !getStatus.IsNotFound()) {
-            // This means that Get() returned an error
-            // TODO: SERVER-16979 Correctly handle errors returned by RocksDB
-            invariant(false);
+            return rocksToMongoStatus(getStatus);
         } else if (getStatus.IsNotFound()) {
             // nothing here. just insert the value
             KeyString value(loc);
@@ -600,14 +669,11 @@ namespace mongo {
         // dups are allowed, so we have to deal with a vector of RecordIds.
         std::string currentValue;
         auto getStatus = ru->Get(prefixedKey, &currentValue);
-        if (!getStatus.ok() && !getStatus.IsNotFound()) {
-            // This means that Get() returned an error
-            // TODO: SERVER-16979 Correctly handle errors returned by RocksDB
-            invariant(false);
-        } else if (getStatus.IsNotFound()) {
+        if (getStatus.IsNotFound()) {
             // nothing here. just return
             return;
         }
+        invariantRocksOK(getStatus);
 
         bool foundLoc = false;
         std::vector<std::pair<RecordId, KeyString::TypeBits>> records;
@@ -668,9 +734,7 @@ namespace mongo {
         std::string value;
         auto getStatus = ru->Get(prefixedKey, &value);
         if (!getStatus.ok() && !getStatus.IsNotFound()) {
-            // This means that Get() returned an error
-            // TODO: SERVER-16979 Correctly handle errors returned by RocksDB
-            invariant(false);
+            return rocksToMongoStatus(getStatus);
         } else if (getStatus.IsNotFound()) {
             // not found, not duplicate key
             return Status::OK();
@@ -687,6 +751,11 @@ namespace mongo {
             KeyString::TypeBits::fromBuffer(&br);  // Just calling this to advance reader.
         }
         return Status(ErrorCodes::DuplicateKey, dupKeyError(key));
+    }
+
+    SortedDataBuilderInterface* RocksUniqueIndex::getBulkBuilder(OperationContext* txn,
+                                                                 bool dupsAllowed) {
+        return new RocksIndexBase::UniqueBulkBuilder(_prefix, _order, txn, dupsAllowed);
     }
 
     /// RocksStandardIndex
@@ -738,5 +807,10 @@ namespace mongo {
         return new RocksStandardCursor(txn, _db, _prefix, direction == 1, _order);
     }
 
+    SortedDataBuilderInterface* RocksStandardIndex::getBulkBuilder(OperationContext* txn,
+                                                                   bool dupsAllowed) {
+        invariant(dupsAllowed);
+        return new RocksIndexBase::StandardBulkBuilder(this, txn);
+    }
 
 }  // namespace mongo

@@ -43,6 +43,15 @@
 namespace mongo {
     RocksTransactionEngine::RocksTransactionEngine() : _latestSnapshotId(1), _nextTransactionId(1) {}
 
+    size_t RocksTransactionEngine::numKeysTracked() {
+        boost::lock_guard<boost::mutex> lk(_lock);
+        return _keyInfo.size();
+    }
+    size_t RocksTransactionEngine::numActiveSnapshots() {
+        boost::lock_guard<boost::mutex> lk(_lock);
+        return _activeSnapshots.size();
+    }
+
     std::list<uint64_t>::iterator RocksTransactionEngine::_getLatestSnapshotId_inlock() {
         return _activeSnapshots.insert(_activeSnapshots.end(), _latestSnapshotId);
     }
@@ -62,7 +71,7 @@ namespace mongo {
         }
 
         auto listIter = _keysSortedBySnapshot.insert(_keysSortedBySnapshot.end(), {key, newSnapshotId});
-        _keyInfo.insert({key, {newSnapshotId, listIter}});
+        _keyInfo.insert({StringData(listIter->first), {newSnapshotId, listIter}});
     }
 
     void RocksTransactionEngine::_cleanUpKeysCommittedBeforeSnapshot_inlock(uint64_t snapshotId) {

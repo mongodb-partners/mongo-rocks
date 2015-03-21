@@ -38,7 +38,6 @@
 #include <boost/thread/locks.hpp>
 #include <memory>
 #include <algorithm>
-#include <utility>
 
 #include <rocksdb/comparator.h>
 #include <rocksdb/db.h>
@@ -55,10 +54,12 @@
 #include "mongo/platform/endian.h"
 #include "mongo/util/background.h"
 #include "mongo/util/log.h"
+#include "mongo/util/mongoutils/str.h"
 #include "mongo/util/timer.h"
 
 #include "rocks_engine.h"
 #include "rocks_recovery_unit.h"
+#include "rocks_util.h"
 
 namespace mongo {
 
@@ -91,8 +92,7 @@ namespace mongo {
 
     void CappedVisibilityManager::_addUncommittedRecord_inlock(OperationContext* txn,
                                                                const RecordId& record) {
-        // todo: make this a dassert at some point
-        invariant(_uncommittedRecords.empty() || _uncommittedRecords.back() < record);
+        dassert(_uncommittedRecords.empty() || _uncommittedRecords.back() < record);
         _uncommittedRecords.push_back(record);
         txn->recoveryUnit()->registerChange(new CappedInsertChange(this, record));
         _oplog_highestSeen = record;
@@ -140,6 +140,36 @@ namespace mongo {
         }
     }
 
+    // this object keeps track of keys in oplog. The format is this:
+    // <prefix>RecordId --> dataSize (small endian 32 bytes)
+    // <prefix> is oplog_prefix+1 (reserved by rocks_engine.cpp)
+    // That way we can cheaply delete old record in the oplog without actually reading oplog
+    // collection.
+    // All of the locking is done somewhere else -- we write exactly the same data as oplog, so we
+    // assume oplog already locked the relevant keys
+    class RocksOplogKeyTracker {
+    public:
+        RocksOplogKeyTracker(std::string prefix) : _prefix(std::move(prefix)) {}
+        void insertKey(RocksRecoveryUnit* ru, const RecordId& loc, int len) {
+            uint32_t lenLittleEndian = endian::nativeToLittle(static_cast<uint32_t>(len));
+            ru->writeBatch()->Put(RocksRecordStore::_makePrefixedKey(_prefix, loc),
+                                  rocksdb::Slice(reinterpret_cast<const char*>(&lenLittleEndian),
+                                                 sizeof(lenLittleEndian)));
+        }
+        void deleteKey(RocksRecoveryUnit* ru, const RecordId& loc) {
+            ru->writeBatch()->Delete(RocksRecordStore::_makePrefixedKey(_prefix, loc));
+        }
+        rocksdb::Iterator* newIterator(RocksRecoveryUnit* ru) { return ru->NewIterator(_prefix); }
+        int decodeSize(const rocksdb::Slice& value) {
+            uint32_t size =
+                endian::littleToNative(*reinterpret_cast<const uint32_t*>(value.data()));
+            return static_cast<int>(size);
+        }
+
+    private:
+        std::string _prefix;
+    };
+
     RocksRecordStore::RocksRecordStore(StringData ns, StringData id,
                                        rocksdb::DB* db,  // not owned here
                                        std::string prefix, bool isCapped, int64_t cappedMaxSize,
@@ -155,7 +185,9 @@ namespace mongo {
           _cappedDeleteCallback(cappedDeleteCallback),
           _cappedDeleteCheckCount(0),
           _isOplog(NamespaceString::oplog(ns)),
-          _oplogCounter(0),
+          _oplogKeyTracker(
+              _isOplog ? new RocksOplogKeyTracker(std::move(rocksGetNextPrefix(_prefix))) : nullptr),
+          _oplogNextToDelete(0),
           _cappedVisibilityManager((_isCapped || _isOplog) ? new CappedVisibilityManager()
                                                            : nullptr),
           _ident(id.toString()),
@@ -202,15 +234,13 @@ namespace mongo {
             boost::lock_guard<boost::timed_mutex> lk(_cappedDeleterMutex);
             _shuttingDown = true;
         }
+        delete _oplogKeyTracker;
     }
 
     int64_t RocksRecordStore::storageSize(OperationContext* txn, BSONObjBuilder* extraInfo,
                                           int infoLevel) const {
         // we're lying, but that's the best we can do for now
-        // We need to make it multiple of 256 to make
-        // jstests/concurrency/fsm_workloads/convert_to_capped_collection.js happy
-        return static_cast<int64_t>(
-            std::max(_dataSize.load() & (~255), static_cast<long long>(256)));
+        return _dataSize.load();
     }
 
     RecordData RocksRecordStore::dataFor(OperationContext* txn, const RecordId& loc) const {
@@ -228,13 +258,23 @@ namespace mongo {
         }
 
         std::string oldValue;
-        ru->Get(key, &oldValue);
+        auto status = ru->Get(key, &oldValue);
+        invariantRocksOK(status);
         int oldLength = oldValue.size();
 
         ru->writeBatch()->Delete(key);
+        if (_isOplog) {
+            _oplogKeyTracker->deleteKey(ru, dl);
+        }
 
         _changeNumRecords(txn, -1);
         _increaseDataSize(txn, -oldLength);
+    }
+
+    long long RocksRecordStore::dataSize(OperationContext* txn) const {
+        RocksRecoveryUnit* ru = RocksRecoveryUnit::getRocksRecoveryUnit(txn);
+        return _dataSize.load(std::memory_order::memory_order_relaxed) +
+               ru->getDeltaCounter(_dataSizeKey);
     }
 
     long long RocksRecordStore::numRecords(OperationContext* txn) const {
@@ -333,19 +373,37 @@ namespace mongo {
         if (_cappedMaxDocs != -1 && numRecords > _cappedMaxDocs) {
             docsOverCap = numRecords - _cappedMaxDocs;
         }
+        BSONObj emptyBson;
 
         try {
             WriteUnitOfWork wuow(txn);
             auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(txn);
-            boost::scoped_ptr<rocksdb::Iterator> iter(ru->NewIterator(_prefix));
-            iter->SeekToFirst();
+            boost::scoped_ptr<rocksdb::Iterator> iter;
+            if (_isOplog) {
+                // we're using _oplogKeyTracker to find which keys to delete -- this is much faster
+                // because we don't need to read any values. We theoretically need values to pass
+                // the document to the cappedDeleteCallback, but the callback is only using
+                // documents to remove them from indexes. opLog doesn't have indexes, so there
+                // should be no need for us to reconstruct the document to pass it to the callback
+                iter.reset(_oplogKeyTracker->newIterator(ru));
+                int64_t storage;
+                iter->Seek(RocksRecordStore::_makeKey(_oplogNextToDelete, &storage));
+            } else {
+                iter.reset(ru->NewIterator(_prefix));
+                iter->SeekToFirst();
+            }
 
             RecordId newestOld;
             while ((sizeSaved < sizeOverCap || docsRemoved < docsOverCap) &&
                    (docsRemoved < 20000) && iter->Valid()) {
 
-                rocksdb::Slice slice = iter->key();
-                newestOld = _makeRecordId(slice);
+                newestOld = _makeRecordId(iter->key());
+
+                if (_cappedVisibilityManager->isCappedHidden(newestOld)) {
+                    // this means we have an older record that hasn't been committed yet. let's
+                    // wait until it gets committed before deleting
+                    break;
+                }
 
                 // don't go past the record we just inserted
                 if (newestOld >= justInserted) {
@@ -362,9 +420,17 @@ namespace mongo {
                     break;
                 }
 
-                auto oldValue = iter->value();
+                rocksdb::Slice oldValue;
                 ++docsRemoved;
-                sizeSaved += oldValue.size();
+                if (_isOplog) {
+                    // trick the callback by giving it empty bson document
+                    oldValue = rocksdb::Slice(emptyBson.objdata(), emptyBson.objsize());
+                    // we keep data size in the value
+                    sizeSaved += _oplogKeyTracker->decodeSize(iter->value());
+                } else {
+                    oldValue = iter->value();
+                    sizeSaved += oldValue.size();
+                }
 
                 if (_cappedDeleteCallback) {
                     uassertStatusOK(_cappedDeleteCallback->aboutToDeleteCapped(
@@ -373,13 +439,33 @@ namespace mongo {
                 }
 
                 ru->writeBatch()->Delete(key);
+                if (_isOplog) {
+                    _oplogKeyTracker->deleteKey(ru, newestOld);
+                }
+
                 iter->Next();
+            }
+
+            if (!iter->status().ok()) {
+                log() << "RocksDB iterator failure when trying to delete capped, ignoring: "
+                      << iter->status().ToString();
             }
 
             if (docsRemoved > 0) {
                 _changeNumRecords(txn, -docsRemoved);
                 _increaseDataSize(txn, -sizeSaved);
                 wuow.commit();
+            }
+
+            if (_isOplog && iter->Valid()) {
+                auto oldestAliveRecordId = _makeRecordId(iter->key());
+                // we check if there's outstanding transaction that is older than
+                // oldestAliveRecordId. If there is, we should not skip deleting that record next
+                // time we clean up oplog. If there isn't, we know for certain this is the record
+                // we'll start out deletions from next time
+                if (!_cappedVisibilityManager->isCappedHidden(oldestAliveRecordId)) {
+                    _oplogNextToDelete = oldestAliveRecordId;
+                }
             }
         }
         catch ( const WriteConflictException& wce ) {
@@ -397,7 +483,6 @@ namespace mongo {
         delete txn->releaseRecoveryUnit();
         txn->setRecoveryUnit( realRecoveryUnit );
         return docsRemoved;
-
     }
 
     StatusWith<RecordId> RocksRecordStore::insertRecord( OperationContext* txn,
@@ -430,6 +515,9 @@ namespace mongo {
         // No need to register the write here, since we just allocated a new RecordId so no other
         // transaction can access this key before we commit
         ru->writeBatch()->Put(_makePrefixedKey(_prefix, loc), rocksdb::Slice(data, len));
+        if (_isOplog) {
+            _oplogKeyTracker->insertKey(ru, loc, len);
+        }
 
         _changeNumRecords( txn, 1 );
         _increaseDataSize( txn, len );
@@ -464,14 +552,14 @@ namespace mongo {
 
         std::string old_value;
         auto status = ru->Get(key, &old_value);
-
-        if ( !status.ok() ) {
-            return StatusWith<RecordId>( ErrorCodes::InternalError, status.ToString() );
-        }
+        invariantRocksOK(status);
 
         int old_length = old_value.size();
 
         ru->writeBatch()->Put(key, rocksdb::Slice(data, len));
+        if (_isOplog) {
+            _oplogKeyTracker->insertKey(ru, loc, len);
+        }
 
         _increaseDataSize(txn, len - old_length);
 
@@ -513,8 +601,6 @@ namespace mongo {
     }
 
     Status RocksRecordStore::truncate( OperationContext* txn ) {
-        // XXX once we have readable WriteBatch, also delete outstanding writes to
-        // this collection in the WriteBatch
         boost::scoped_ptr<RecordIterator> iter( getIterator( txn ) );
         while( !iter->isEOF() ) {
             RecordId loc = iter->getNext();
@@ -532,11 +618,7 @@ namespace mongo {
         std::string endString(_makePrefixedKey(_prefix, RecordId::max()));
         rocksdb::Slice beginRange(beginString);
         rocksdb::Slice endRange(endString);
-        rocksdb::Status status = _db->CompactRange(&beginRange, &endRange);
-        if ( status.ok() )
-            return Status::OK();
-        else
-            return Status( ErrorCodes::InternalError, status.ToString() );
+        return rocksToMongoStatus(_db->CompactRange(&beginRange, &endRange));
     }
 
     Status RocksRecordStore::validate( OperationContext* txn,
@@ -545,32 +627,47 @@ namespace mongo {
                                        ValidateAdaptor* adaptor,
                                        ValidateResults* results,
                                        BSONObjBuilder* output ) {
-        // TODO validate that _numRecords and _dataSize are correct in scanData mode
-        if ( scanData ) {
-            bool invalidObject = false;
-            size_t numRecords = 0;
-            boost::scoped_ptr<RecordIterator> iter( getIterator( txn ) );
-            while( !iter->isEOF() ) {
-                numRecords++;
+        long long nrecords = 0;
+        long long dataSizeTotal = 0;
+        if (scanData) {
+            boost::scoped_ptr<RecordIterator> iter(getIterator(txn));
+            results->valid = true;
+            while (!iter->isEOF()) {
+                ++nrecords;
                 if (full) {
-                    RecordData data = dataFor(txn, iter->curr());
                     size_t dataSize;
-                    const Status status = adaptor->validate(data, &dataSize);
+                    RecordId loc = iter->curr();
+                    RecordData data = dataFor(txn, loc);
+                    Status status = adaptor->validate(data, &dataSize);
                     if (!status.isOK()) {
                         results->valid = false;
-                        if (invalidObject) {
-                            results->errors.push_back("invalid object detected (see logs)");
-                        }
-                        invalidObject = true;
-                        log() << "Invalid object detected in " << _ns << ": " << status.reason();
+                        results->errors.push_back(str::stream() << loc << " is corrupted");
                     }
+                    dataSizeTotal += static_cast<long long>(dataSize);
                 }
                 iter->getNext();
             }
-            output->appendNumber("nrecords", numRecords);
-        }
-        else
+
+            if (full && results->valid) {
+                long long storedNumRecords = numRecords(txn);
+                long long storedDataSize = dataSize(txn);
+
+                if (nrecords != storedNumRecords || dataSizeTotal != storedDataSize) {
+                    warning() << _ident << ": Existing record and data size counters ("
+                              << storedNumRecords << " records " << storedDataSize << " bytes) "
+                              << "are inconsistent with full validation results (" << nrecords
+                              << " records " << dataSizeTotal << " bytes). "
+                              << "Updating counters with new values.";
+                    if (nrecords != storedNumRecords) {
+                        _changeNumRecords(txn, nrecords - storedNumRecords);
+                        _increaseDataSize(txn, dataSizeTotal - storedDataSize);
+                    }
+                }
+            }
+            output->appendNumber("nrecords", nrecords);
+        } else {
             output->appendNumber("nrecords", numRecords(txn));
+        }
 
         return Status::OK();
     }
@@ -596,6 +693,18 @@ namespace mongo {
         return record.getStatus();
     }
 
+    void RocksRecordStore::updateStatsAfterRepair(OperationContext* txn, long long numRecords,
+                                                  long long dataSize) {
+        _numRecords.store(numRecords);
+        _dataSize.store(dataSize);
+        rocksdb::WriteBatch wb;
+        int64_t storage;
+        wb.Put(_numRecordsKey, RocksRecoveryUnit::encodeCounter(numRecords, &storage));
+        wb.Put(_dataSizeKey, RocksRecoveryUnit::encodeCounter(dataSize, &storage));
+        auto s = _db->Write(rocksdb::WriteOptions(), &wb);
+        invariantRocksOK(s);
+    }
+
     /**
      * Return the RecordId of an oplog entry as close to startingPosition as possible without
      * being higher. If there are no entries <= startingPosition, return RecordId().
@@ -610,7 +719,10 @@ namespace mongo {
         auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(txn);
         ru->setOplogReadTill(_cappedVisibilityManager->oplogStartHack());
 
-        boost::scoped_ptr<rocksdb::Iterator> iter(ru->NewIterator(_prefix));
+        // we use _oplogKeyTracker, which contains exactly the same keys as oplog. the difference is
+        // that values are different (much smaller), so reading is faster. in this case, we only
+        // need keys (we never touch the values), so this works nicely
+        boost::scoped_ptr<rocksdb::Iterator> iter(_oplogKeyTracker->newIterator(ru));
         int64_t storage;
         iter->Seek(_makeKey(startingPosition, &storage));
         if (!iter->Valid()) {
@@ -619,6 +731,7 @@ namespace mongo {
                 // startingPosition is bigger than everything else
                 return _makeRecordId(iter->key());
             } else {
+                invariantRocksOK(iter->status());
                 // record store is empty
                 return RecordId();
             }
@@ -637,6 +750,7 @@ namespace mongo {
         }
 
         if (!iter->Valid()) {
+            invariantRocksOK(iter->status());
             // there are no entries <= startingPosition
             return RecordId();
         }
@@ -657,14 +771,6 @@ namespace mongo {
             }
         }
         wuow.commit();
-    }
-
-    rocksdb::ReadOptions RocksRecordStore::_readOptions(OperationContext* opCtx) {
-        rocksdb::ReadOptions options;
-        if ( opCtx ) {
-            options.snapshot = RocksRecoveryUnit::getRocksRecoveryUnit( opCtx )->snapshot();
-        }
-        return options;
     }
 
     RecordId RocksRecordStore::_nextId() {
@@ -707,14 +813,10 @@ namespace mongo {
 
         std::string valueStorage;
         auto status = ru->Get(_makePrefixedKey(prefix, loc), &valueStorage);
-        if (!status.ok()) {
-            if (status.IsNotFound()) {
-                return RecordData(nullptr, 0);
-            } else {
-                log() << "rocks Get failed, blowing up: " << status.ToString();
-                invariant(false);
-            }
+        if (status.IsNotFound()) {
+            return RecordData(nullptr, 0);
         }
+        invariantRocksOK(status);
 
         SharedBuffer data = SharedBuffer::allocate(valueStorage.size());
         memcpy(data.get(), valueStorage.data(), valueStorage.size());
@@ -749,12 +851,6 @@ namespace mongo {
         _locate(start);
     }
 
-    void RocksRecordStore::Iterator::_checkStatus() {
-        if ( !_iterator->status().ok() )
-            log() << "Rocks Iterator Error: " << _iterator->status().ToString();
-        invariant( _iterator->status().ok() );
-    }
-
     bool RocksRecordStore::Iterator::isEOF() {
         return _eof;
     }
@@ -779,6 +875,8 @@ namespace mongo {
         else
             _iterator->Prev();
 
+        invariantRocksOK(_iterator->status());
+
         if (_iterator->Valid()) {
             _curr = _decodeCurr();
             if (_cappedVisibilityManager.get()) {  // isCapped?
@@ -801,7 +899,6 @@ namespace mongo {
             // we leave _curr as it is on purpose
         }
 
-        _checkStatus();
         _lastLoc = toReturn;
         return toReturn;
     }
@@ -867,7 +964,7 @@ namespace mongo {
                 int64_t locStorage;
                 _iterator->Seek(RocksRecordStore::_makeKey(loc, &locStorage));
             }
-            _checkStatus();
+            invariantRocksOK(_iterator->status());
         } else {  // backward iterator
             if (loc.isNull()) {
                 _iterator->SeekToLast();
@@ -875,14 +972,14 @@ namespace mongo {
                 // lower bound on reverse iterator
                 int64_t locStorage;
                 _iterator->Seek(RocksRecordStore::_makeKey(loc, &locStorage));
-                _checkStatus();
+                invariantRocksOK(_iterator->status());
                 if (!_iterator->Valid()) {
                     _iterator->SeekToLast();
                 } else if (_decodeCurr() != loc) {
                     _iterator->Prev();
                 }
             }
-            _checkStatus();
+            invariantRocksOK(_iterator->status());
         }
         _eof = !_iterator->Valid();
         if (_eof) {
