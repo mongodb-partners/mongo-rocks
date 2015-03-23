@@ -365,7 +365,7 @@ namespace mongo {
         std::string nextPrefix = std::move(rocksGetNextPrefix(prefix));
         rocksdb::Range wholeRange(prefix, nextPrefix);
         _db->GetApproximateSizes(&wholeRange, 1, &storageSize);
-        return static_cast<int64_t>(storageSize);
+        return std::max(static_cast<int64_t>(storageSize), static_cast<int64_t>(1));
     }
 
     void RocksEngine::setMaxWriteMBPerSec(int maxWriteMBPerSec) {
