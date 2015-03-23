@@ -35,7 +35,7 @@ namespace mongo {
     class RocksEngine;
 
     /**
-     * Adds "RocksDB" to the results of db.serverStatus().
+     * Adds "rocksdb" to the results of db.serverStatus().
      */
     class RocksServerStatusSection : public ServerStatusSection {
     public:
