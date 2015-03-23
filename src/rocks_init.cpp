@@ -41,7 +41,7 @@
 #include "rocks_parameters.h"
 
 namespace mongo {
-    const std::string kRocksDBEngineName = "RocksDB";
+    const std::string kRocksDBEngineName = "rocksdb";
 
     namespace {
 

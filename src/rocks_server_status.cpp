@@ -64,7 +64,7 @@ namespace mongo {
     }  // namespace
 
     RocksServerStatusSection::RocksServerStatusSection(RocksEngine* engine)
-        : ServerStatusSection("RocksDB"), _engine(engine) {}
+        : ServerStatusSection("rocksdb"), _engine(engine) {}
 
     bool RocksServerStatusSection::includeByDefault() const { return true; }
 

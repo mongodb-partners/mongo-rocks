@@ -12,5 +12,5 @@ options to the `scons` command line:
 
     scons --cpppath=/myrocksdb/include --libpath=/myrocksdb/lib
 
-Start `mongod` using the `--storageEngine=RocksDB` option.
+Start `mongod` using the `--storageEngine=rocksdb` option.
 
