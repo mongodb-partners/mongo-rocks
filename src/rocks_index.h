@@ -96,7 +96,8 @@ namespace mongo {
                               bool dupsAllowed);
         virtual void unindex(OperationContext* txn, const BSONObj& key, const RecordId& loc,
                              bool dupsAllowed);
-        virtual SortedDataInterface::Cursor* newCursor(OperationContext* txn, int direction) const;
+        virtual std::unique_ptr<SortedDataInterface::Cursor> newCursor(OperationContext* txn,
+                                                                       bool forward) const;
 
         virtual Status dupKeyCheck(OperationContext* txn, const BSONObj& key, const RecordId& loc);
 
@@ -112,8 +113,8 @@ namespace mongo {
                               bool dupsAllowed);
         virtual void unindex(OperationContext* txn, const BSONObj& key, const RecordId& loc,
                              bool dupsAllowed);
-        virtual SortedDataInterface::Cursor* newCursor(OperationContext* txn, int direction) const;
-
+        virtual std::unique_ptr<SortedDataInterface::Cursor> newCursor(OperationContext* txn,
+                                                                       bool forward) const;
         virtual Status dupKeyCheck(OperationContext* txn, const BSONObj& key, const RecordId& loc) {
             // dupKeyCheck shouldn't be called for non-unique indexes
             invariant(false);

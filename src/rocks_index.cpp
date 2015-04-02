@@ -47,6 +47,7 @@
 #include "mongo/bson/bsonobjbuilder.h"
 #include "mongo/db/concurrency/write_conflict_exception.h"
 #include "mongo/db/storage/index_entry_comparison.h"
+#include "mongo/stdx/memory.h"
 #include "mongo/util/log.h"
 #include "mongo/util/mongoutils/str.h"
 
@@ -107,130 +108,81 @@ namespace mongo {
                 : _db(db),
                   _prefix(prefix),
                   _forward(forward),
-                  _order(order),
-                  _locateCacheValid(false) {
+                  _order(order) {
                 auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(txn);
                 _iterator.reset(ru->NewIterator(_prefix));
                 _currentSequenceNumber = ru->snapshot()->GetSequenceNumber();
                 invariantRocksOK(_iterator->status());
             }
 
-            int getDirection() const { return _forward ? 1 : -1; }
-            bool isEOF() const { return _iterator.get() == nullptr || !_iterator->Valid(); }
-
-            /**
-             * Will only be called with other from same index as this.
-             * All EOF locs should be considered equal.
-             */
-            bool pointsToSamePlaceAs(const Cursor& genOther) const {
-                const RocksCursorBase& other = checked_cast<const RocksCursorBase&>(genOther);
-
-                if (isEOF() && other.isEOF()) {
-                    return true;
-                } else if (isEOF() || other.isEOF()) {
-                    return false;
-                }
-
-                if (_iterator->key() != other._iterator->key()) {
-                    return false;
-                }
-
-                // even if keys are equal, record IDs might be different (for unique indexes, since
-                // in non-unique indexes RecordID is already encoded in the key)
-                return _loc == other._loc;
-            }
-
-            virtual void advance() {
+            boost::optional<IndexKeyEntry> next(RequestedInfo parts) override {
                 // Advance on a cursor at the end is a no-op
                 if (isEOF()) {
+                    return {};
+                }
+                if (!_lastMoveWasRestore) {
+                    advanceCursor();
+                }
+                updatePosition();
+                return curr(parts);
+            }
+
+            void setEndPosition(const BSONObj& key, bool inclusive) override {
+                if (key.isEmpty()) {
+                    // This means scan to end of index.
+                    _endPosition.reset();
                     return;
                 }
-                advanceCursor();
-                updatePosition();
+
+                // NOTE: this uses the opposite rules as a normal seek because a forward scan should
+                // end after the key if inclusive and before if exclusive.
+                const auto discriminator = _forward == inclusive ? KeyString::kExclusiveAfter
+                                                                 : KeyString::kExclusiveBefore;
+                _endPosition = stdx::make_unique<KeyString>();
+                _endPosition->resetToKey(stripFieldNames(key), _order, discriminator);
             }
 
-            bool locate(const BSONObj& key, const RecordId& loc) {
+            boost::optional<IndexKeyEntry> seek(const BSONObj& key, bool inclusive,
+                                                RequestedInfo parts) override {
                 const BSONObj finalKey = stripFieldNames(key);
 
-                if (_locateCacheValid == true && finalKey == _locateCacheKey &&
-                    loc == _locateCacheRecordId) {
-                    // exact same call to locate()
-                    return _locateCacheResult;
-                }
+                const auto discriminator = _forward == inclusive ? KeyString::kExclusiveBefore
+                    : KeyString::kExclusiveAfter;
 
-                fillQuery(finalKey, loc, &_query);
-                bool result = _locate(_query, loc);
-                updatePosition();
-                // An explicit search at the start of the range should always return false
-                if (loc == RecordId::min() || loc == RecordId::max()) {
-                    result = false;
-                }
+                // By using a discriminator other than kInclusive, there is no need to distinguish
+                // unique vs non-unique key formats since both start with the key.
+                _query.resetToKey(finalKey, _order, discriminator);
 
-                {
-                    // memoization
-                    _locateCacheKey = finalKey.getOwned();
-                    _locateCacheRecordId = loc;
-                    _locateCacheResult = result;
-                    _locateCacheValid = true;
-                }
-                return result;
-            }
-
-            // same first five args as IndexEntryComparison::makeQueryObject (which is commented).
-            void advanceTo(const BSONObj &keyBegin,
-                           int keyBeginLen,
-                           bool afterKey,
-                           const vector<const BSONElement*>& keyEnd,
-                           const vector<bool>& keyEndInclusive) {
-                // make a key representing the location to which we want to advance.
-                BSONObj key = IndexEntryComparison::makeQueryObject(
-                                         keyBegin,
-                                         keyBeginLen,
-                                         afterKey,
-                                         keyEnd,
-                                         keyEndInclusive,
-                                         getDirection() );
-
-                fillQuery(key, RecordId(), &_query);
                 _locate(_query, RecordId());
                 updatePosition();
+                return curr(parts);
             }
 
-            /**
-             * Locate a key with fields comprised of a combination of keyBegin fields and keyEnd
-             * fields. Also same first five args as IndexEntryComparison::makeQueryObject (which is
-             * commented).
-             */
-            void customLocate(const BSONObj& keyBegin,
-                              int keyBeginLen,
-                              bool afterVersion,
-                              const vector<const BSONElement*>& keyEnd,
-                              const vector<bool>& keyEndInclusive) {
-                advanceTo( keyBegin, keyBeginLen, afterVersion, keyEnd, keyEndInclusive );
+            boost::optional<IndexKeyEntry> seek(const IndexSeekPoint& seekPoint,
+                                                RequestedInfo parts) override {
+                // make a key representing the location to which we want to advance.
+                BSONObj key = IndexEntryComparison::makeQueryObject(seekPoint, _forward);
+
+                // makeQueryObject handles the discriminator in the real exclusive cases.
+                const auto discriminator = _forward ? KeyString::kExclusiveBefore
+                                                    : KeyString::kExclusiveAfter;
+                _query.resetToKey(key, _order, discriminator);
+                _locate(_query, RecordId());
+                updatePosition();
+                return curr(parts);
             }
 
-            BSONObj getKey() const {
-                if (isEOF()) {
-                    return BSONObj();
+            void savePositioned() override {
+                if (!_lastMoveWasRestore) {
+                    _savedEOF = isEOF();
                 }
-
-                if (!_keyBsonCache.isEmpty()) {
-                    return _keyBsonCache;
-                }
-
-                _keyBsonCache =
-                    KeyString::toBson(_key.getBuffer(), _key.getSize(), _order, _typeBits);
-
-                return _keyBsonCache;
             }
 
-            RecordId getRecordId() const { return _loc; }
-
-            void savePosition() {
-                _savedEOF = isEOF();
+            void saveUnpositioned() override {
+                _savedEOF = true;
             }
 
-            void restorePosition(OperationContext* txn) {
+            void restore(OperationContext* txn) override {
                 auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(txn);
                 if (_currentSequenceNumber != ru->snapshot()->GetSequenceNumber()) {
                     _iterator.reset(ru->NewIterator(_prefix));
@@ -238,21 +190,32 @@ namespace mongo {
                     _currentSequenceNumber = ru->snapshot()->GetSequenceNumber();
 
                     if (!_savedEOF) {
-                        _locate(_key, _loc);
-                        updatePosition();
+                        _lastMoveWasRestore = !_locate(_key, _loc);
                     }
                 }
             }
 
         protected:
-            // Uses _key for the key. Implemented by unique and standard index
+            // Returns true if an exact match is found.
             virtual bool _locate(const KeyString& query, RecordId loc) = 0;
-
-            virtual void fillQuery(const BSONObj& key, RecordId loc, KeyString* query) const = 0;
 
             // Called after _key has been filled in. Must not throw WriteConflictException.
             virtual void updateLocAndTypeBits() = 0;
 
+            boost::optional<IndexKeyEntry> curr(RequestedInfo parts) const {
+                if (isEOF()) {
+                    return {};
+                }
+
+                BSONObj bson;
+                if (parts & kWantKey) {
+                    bson =  KeyString::toBson(_key.getBuffer(), _key.getSize(), _order, _typeBits);
+                }
+
+                return {{std::move(bson), _loc}};
+            }
+
+            bool isEOF() const { return _iterator.get() == nullptr || !_iterator->Valid(); }
 
             void advanceCursor() {
                 if (_forward) {
@@ -295,6 +258,7 @@ namespace mongo {
             }
 
             void updatePosition() {
+                _lastMoveWasRestore = false;
                 if (isEOF()) {
                     _loc = RecordId();
                     return;
@@ -302,10 +266,18 @@ namespace mongo {
 
                 auto key = _iterator->key();
                 _key.resetFromBuffer(key.data(), key.size());
-                _keyBsonCache = BSONObj();    // Invalidate cached BSONObj.
 
-                _locateCacheValid = false;    // Invalidate locate cache
-                _locateCacheKey = BSONObj();  // Invalidate locate cache
+                if (_endPosition) {
+                    int cmp = _key.compare(*_endPosition);
+                    if (_forward ? cmp > 0 : cmp < 0) {
+                        // TODO: use a better way to mark us as EOF.
+                        _iterator->SeekToLast();
+                        _iterator->Next();
+                        invariant(!_iterator->Valid());
+                        invariant(isEOF());
+                        return;
+                    }
+                }
 
                 updateLocAndTypeBits();
             }
@@ -314,44 +286,28 @@ namespace mongo {
             std::string _prefix;
             boost::scoped_ptr<rocksdb::Iterator> _iterator;
             const bool _forward;
+            bool _lastMoveWasRestore = false;
             Ordering _order;
 
             // These are for storing savePosition/restorePosition state
-            bool _savedEOF;
+            bool _savedEOF = false;
             RecordId _savedRecordId;
             rocksdb::SequenceNumber _currentSequenceNumber;
 
             KeyString _key;
             KeyString::TypeBits _typeBits;
             RecordId _loc;
-            mutable BSONObj _keyBsonCache;  // if isEmpty, cache invalid and must be loaded from
-                                            // _key.
 
             KeyString _query;
 
-            // These are for caching repeated calls to locate()
-            bool _locateCacheValid;
-            BSONObj _locateCacheKey;
-            RecordId _locateCacheRecordId;
-            bool _locateCacheResult;
+            std::unique_ptr<KeyString> _endPosition;
         };
 
-        class RocksStandardCursor : public RocksCursorBase {
+        class RocksStandardCursor final : public RocksCursorBase {
         public:
             RocksStandardCursor(OperationContext* txn, rocksdb::DB* db, std::string prefix,
                                 bool forward, Ordering order)
                 : RocksCursorBase(txn, db, prefix, forward, order) {}
-
-            virtual void fillQuery(const BSONObj& key, RecordId loc, KeyString* query) const {
-                // Null cursors should start at the zero key to maintain search ordering in the
-                // collator.
-                // Reverse cursors should start on the last matching key.
-                if (loc.isNull()) {
-                    loc = _forward ? RecordId::min() : RecordId::max();
-                }
-
-                query->resetToKey(key, _order, loc);
-            }
 
             virtual bool _locate(const KeyString& query, RecordId loc) {
                 // loc already encoded in _key
@@ -366,15 +322,11 @@ namespace mongo {
             }
         };
 
-        class RocksUniqueCursor : public RocksCursorBase {
+        class RocksUniqueCursor final : public RocksCursorBase {
         public:
             RocksUniqueCursor(OperationContext* txn, rocksdb::DB* db, std::string prefix,
                               bool forward, Ordering order)
                 : RocksCursorBase(txn, db, prefix, forward, order) {}
-
-            virtual void fillQuery(const BSONObj& key, RecordId loc, KeyString* query) const {
-                query->resetToKey(key, _order);  // loc doesn't go in _query for unique indexes
-            }
 
             virtual bool _locate(const KeyString& query, RecordId loc) {
                 if (!seekCursor(query)) {
@@ -409,7 +361,8 @@ namespace mongo {
                 _typeBits.resetFromBuffer(&br);
 
                 if (!br.atEof()) {
-                    severe() << "Unique index cursor seeing multiple records for key " << getKey();
+                    severe() << "Unique index cursor seeing multiple records for key "
+                             << curr(kWantKey)->key;
                     fassertFailed(28609);
                 }
             }
@@ -534,11 +487,12 @@ namespace mongo {
     void RocksIndexBase::fullValidate(OperationContext* txn, bool full, long long* numKeysOut,
                                       BSONObjBuilder* output) const {
         if (numKeysOut) {
-            boost::scoped_ptr<SortedDataInterface::Cursor> cursor(newCursor(txn, 1));
-            cursor->locate(minKey, RecordId::min());
+            std::unique_ptr<SortedDataInterface::Cursor> cursor(newCursor(txn, 1));
+
             *numKeysOut = 0;
-            while (!cursor->isEOF()) {
-                cursor->advance();
+            const auto requestedInfo = Cursor::kJustExistance;
+            for (auto entry = cursor->seek(minKey, true, requestedInfo);
+                    entry; entry = cursor->next(requestedInfo)) {
                 (*numKeysOut)++;
             }
         }
@@ -719,10 +673,9 @@ namespace mongo {
         ru->writeBatch()->Put(prefixedKey, newValueSlice);
     }
 
-    SortedDataInterface::Cursor* RocksUniqueIndex::newCursor(OperationContext* txn,
-                                                             int direction) const {
-        invariant( ( direction == 1 || direction == -1 ) && "invalid value for direction" );
-        return new RocksUniqueCursor(txn, _db, _prefix, direction == 1, _order);
+    std::unique_ptr<SortedDataInterface::Cursor> RocksUniqueIndex::newCursor(OperationContext* txn,
+                                                                             bool forward) const {
+        return stdx::make_unique<RocksUniqueCursor>(txn, _db, _prefix, forward, _order);
     }
 
     Status RocksUniqueIndex::dupKeyCheck(OperationContext* txn, const BSONObj& key,
@@ -801,10 +754,10 @@ namespace mongo {
         ru->writeBatch()->Delete(prefixedKey);
     }
 
-    SortedDataInterface::Cursor* RocksStandardIndex::newCursor(OperationContext* txn,
-                                                               int direction) const {
-        invariant( ( direction == 1 || direction == -1 ) && "invalid value for direction" );
-        return new RocksStandardCursor(txn, _db, _prefix, direction == 1, _order);
+    std::unique_ptr<SortedDataInterface::Cursor> RocksStandardIndex::newCursor(
+            OperationContext* txn,
+            bool forward) const {
+        return stdx::make_unique<RocksStandardCursor>(txn, _db, _prefix, forward, _order);
     }
 
     SortedDataBuilderInterface* RocksStandardIndex::getBulkBuilder(OperationContext* txn,
