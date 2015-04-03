@@ -52,6 +52,7 @@ namespace rocksdb {
 
 namespace mongo {
 
+    class RocksCounterManager;
     class CappedVisibilityManager {
     public:
         CappedVisibilityManager() : _oplog_highestSeen(RecordId::min()) {}
@@ -80,7 +81,8 @@ namespace mongo {
 
     class RocksRecordStore : public RecordStore {
     public:
-        RocksRecordStore(StringData ns, StringData id, rocksdb::DB* db, std::string prefix,
+        RocksRecordStore(StringData ns, StringData id, rocksdb::DB* db,
+                         RocksCounterManager* counterManager, std::string prefix,
                          bool isCapped = false, int64_t cappedMaxSize = -1,
                          int64_t cappedMaxDocs = -1,
                          CappedDocumentDeleteCallback* cappedDeleteCallback = NULL);
@@ -236,7 +238,8 @@ namespace mongo {
         void _changeNumRecords(OperationContext* txn, int64_t amount);
         void _increaseDataSize(OperationContext* txn, int64_t amount);
 
-        rocksdb::DB* _db; // not owned
+        rocksdb::DB* _db;                      // not owned
+        RocksCounterManager* _counterManager;  // not owned
         std::string _prefix;
 
         const bool _isCapped;
@@ -269,5 +272,12 @@ namespace mongo {
 
         bool _shuttingDown;
         bool _hasBackgroundThread;
+
+        /**
+         * During record store creation, if a record count is under
+         * 'kCollectionScanOnCreationThreshold', perform a collection scan to update the
+         * number of records and data size counters
+         */
+        static const long long kCollectionScanOnCreationThreshold = 10000;
     };
 }

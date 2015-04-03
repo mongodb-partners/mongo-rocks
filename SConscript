@@ -3,6 +3,7 @@ Import("env")
 env.Library(
     target= 'storage_rocks_base',
     source= [
+        'src/rocks_counter_manager.cpp',
         'src/rocks_global_options.cpp',
         'src/rocks_engine.cpp',
         'src/rocks_record_store.cpp',
