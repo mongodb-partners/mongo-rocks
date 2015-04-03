@@ -30,7 +30,7 @@
 #include "mongo/platform/basic.h"
 
 #include "mongo/base/init.h"
-#include "mongo/db/global_environment_experiment.h"
+#include "mongo/db/service_context.h"
 #include "mongo/db/storage_options.h"
 #include "mongo/db/storage/kv/kv_storage_engine.h"
 #include "mongo/db/storage/storage_engine_metadata.h"
@@ -114,8 +114,7 @@ namespace mongo {
     MONGO_INITIALIZER_WITH_PREREQUISITES(RocksEngineInit,
                                          ("SetGlobalEnvironment"))
                                          (InitializerContext* context) {
-
-        getGlobalEnvironment()->registerStorageEngine(kRocksDBEngineName, new RocksFactory());
+        getGlobalServiceContext()->registerStorageEngine(kRocksDBEngineName, new RocksFactory());
         return Status::OK();
     }
 
