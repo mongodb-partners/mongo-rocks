@@ -169,7 +169,7 @@ namespace mongo {
         virtual boost::optional<RecordId> oplogStartHack(OperationContext* txn,
                                                          const RecordId& startingPosition) const;
 
-        virtual Status oplogDiskLocRegister(OperationContext* txn, const OpTime& opTime);
+        virtual Status oplogDiskLocRegister(OperationContext* txn, const Timestamp& opTime);
 
         virtual void updateStatsAfterRepair(OperationContext* txn, long long numRecords,
                                             long long dataSize);
