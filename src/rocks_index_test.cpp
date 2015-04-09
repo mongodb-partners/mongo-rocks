@@ -28,7 +28,6 @@
 
 #include "mongo/platform/basic.h"
 
-#include <boost/scoped_ptr.hpp>
 #include <boost/shared_ptr.hpp>
 #include <boost/filesystem/operations.hpp>
 #include <string>
@@ -40,6 +39,7 @@
 
 #include "mongo/db/concurrency/write_conflict_exception.h"
 #include "mongo/db/storage/sorted_data_interface_test_harness.h"
+#include "mongo/stdx/memory.h"
 #include "mongo/unittest/temp_dir.h"
 #include "mongo/unittest/unittest.h"
 
@@ -50,11 +50,10 @@
 
 namespace mongo {
 
-    using boost::scoped_ptr;
     using boost::shared_ptr;
     using std::string;
 
-    class RocksIndexHarness : public HarnessHelper {
+    class RocksIndexHarness final : public HarnessHelper {
     public:
         RocksIndexHarness() : _order(Ordering::make(BSONObj())), _tempDir(_testNamespace) {
             boost::filesystem::remove_all(_tempDir.path());
@@ -64,43 +63,46 @@ namespace mongo {
             auto s = rocksdb::DB::Open(options, _tempDir.path(), &db);
             ASSERT(s.ok());
             _db.reset(db);
-            _counterManager.reset(new RocksCounterManager(_db.get(), true));
+            _counterManager = stdx::make_unique<RocksCounterManager>(_db.get(), true);
         }
 
-        virtual SortedDataInterface* newSortedDataInterface(bool unique) {
+        std::unique_ptr<SortedDataInterface> newSortedDataInterface(bool unique) {
             if (unique) {
-                return new RocksUniqueIndex(_db.get(), "prefix", "ident", _order);
+                return stdx::make_unique<RocksUniqueIndex>(_db.get(), "prefix", "ident", _order);
             } else {
-                return new RocksStandardIndex(_db.get(), "prefix", "ident", _order);
+                return stdx::make_unique<RocksStandardIndex>(_db.get(), "prefix", "ident", _order);
             }
         }
 
-        virtual RecoveryUnit* newRecoveryUnit() {
-            return new RocksRecoveryUnit(&_transactionEngine, _db.get(), _counterManager.get(), true);
+        std::unique_ptr<RecoveryUnit> newRecoveryUnit() {
+            return stdx::make_unique<RocksRecoveryUnit>(&_transactionEngine, _db.get(),
+                                                        _counterManager.get(), true);
         }
 
     private:
         Ordering _order;
         string _testNamespace = "mongo-rocks-sorted-data-test";
         unittest::TempDir _tempDir;
-        scoped_ptr<rocksdb::DB> _db;
+        std::unique_ptr<rocksdb::DB> _db;
         RocksTransactionEngine _transactionEngine;
-        scoped_ptr<RocksCounterManager> _counterManager;
+        std::unique_ptr<RocksCounterManager> _counterManager;
     };
 
-    HarnessHelper* newHarnessHelper() { return new RocksIndexHarness(); }
+    std::unique_ptr<HarnessHelper> newHarnessHelper() {
+        return stdx::make_unique<RocksIndexHarness>();
+    }
 
     TEST(RocksIndexTest, Isolation) {
-        scoped_ptr<HarnessHelper> harnessHelper(newHarnessHelper());
-        scoped_ptr<SortedDataInterface> sorted(harnessHelper->newSortedDataInterface(true));
+        const std::unique_ptr<HarnessHelper> harnessHelper(newHarnessHelper());
+        const std::unique_ptr<SortedDataInterface> sorted(harnessHelper->newSortedDataInterface(true));
 
         {
-            scoped_ptr<OperationContext> opCtx(harnessHelper->newOperationContext());
+            const std::unique_ptr<OperationContext> opCtx(harnessHelper->newOperationContext());
             ASSERT(sorted->isEmpty(opCtx.get()));
         }
 
         {
-            scoped_ptr<OperationContext> opCtx(harnessHelper->newOperationContext());
+            const std::unique_ptr<OperationContext> opCtx(harnessHelper->newOperationContext());
             {
                 WriteUnitOfWork uow(opCtx.get());
 
@@ -112,11 +114,11 @@ namespace mongo {
         }
 
         {
-            scoped_ptr<OperationContext> t1(harnessHelper->newOperationContext());
-            scoped_ptr<OperationContext> t2(harnessHelper->newOperationContext());
+            const std::unique_ptr<OperationContext> t1(harnessHelper->newOperationContext());
+            const std::unique_ptr<OperationContext> t2(harnessHelper->newOperationContext());
 
-            scoped_ptr<WriteUnitOfWork> w1(new WriteUnitOfWork(t1.get()));
-            scoped_ptr<WriteUnitOfWork> w2(new WriteUnitOfWork(t2.get()));
+            const std::unique_ptr<WriteUnitOfWork> w1(new WriteUnitOfWork(t1.get()));
+            const std::unique_ptr<WriteUnitOfWork> w2(new WriteUnitOfWork(t2.get()));
 
             ASSERT_OK(sorted->insert(t1.get(), key3, loc3, false));
             ASSERT_OK(sorted->insert(t2.get(), key4, loc4, false));
@@ -128,15 +130,15 @@ namespace mongo {
         }
 
         {
-            scoped_ptr<OperationContext> t1(harnessHelper->newOperationContext());
-            scoped_ptr<OperationContext> t2(harnessHelper->newOperationContext());
+            const std::unique_ptr<OperationContext> t1(harnessHelper->newOperationContext());
+            const std::unique_ptr<OperationContext> t2(harnessHelper->newOperationContext());
 
-            scoped_ptr<WriteUnitOfWork> w2(new WriteUnitOfWork(t2.get()));
+            const std::unique_ptr<WriteUnitOfWork> w2(new WriteUnitOfWork(t2.get()));
             // ensure we start w2 transaction
             ASSERT_OK(sorted->insert(t2.get(), key4, loc4, false));
 
             {
-                scoped_ptr<WriteUnitOfWork> w1(new WriteUnitOfWork(t1.get()));
+                const std::unique_ptr<WriteUnitOfWork> w1(new WriteUnitOfWork(t1.get()));
 
                 {
                     WriteUnitOfWork w(t1.get());
