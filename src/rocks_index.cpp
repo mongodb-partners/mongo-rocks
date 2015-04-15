@@ -362,9 +362,10 @@ namespace mongo {
 
                 if ((_forward && (locInIndex < loc)) || (!_forward && (locInIndex > loc))) {
                     advanceCursor();
+                    return false;
                 }
 
-                return true;
+                return loc == locInIndex;
             }
 
             void updateLocAndTypeBits() {
