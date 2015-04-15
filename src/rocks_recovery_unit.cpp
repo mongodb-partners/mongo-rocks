@@ -50,13 +50,18 @@
 
 namespace mongo {
     namespace {
-        class PrefixStrippingIterator : public rocksdb::Iterator {
+        class PrefixStrippingIterator : public RocksIterator {
         public:
             // baseIterator is consumed
-            PrefixStrippingIterator(std::string prefix, Iterator* baseIterator)
+            PrefixStrippingIterator(std::string prefix, Iterator* baseIterator,
+                                    std::unique_ptr<rocksdb::Slice> upperBound)
                 : _prefix(std::move(prefix)),
+                  _nextPrefix(std::move(rocksGetNextPrefix(_prefix))),
                   _prefixSlice(_prefix.data(), _prefix.size()),
-                  _baseIterator(baseIterator) {}
+                  _baseIterator(baseIterator),
+                  _upperBound(std::move(upperBound)) {
+                *_upperBound.get() = rocksdb::Slice(_nextPrefix);
+            }
 
             virtual bool Valid() const {
                 return _baseIterator->Valid() && _baseIterator->key().starts_with(_prefixSlice);
@@ -64,8 +69,11 @@ namespace mongo {
 
             virtual void SeekToFirst() { _baseIterator->Seek(_prefixSlice); }
             virtual void SeekToLast() {
-                std::string nextPrefix = std::move(rocksGetNextPrefix(_prefix));
-                _baseIterator->Seek(nextPrefix);
+                // we can't have upper bound set to _nextPrefix since we need to seek to it
+                *_upperBound.get() = rocksdb::Slice("\xFF\xFF\xFF\xFF");
+                _baseIterator->Seek(_nextPrefix);
+                // reset back to original value
+                *_upperBound.get() = rocksdb::Slice(_nextPrefix);
                 if (!_baseIterator->Valid()) {
                     _baseIterator->SeekToLast();
                 }
@@ -92,10 +100,30 @@ namespace mongo {
             virtual rocksdb::Slice value() const { return _baseIterator->value(); }
             virtual rocksdb::Status status() const { return _baseIterator->status(); }
 
+            // RocksIterator specific functions
+
+            // This Seek is specific because it will succeed only if it finds a key with `target`
+            // prefix. If there is no such key, it will be !Valid()
+            virtual void SeekPrefix(const rocksdb::Slice& target) {
+                std::unique_ptr<char[]> buffer(new char[_prefix.size() + target.size()]);
+                memcpy(buffer.get(), _prefix.data(), _prefix.size());
+                memcpy(buffer.get() + _prefix.size(), target.data(), target.size());
+
+                std::string tempUpperBound = rocksGetNextPrefix(
+                    rocksdb::Slice(buffer.get(), _prefix.size() + target.size()));
+
+                *_upperBound.get() = rocksdb::Slice(tempUpperBound);
+                _baseIterator->Seek(rocksdb::Slice(buffer.get(), _prefix.size() + target.size()));
+                // reset back to original value
+                *_upperBound.get() = rocksdb::Slice(_nextPrefix);
+            }
+
         private:
             std::string _prefix;
+            std::string _nextPrefix;
             rocksdb::Slice _prefixSlice;
             std::unique_ptr<Iterator> _baseIterator;
+            std::unique_ptr<rocksdb::Slice> _upperBound;
         };
 
     }  // anonymous namespace
@@ -269,20 +297,24 @@ namespace mongo {
         return _db->Get(options, key, value);
     }
 
-    rocksdb::Iterator* RocksRecoveryUnit::NewIterator(std::string prefix) {
+    RocksIterator* RocksRecoveryUnit::NewIterator(std::string prefix) {
+        std::unique_ptr<rocksdb::Slice> upperBound(new rocksdb::Slice());
         rocksdb::ReadOptions options;
+        options.iterate_upper_bound = upperBound.get();
         options.snapshot = snapshot();
         auto iterator = _db->NewIterator(options);
         if (_writeBatch && _writeBatch->GetWriteBatch()->Count() > 0) {
             iterator = _writeBatch->NewIteratorWithBase(iterator);
         }
-        return new PrefixStrippingIterator(std::move(prefix), iterator);
+        return new PrefixStrippingIterator(std::move(prefix), iterator, std::move(upperBound));
     }
 
-    rocksdb::Iterator* RocksRecoveryUnit::NewIteratorNoSnapshot(rocksdb::DB* db,
-                                                                std::string prefix) {
+    RocksIterator* RocksRecoveryUnit::NewIteratorNoSnapshot(rocksdb::DB* db, std::string prefix) {
+        std::unique_ptr<rocksdb::Slice> upperBound(new rocksdb::Slice());
+        rocksdb::ReadOptions options;
+        options.iterate_upper_bound = upperBound.get();
         auto iterator = db->NewIterator(rocksdb::ReadOptions());
-        return new PrefixStrippingIterator(std::move(prefix), iterator);
+        return new PrefixStrippingIterator(std::move(prefix), iterator, std::move(upperBound));
     }
 
     void RocksRecoveryUnit::incrementCounter(const rocksdb::Slice& counterKey,

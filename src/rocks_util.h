@@ -35,9 +35,9 @@
 
 namespace mongo {
 
-    inline std::string rocksGetNextPrefix(const std::string& prefix) {
+    inline std::string rocksGetNextPrefix(const rocksdb::Slice& prefix) {
         // next prefix lexicographically, assume same length
-        std::string nextPrefix(prefix);
+        std::string nextPrefix(prefix.data(), prefix.size());
         for (int i = static_cast<int>(nextPrefix.size()) - 1; i >= 0; --i) {
             nextPrefix[i]++;
             // if it's == 0, that means we've overflowed, so need to keep adding

@@ -284,7 +284,7 @@ namespace mongo {
 
             rocksdb::DB* _db;                                       // not owned
             std::string _prefix;
-            boost::scoped_ptr<rocksdb::Iterator> _iterator;
+            boost::scoped_ptr<RocksIterator> _iterator;
             const bool _forward;
             bool _lastMoveWasRestore = false;
             Ordering _order;
@@ -327,6 +327,19 @@ namespace mongo {
             RocksUniqueCursor(OperationContext* txn, rocksdb::DB* db, std::string prefix,
                               bool forward, Ordering order)
                 : RocksCursorBase(txn, db, prefix, forward, order) {}
+
+            boost::optional<IndexKeyEntry> seekExact(const BSONObj& key,
+                                                     RequestedInfo parts) override {
+                _query.resetToKey(stripFieldNames(key), _order);
+                const rocksdb::Slice keySlice(_query.getBuffer(), _query.getSize());
+
+                _iterator->SeekPrefix(keySlice);
+                if (!_iterator->Valid()) {
+                    invariantRocksOK(_iterator->status());
+                }
+                updatePosition();
+                return curr(parts);
+            }
 
             virtual bool _locate(const KeyString& query, RecordId loc) {
                 if (!seekCursor(query)) {

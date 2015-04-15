@@ -60,6 +60,16 @@ namespace rocksdb {
 
 namespace mongo {
 
+    // Same as rocksdb::Iterator, but adds couple more useful functions
+    class RocksIterator : public rocksdb::Iterator {
+    public:
+        virtual ~RocksIterator() {}
+
+        // This Seek is specific because it will succeed only if it finds a key with `target`
+        // prefix. If there is no such key, it will be !Valid()
+        virtual void SeekPrefix(const rocksdb::Slice& target) = 0;
+    };
+
     class OperationContext;
 
     class RocksRecoveryUnit : public RecoveryUnit {
@@ -97,9 +107,9 @@ namespace mongo {
 
         rocksdb::Status Get(const rocksdb::Slice& key, std::string* value);
 
-        rocksdb::Iterator* NewIterator(std::string prefix);
+        RocksIterator* NewIterator(std::string prefix);
 
-        static rocksdb::Iterator* NewIteratorNoSnapshot(rocksdb::DB* db, std::string prefix);
+        static RocksIterator* NewIteratorNoSnapshot(rocksdb::DB* db, std::string prefix);
 
         void incrementCounter(const rocksdb::Slice& counterKey,
                               std::atomic<long long>* counter, long long delta);
