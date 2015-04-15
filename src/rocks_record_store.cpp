@@ -904,8 +904,6 @@ namespace mongo {
         else
             _iterator->Prev();
 
-        invariantRocksOK(_iterator->status());
-
         if (_iterator->Valid()) {
             _curr = _decodeCurr();
             if (_cappedVisibilityManager.get()) {  // isCapped?
@@ -924,6 +922,7 @@ namespace mongo {
                 }
             }  // isCapped?
         } else {
+            invariantRocksOK(_iterator->status());
             _eof = true;
             // we leave _curr as it is on purpose
         }
@@ -993,7 +992,6 @@ namespace mongo {
                 int64_t locStorage;
                 _iterator->Seek(RocksRecordStore::_makeKey(loc, &locStorage));
             }
-            invariantRocksOK(_iterator->status());
         } else {  // backward iterator
             if (loc.isNull()) {
                 _iterator->SeekToLast();
@@ -1001,17 +999,17 @@ namespace mongo {
                 // lower bound on reverse iterator
                 int64_t locStorage;
                 _iterator->Seek(RocksRecordStore::_makeKey(loc, &locStorage));
-                invariantRocksOK(_iterator->status());
                 if (!_iterator->Valid()) {
+                    invariantRocksOK(_iterator->status());
                     _iterator->SeekToLast();
                 } else if (_decodeCurr() != loc) {
                     _iterator->Prev();
                 }
             }
-            invariantRocksOK(_iterator->status());
         }
         _eof = !_iterator->Valid();
         if (_eof) {
+            invariantRocksOK(_iterator->status());
             _curr = loc;
         } else {
             _curr = _decodeCurr();
