@@ -612,15 +612,24 @@ namespace mongo {
     RecordIterator* RocksRecordStore::getIterator(OperationContext* txn, const RecordId& start,
                                                   const CollectionScanParams::Direction& dir)
         const {
-        if (_isOplog && dir == CollectionScanParams::FORWARD) {
-            auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(txn);
-            if (!ru->hasSnapshot() || ru->getOplogReadTill().isNull()) {
-                // we don't have snapshot, we can update our view
-                ru->setOplogReadTill(_cappedVisibilityManager->oplogStartHack());
+        RecordId startIterator = start;
+
+        if (_isOplog) {
+            if (dir == CollectionScanParams::FORWARD) {
+                auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(txn);
+                if (!ru->hasSnapshot() || ru->getOplogReadTill().isNull()) {
+                    // we don't have snapshot, we can update our view
+                    ru->setOplogReadTill(_cappedVisibilityManager->oplogStartHack());
+                }
+                if (start.isNull()) {
+                    startIterator = _oplogNextToDelete;
+                }
+            } else if (start.isNull()) {  // backward iterator + beginning not set
+                startIterator = _cappedVisibilityManager->oplogStartHack();
             }
         }
 
-        return new Iterator(txn, _db, _prefix, _cappedVisibilityManager, dir, start);
+        return new Iterator(txn, _db, _prefix, _cappedVisibilityManager, dir, startIterator);
     }
 
     std::vector<RecordIterator*> RocksRecordStore::getManyIterators(OperationContext* txn) const {
