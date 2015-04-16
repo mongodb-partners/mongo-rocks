@@ -1,0 +1,10 @@
+{
+  "project_id" : "mongo-rocks",
+  "conduit_uri" : "https://reviews.facebook.net/",
+  "load" : [],
+  "base" : "git:HEAD^, hg:.^",
+  "git.default-relative-commit" : "HEAD^",
+  "git:arc.feature.start.default" : "origin/master",
+  "arc.feature.start.default" : "master",
+  "history.immutable" : false
+}
