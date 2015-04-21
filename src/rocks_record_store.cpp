@@ -207,11 +207,15 @@ namespace mongo {
         }
 
         // Get next id
-        boost::scoped_ptr<rocksdb::Iterator> iter(
+        boost::scoped_ptr<RocksIterator> iter(
             RocksRecoveryUnit::NewIteratorNoSnapshot(_db, _prefix));
-        iter->SeekToLast();
+        // first check if the collection is empty
+        iter->SeekPrefix("");
         bool emptyCollection = !iter->Valid();
-        if (iter->Valid()) {
+        if (!emptyCollection) {
+            // if it's not empty, find next RecordId
+            iter->SeekToLast();
+            dassert(iter->Valid());
             rocksdb::Slice lastSlice = iter->key();
             RecordId lastId = _makeRecordId(lastSlice);
             if (_isOplog || _isCapped) {
