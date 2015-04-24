@@ -21,7 +21,7 @@ env.Library(
         '$BUILD_DIR/mongo/db/storage/index_entry_comparison',
         '$BUILD_DIR/mongo/db/storage/key_string',
         '$BUILD_DIR/mongo/db/storage/oplog_hack',
-        '$BUILD_DIR/mongo/foundation',
+        '$BUILD_DIR/mongo/util/foundation',
         '$BUILD_DIR/mongo/processinfo',
         '$BUILD_DIR/third_party/shim_snappy',
         ],
