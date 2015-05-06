@@ -13,7 +13,7 @@ env.Library(
         'src/rocks_util.cpp',
         ],
     LIBDEPS= [
-        '$BUILD_DIR/mongo/bson',
+        '$BUILD_DIR/mongo/bson/bson',
         '$BUILD_DIR/mongo/db/catalog/collection_options',
         '$BUILD_DIR/mongo/db/concurrency/write_conflict_exception',
         '$BUILD_DIR/mongo/db/index/index_descriptor',
