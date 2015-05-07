@@ -44,7 +44,7 @@ env.Library(
         'storage_rocks_base',
         '$BUILD_DIR/mongo/db/storage/kv/kv_engine'
         ],
-    LIBDEPS_DEPENDENTS=['$BUILD_DIR/mongo/${LIBPREFIX}serveronly${LIBSUFFIX}']
+    LIBDEPS_DEPENDENTS=['$BUILD_DIR/mongo/db/${LIBPREFIX}serveronly${LIBSUFFIX}']
     )
 
 env.Library(
