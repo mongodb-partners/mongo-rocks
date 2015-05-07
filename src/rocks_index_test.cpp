@@ -76,7 +76,7 @@ namespace mongo {
 
         std::unique_ptr<RecoveryUnit> newRecoveryUnit() {
             return stdx::make_unique<RocksRecoveryUnit>(&_transactionEngine, _db.get(),
-                                                        _counterManager.get(), true);
+                                                        _counterManager.get(), nullptr, true);
         }
 
     private:

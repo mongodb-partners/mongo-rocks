@@ -37,6 +37,7 @@
 #include <rocksdb/iterator.h>
 #include <rocksdb/slice.h>
 #include <rocksdb/options.h>
+#include <rocksdb/perf_context.h>
 #include <rocksdb/write_batch.h>
 #include <rocksdb/utilities/write_batch_with_index.h>
 
@@ -54,11 +55,14 @@ namespace mongo {
         public:
             // baseIterator is consumed
             PrefixStrippingIterator(std::string prefix, Iterator* baseIterator,
+                                    RocksCompactionScheduler* compactionScheduler,
                                     std::unique_ptr<rocksdb::Slice> upperBound)
-                : _prefix(std::move(prefix)),
+                : _rocksdbSkippedDeletionsInitial(0),
+                  _prefix(std::move(prefix)),
                   _nextPrefix(std::move(rocksGetNextPrefix(_prefix))),
                   _prefixSlice(_prefix.data(), _prefix.size()),
                   _baseIterator(baseIterator),
+                  _compactionScheduler(compactionScheduler),
                   _upperBound(std::move(upperBound)) {
                 *_upperBound.get() = rocksdb::Slice(_nextPrefix);
             }
@@ -67,8 +71,13 @@ namespace mongo {
                 return _baseIterator->Valid() && _baseIterator->key().starts_with(_prefixSlice);
             }
 
-            virtual void SeekToFirst() { _baseIterator->Seek(_prefixSlice); }
+            virtual void SeekToFirst() {
+                startOp();
+                _baseIterator->Seek(_prefixSlice);
+                endOp();
+            }
             virtual void SeekToLast() {
+                startOp();
                 // we can't have upper bound set to _nextPrefix since we need to seek to it
                 *_upperBound.get() = rocksdb::Slice("\xFF\xFF\xFF\xFF");
                 _baseIterator->Seek(_nextPrefix);
@@ -80,17 +89,29 @@ namespace mongo {
                 if (_baseIterator->Valid() && !_baseIterator->key().starts_with(_prefixSlice)) {
                     _baseIterator->Prev();
                 }
+                endOp();
             }
 
             virtual void Seek(const rocksdb::Slice& target) {
+                startOp();
                 std::unique_ptr<char[]> buffer(new char[_prefix.size() + target.size()]);
                 memcpy(buffer.get(), _prefix.data(), _prefix.size());
                 memcpy(buffer.get() + _prefix.size(), target.data(), target.size());
                 _baseIterator->Seek(rocksdb::Slice(buffer.get(), _prefix.size() + target.size()));
+                endOp();
             }
 
-            virtual void Next() { _baseIterator->Next(); }
-            virtual void Prev() { _baseIterator->Prev(); }
+            virtual void Next() {
+                startOp();
+                _baseIterator->Next();
+                endOp();
+            }
+
+            virtual void Prev() {
+                startOp();
+                _baseIterator->Prev();
+                endOp();
+            }
 
             virtual rocksdb::Slice key() const {
                 rocksdb::Slice strippedKey = _baseIterator->key();
@@ -119,10 +140,38 @@ namespace mongo {
             }
 
         private:
+            void startOp() {
+                if (_compactionScheduler == nullptr) {
+                    return;
+                }
+                if (rocksdb::GetPerfLevel() == rocksdb::PerfLevel::kDisable) {
+                    rocksdb::SetPerfLevel(rocksdb::kEnableCount);
+                }
+                _rocksdbSkippedDeletionsInitial =
+                    rocksdb::perf_context.internal_delete_skipped_count;
+            }
+            void endOp() {
+                if (_compactionScheduler == nullptr) {
+                    return;
+                }
+                int skippedDeletionsOp = rocksdb::perf_context.internal_delete_skipped_count -
+                                         _rocksdbSkippedDeletionsInitial;
+                if (skippedDeletionsOp >=
+                    RocksCompactionScheduler::getSkippedDeletionsThreshold()) {
+                    _compactionScheduler->reportSkippedDeletionsAboveThreshold(_prefix);
+                }
+            }
+
+            int _rocksdbSkippedDeletionsInitial;
+
             std::string _prefix;
             std::string _nextPrefix;
             rocksdb::Slice _prefixSlice;
             std::unique_ptr<Iterator> _baseIterator;
+
+            // can be nullptr
+            RocksCompactionScheduler* _compactionScheduler;  // not owned
+
             std::unique_ptr<rocksdb::Slice> _upperBound;
         };
 
@@ -131,10 +180,13 @@ namespace mongo {
     std::atomic<int> RocksRecoveryUnit::_totalLiveRecoveryUnits(0);
 
     RocksRecoveryUnit::RocksRecoveryUnit(RocksTransactionEngine* transactionEngine, rocksdb::DB* db,
-                                         RocksCounterManager* counterManager, bool durable)
+                                         RocksCounterManager* counterManager,
+                                         RocksCompactionScheduler* compactionScheduler,
+                                         bool durable)
         : _transactionEngine(transactionEngine),
           _db(db),
           _counterManager(counterManager),
+          _compactionScheduler(compactionScheduler),
           _durable(durable),
           _transaction(transactionEngine),
           _writeBatch(),
@@ -297,7 +349,7 @@ namespace mongo {
         return _db->Get(options, key, value);
     }
 
-    RocksIterator* RocksRecoveryUnit::NewIterator(std::string prefix) {
+    RocksIterator* RocksRecoveryUnit::NewIterator(std::string prefix, bool isOplog) {
         std::unique_ptr<rocksdb::Slice> upperBound(new rocksdb::Slice());
         rocksdb::ReadOptions options;
         options.iterate_upper_bound = upperBound.get();
@@ -306,7 +358,9 @@ namespace mongo {
         if (_writeBatch && _writeBatch->GetWriteBatch()->Count() > 0) {
             iterator = _writeBatch->NewIteratorWithBase(iterator);
         }
-        return new PrefixStrippingIterator(std::move(prefix), iterator, std::move(upperBound));
+        return new PrefixStrippingIterator(std::move(prefix), iterator,
+                                           isOplog ? nullptr : _compactionScheduler,
+                                           std::move(upperBound));
     }
 
     RocksIterator* RocksRecoveryUnit::NewIteratorNoSnapshot(rocksdb::DB* db, std::string prefix) {
@@ -314,7 +368,8 @@ namespace mongo {
         rocksdb::ReadOptions options;
         options.iterate_upper_bound = upperBound.get();
         auto iterator = db->NewIterator(rocksdb::ReadOptions());
-        return new PrefixStrippingIterator(std::move(prefix), iterator, std::move(upperBound));
+        return new PrefixStrippingIterator(std::move(prefix), iterator, nullptr,
+                                           std::move(upperBound));
     }
 
     void RocksRecoveryUnit::incrementCounter(const rocksdb::Slice& counterKey,

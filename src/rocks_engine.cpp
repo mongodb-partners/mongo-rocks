@@ -179,6 +179,7 @@ namespace mongo {
 
         _counterManager.reset(
             new RocksCounterManager(_db.get(), rocksGlobalOptions.crashSafeCounters));
+        _compactionScheduler.reset(new RocksCompactionScheduler(_db.get()));
 
         // open iterator
         boost::scoped_ptr<rocksdb::Iterator> iter(_db->NewIterator(rocksdb::ReadOptions()));
@@ -255,7 +256,7 @@ namespace mongo {
 
     RecoveryUnit* RocksEngine::newRecoveryUnit() {
         return new RocksRecoveryUnit(&_transactionEngine, _db.get(), _counterManager.get(),
-                                     _durable);
+                                     _compactionScheduler.get(), _durable);
     }
 
     Status RocksEngine::createRecordStore(OperationContext* opCtx, StringData ns, StringData ident,

@@ -45,6 +45,7 @@
 #include "mongo/db/record_id.h"
 #include "mongo/db/storage/recovery_unit.h"
 
+#include "rocks_compaction_scheduler.h"
 #include "rocks_transaction.h"
 #include "rocks_counter_manager.h"
 
@@ -76,7 +77,8 @@ namespace mongo {
         MONGO_DISALLOW_COPYING(RocksRecoveryUnit);
     public:
         RocksRecoveryUnit(RocksTransactionEngine* transactionEngine, rocksdb::DB* db,
-                          RocksCounterManager* counterManager, bool durable);
+                          RocksCounterManager* counterManager,
+                          RocksCompactionScheduler* compactionScheduler, bool durable);
         virtual ~RocksRecoveryUnit();
 
         virtual void beginUnitOfWork(OperationContext* opCtx);
@@ -107,7 +109,7 @@ namespace mongo {
 
         rocksdb::Status Get(const rocksdb::Slice& key, std::string* value);
 
-        RocksIterator* NewIterator(std::string prefix);
+        RocksIterator* NewIterator(std::string prefix, bool isOplog = false);
 
         static RocksIterator* NewIteratorNoSnapshot(rocksdb::DB* db, std::string prefix);
 
@@ -120,7 +122,8 @@ namespace mongo {
         RecordId getOplogReadTill() const { return _oplogReadTill; }
 
         RocksRecoveryUnit* newRocksRecoveryUnit() {
-            return new RocksRecoveryUnit(_transactionEngine, _db, _counterManager, _durable);
+            return new RocksRecoveryUnit(_transactionEngine, _db, _counterManager,
+                                         _compactionScheduler, _durable);
         }
 
         struct Counter {
@@ -142,9 +145,10 @@ namespace mongo {
         void _commit();
 
         void _abort();
-        RocksTransactionEngine* _transactionEngine;  // not owned
-        rocksdb::DB* _db;                            // not owned
-        RocksCounterManager* _counterManager;        // not owned
+        RocksTransactionEngine* _transactionEngine;      // not owned
+        rocksdb::DB* _db;                                // not owned
+        RocksCounterManager* _counterManager;            // not owned
+        RocksCompactionScheduler* _compactionScheduler;  // not owned
 
         const bool _durable;
 

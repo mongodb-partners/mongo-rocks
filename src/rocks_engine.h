@@ -49,6 +49,7 @@
 #include "mongo/db/storage/kv/kv_engine.h"
 #include "mongo/util/string_map.h"
 
+#include "rocks_compaction_scheduler.h"
 #include "rocks_counter_manager.h"
 #include "rocks_transaction.h"
 
@@ -170,6 +171,8 @@ namespace mongo {
 
         // CounterManages manages counters like numRecords and dataSize for record stores
         boost::scoped_ptr<RocksCounterManager> _counterManager;
+
+        boost::scoped_ptr<RocksCompactionScheduler> _compactionScheduler;
 
         static const std::string kMetadataPrefix;
         static const std::string kDroppedPrefix;
