@@ -36,6 +36,7 @@
 #include "mongo/util/log.h"
 #include "mongo/util/mongoutils/str.h"
 
+#include <rocksdb/experimental.h>
 #include <rocksdb/db.h>
 
 namespace mongo {
@@ -109,7 +110,7 @@ namespace mongo {
     }
 
     Status RocksCompactServerParameter::setFromString(const std::string& str) {
-        auto s = _engine->getDB()->CompactRange(nullptr, nullptr);
+        auto s = rocksdb::experimental::SuggestCompactRange(_engine->getDB(), nullptr, nullptr);
         return rocksToMongoStatus(s);
     }
 }
