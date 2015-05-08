@@ -286,15 +286,20 @@ namespace mongo {
         if (NamespaceString::oplog(ns)) {
             _oplogIdent = ident.toString();
         }
-        if (options.capped) {
-            return new RocksRecordStore(
-                ns, ident, _db.get(), _counterManager.get(), _getIdentPrefix(ident), true,
-                options.cappedSize ? options.cappedSize : 4096,  // default size
-                options.cappedMaxDocs ? options.cappedMaxDocs : -1);
-        } else {
-            return new RocksRecordStore(ns, ident, _db.get(), _counterManager.get(),
-                                        _getIdentPrefix(ident));
+        RocksRecordStore* recordStore =
+            options.capped
+                ? new RocksRecordStore(
+                      ns, ident, _db.get(), _counterManager.get(), _getIdentPrefix(ident), true,
+                      options.cappedSize ? options.cappedSize : 4096,  // default size
+                      options.cappedMaxDocs ? options.cappedMaxDocs : -1)
+                : new RocksRecordStore(ns, ident, _db.get(), _counterManager.get(),
+                                       _getIdentPrefix(ident));
+
+        {
+            boost::lock_guard<boost::mutex> lk(_identObjectMapMutex);
+            _identCollectionMap[ident] = recordStore;
         }
+        return recordStore;
     }
 
     Status RocksEngine::createSortedDataInterface(OperationContext* opCtx, StringData ident,
@@ -305,13 +310,19 @@ namespace mongo {
     SortedDataInterface* RocksEngine::getSortedDataInterface(OperationContext* opCtx,
                                                              StringData ident,
                                                              const IndexDescriptor* desc) {
+        RocksIndexBase* index;
         if (desc->unique()) {
-            return new RocksUniqueIndex(_db.get(), _getIdentPrefix(ident), ident.toString(),
-                                        Ordering::make(desc->keyPattern()));
+            index = new RocksUniqueIndex(_db.get(), _getIdentPrefix(ident), ident.toString(),
+                                         Ordering::make(desc->keyPattern()));
         } else {
-            return new RocksStandardIndex(_db.get(), _getIdentPrefix(ident), ident.toString(),
-                                          Ordering::make(desc->keyPattern()));
+            index = new RocksStandardIndex(_db.get(), _getIdentPrefix(ident), ident.toString(),
+                                           Ordering::make(desc->keyPattern()));
         }
+        {
+            boost::lock_guard<boost::mutex> lk(_identObjectMapMutex);
+            _identIndexMap[ident] = index;
+        }
+        return index;
     }
 
     // cannot be rolled back
@@ -378,12 +389,20 @@ namespace mongo {
     void RocksEngine::cleanShutdown() { _counterManager->sync(); }
 
     int64_t RocksEngine::getIdentSize(OperationContext* opCtx, StringData ident) {
-        uint64_t storageSize;
-        std::string prefix = _getIdentPrefix(ident);
-        std::string nextPrefix = std::move(rocksGetNextPrefix(prefix));
-        rocksdb::Range wholeRange(prefix, nextPrefix);
-        _db->GetApproximateSizes(&wholeRange, 1, &storageSize);
-        return std::max(static_cast<int64_t>(storageSize), static_cast<int64_t>(1));
+        boost::lock_guard<boost::mutex> lk(_identObjectMapMutex);
+
+        auto indexIter = _identIndexMap.find(ident);
+        if (indexIter != _identIndexMap.end()) {
+            return static_cast<int64_t>(indexIter->second->getSpaceUsedBytes(opCtx));
+        }
+        auto collectionIter = _identCollectionMap.find(ident);
+        if (collectionIter != _identCollectionMap.end()) {
+            return collectionIter->second->storageSize(opCtx);
+        }
+
+        // this can only happen if collection or index exists, but it's not opened (i.e.
+        // getRecordStore or getSortedDataInterface are not called)
+        return 1;
     }
 
     void RocksEngine::setMaxWriteMBPerSec(int maxWriteMBPerSec) {

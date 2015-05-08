@@ -67,6 +67,8 @@ namespace rocksdb {
 namespace mongo {
 
     struct CollectionOptions;
+    class RocksIndexBase;
+    class RocksRecordStore;
 
     class RocksEngine : public KVEngine {
         MONGO_DISALLOW_COPYING( RocksEngine );
@@ -161,6 +163,14 @@ namespace mongo {
 
         // protected by _identPrefixMapMutex
         uint32_t _maxPrefix;
+
+        // _identObjectMapMutex protects both _identIndexMap and _identCollectionMap. It should
+        // never be locked together with _identPrefixMapMutex
+        mutable boost::mutex _identObjectMapMutex;
+        // mapping from ident --> index object. we don't own the object
+        StringMap<RocksIndexBase*> _identIndexMap;
+        // mapping from ident --> collection object
+        StringMap<RocksRecordStore*> _identCollectionMap;
 
         // set of all prefixes that are deleted. we delete them in the background thread
         mutable boost::mutex _droppedPrefixesMutex;
