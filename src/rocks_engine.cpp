@@ -33,6 +33,8 @@
 
 #include "rocks_engine.h"
 
+#include <algorithm>
+
 #include <boost/filesystem/operations.hpp>
 #include <boost/make_shared.hpp>
 #include <boost/shared_ptr.hpp>
@@ -152,7 +154,7 @@ namespace mongo {
     const std::string RocksEngine::kDroppedPrefix("\0\0\0\0droppedprefix-", 18);
 
     RocksEngine::RocksEngine(const std::string& path, bool durable)
-        : _path(path), _durable(durable) {
+        : _path(path), _durable(durable), _maxPrefix(0) {
         {  // create block cache
             uint64_t cacheSizeGB = rocksGlobalOptions.cacheSizeGB;
             if (cacheSizeGB == 0) {
@@ -185,7 +187,6 @@ namespace mongo {
         boost::scoped_ptr<rocksdb::Iterator> iter(_db->NewIterator(rocksdb::ReadOptions()));
 
         // find maxPrefix
-        _maxPrefix = 0;
         iter->SeekToLast();
         if (iter->Valid()) {
             // otherwise the DB is empty, so we just keep it at 0
@@ -194,7 +195,8 @@ namespace mongo {
             invariant(ok);
         }
 
-        // load ident to prefix map
+        // load ident to prefix map. also update _maxPrefix if there's any prefix bigger than
+        // current _maxPrefix
         {
             boost::lock_guard<boost::mutex> lk(_identPrefixMapMutex);
             for (iter->Seek(kMetadataPrefix);
@@ -214,8 +216,14 @@ namespace mongo {
 
                 uint32_t identPrefix = static_cast<uint32_t>(element.numberInt());
                 _identPrefixMap[StringData(ident.data(), ident.size())] = identPrefix;
+
+                _maxPrefix = std::max(_maxPrefix, identPrefix);
             }
         }
+
+        // just to be extra sure. we need this if last collection is oplog -- in that case we
+        // reserve prefix+1 for oplog key tracker
+        ++_maxPrefix;
 
         // load dropped prefixes
         {
