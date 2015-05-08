@@ -470,8 +470,9 @@ namespace mongo {
         options.table_factory.reset(rocksdb::NewBlockBasedTableFactory(table_options));
 
         options.write_buffer_size = 64 * 1024 * 1024;  // 64MB
+        options.level0_slowdown_writes_trigger = 8;
         options.max_write_buffer_number = 4;
-        options.max_background_compactions = 4;
+        options.max_background_compactions = 8;
         options.max_background_flushes = 2;
         options.target_file_size_base = 64 * 1024 * 1024; // 64MB
         options.soft_rate_limit = 2.5;
@@ -482,14 +483,18 @@ namespace mongo {
         options.max_open_files = -1;
         options.compaction_filter_factory.reset(new PrefixDeletingCompactionFilterFactory(this));
 
+        options.compression_per_level.resize(3);
+        options.compression_per_level[0] = rocksdb::kNoCompression;
+        options.compression_per_level[1] = rocksdb::kNoCompression;
         if (rocksGlobalOptions.compression == "snappy") {
-            options.compression = rocksdb::kSnappyCompression;
+            options.compression_per_level[2] = rocksdb::kSnappyCompression;
         } else if (rocksGlobalOptions.compression == "zlib") {
-            options.compression = rocksdb::kZlibCompression;
+            options.compression_per_level[2] = rocksdb::kZlibCompression;
         } else if (rocksGlobalOptions.compression == "none") {
-            options.compression = rocksdb::kNoCompression;
+            options.compression_per_level[2] = rocksdb::kNoCompression;
         } else {
             log() << "Unknown compression, will use default (snappy)";
+            options.compression_per_level[2] = rocksdb::kSnappyCompression;
         }
 
         // create the DB if it's not already present

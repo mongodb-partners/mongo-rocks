@@ -132,6 +132,7 @@ namespace mongo {
         rocksdb::DB* getDB() { return _db.get(); }
         const rocksdb::DB* getDB() const { return _db.get(); }
         size_t getBlockCacheUsage() const { return _block_cache->GetUsage(); }
+        std::shared_ptr<rocksdb::Cache> getBlockCache() { return _block_cache; }
         std::unordered_set<uint32_t> getDroppedPrefixes() const;
 
         RocksTransactionEngine* getTransactionEngine() { return &_transactionEngine; }
