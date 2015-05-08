@@ -191,7 +191,7 @@ namespace mongo {
           _oplogKeyTracker(_isOplog
                                ? new RocksOplogKeyTracker(std::move(rocksGetNextPrefix(_prefix)))
                                : nullptr),
-          _oplogNextToDelete(0),
+          _cappedOldestKeyHint(0),
           _cappedVisibilityManager((_isCapped || _isOplog) ? new CappedVisibilityManager()
                                                            : nullptr),
           _ident(id.toString()),
@@ -421,12 +421,11 @@ namespace mongo {
                 // documents to remove them from indexes. opLog doesn't have indexes, so there
                 // should be no need for us to reconstruct the document to pass it to the callback
                 iter.reset(_oplogKeyTracker->newIterator(ru));
-                int64_t storage;
-                iter->Seek(RocksRecordStore::_makeKey(_oplogNextToDelete, &storage));
             } else {
                 iter.reset(ru->NewIterator(_prefix));
-                iter->SeekToFirst();
             }
+            int64_t storage;
+            iter->Seek(RocksRecordStore::_makeKey(_cappedOldestKeyHint, &storage));
 
             RecordId newestOld;
             while ((sizeSaved < sizeOverCap || docsRemoved < docsOverCap) &&
@@ -492,14 +491,14 @@ namespace mongo {
                 wuow.commit();
             }
 
-            if (_isOplog && iter->Valid()) {
+            if (iter->Valid()) {
                 auto oldestAliveRecordId = _makeRecordId(iter->key());
                 // we check if there's outstanding transaction that is older than
                 // oldestAliveRecordId. If there is, we should not skip deleting that record next
-                // time we clean up oplog. If there isn't, we know for certain this is the record
-                // we'll start out deletions from next time
+                // time we clean up the capped collection. If there isn't, we know for certain this
+                // is the record we'll start out deletions from next time
                 if (!_cappedVisibilityManager->isCappedHidden(oldestAliveRecordId)) {
-                    _oplogNextToDelete = oldestAliveRecordId;
+                    _cappedOldestKeyHint = oldestAliveRecordId;
                 }
             }
         }
@@ -523,13 +522,13 @@ namespace mongo {
                 log() << "Scheduling oplog compactions";
                 _oplogSinceLastCompaction.reset();
                 // schedule compaction for oplog
-                std::string oldestAliveKey(_makePrefixedKey(_prefix, _oplogNextToDelete));
+                std::string oldestAliveKey(_makePrefixedKey(_prefix, _cappedOldestKeyHint));
                 rocksdb::Slice begin(_prefix), end(oldestAliveKey);
                 rocksdb::experimental::SuggestCompactRange(_db, &begin, &end);
 
                 // schedule compaction for oplog tracker
                 std::string oplogKeyTrackerPrefix(rocksGetNextPrefix(_prefix));
-                oldestAliveKey = _makePrefixedKey(oplogKeyTrackerPrefix, _oplogNextToDelete);
+                oldestAliveKey = _makePrefixedKey(oplogKeyTrackerPrefix, _cappedOldestKeyHint);
                 begin = rocksdb::Slice(oplogKeyTrackerPrefix);
                 end = rocksdb::Slice(oldestAliveKey);
                 rocksdb::experimental::SuggestCompactRange(_db, &begin, &end);
@@ -648,11 +647,15 @@ namespace mongo {
                     ru->setOplogReadTill(_cappedVisibilityManager->oplogStartHack());
                 }
                 if (start.isNull()) {
-                    startIterator = _oplogNextToDelete;
+                    startIterator = _cappedOldestKeyHint;
                 }
             } else if (start.isNull()) {  // backward iterator + beginning not set
                 startIterator = _cappedVisibilityManager->oplogStartHack();
             }
+        } else if (_isCapped && start.isNull() && dir == CollectionScanParams::FORWARD) {
+            // seek to first in capped collection. we know that there are no records smaller than
+            // _cappedOldestKeyHint that are alive
+            startIterator = _cappedOldestKeyHint;
         }
 
         return new Iterator(txn, _db, _prefix, _cappedVisibilityManager, dir, startIterator);
