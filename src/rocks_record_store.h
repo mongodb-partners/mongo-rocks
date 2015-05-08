@@ -43,6 +43,7 @@
 #include "mongo/db/storage/capped_callback.h"
 #include "mongo/db/storage/record_store.h"
 #include "mongo/platform/atomic_word.h"
+#include "mongo/util/timer.h"
 
 namespace rocksdb {
     class DB;
@@ -253,6 +254,12 @@ namespace mongo {
         const bool _isOplog;
         // nullptr iff _isOplog == false
         RocksOplogKeyTracker* _oplogKeyTracker;
+        // keep track of when we compacted oplog last time. only valid when _isOplog == true.
+        // Protected by _cappedDeleterMutex.
+        Timer _oplogSinceLastCompaction;
+        // compact oplog every 30 min
+        static const int kOplogCompactEveryMins = 30;
+
         // SeekToFirst() on an oplog is an expensive operation because bunch of keys at the start
         // are deleted. To reduce the overhead, we remember the next key to delete and seek directly
         // to it. This will not work correctly if somebody inserted a key before this

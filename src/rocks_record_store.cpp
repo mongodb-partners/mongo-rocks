@@ -41,6 +41,7 @@
 
 #include <rocksdb/comparator.h>
 #include <rocksdb/db.h>
+#include <rocksdb/experimental.h>
 #include <rocksdb/options.h>
 #include <rocksdb/slice.h>
 #include <rocksdb/utilities/write_batch_with_index.h>
@@ -55,7 +56,6 @@
 #include "mongo/util/background.h"
 #include "mongo/util/log.h"
 #include "mongo/util/mongoutils/str.h"
-#include "mongo/util/timer.h"
 
 #include "rocks_counter_manager.h"
 #include "rocks_engine.h"
@@ -198,6 +198,7 @@ namespace mongo {
           _dataSizeKey(std::string("\0\0\0\0", 4) + "datasize-" + id.toString()),
           _numRecordsKey(std::string("\0\0\0\0", 4) + "numrecords-" + id.toString()),
           _shuttingDown(false) {
+        _oplogSinceLastCompaction.reset();
 
         if (_isCapped) {
             invariant(_cappedMaxSize > 0);
@@ -516,6 +517,25 @@ namespace mongo {
 
         delete txn->releaseRecoveryUnit();
         txn->setRecoveryUnit( realRecoveryUnit );
+
+        if (_isOplog) {
+            if (_oplogSinceLastCompaction.minutes() >= kOplogCompactEveryMins) {
+                log() << "Scheduling oplog compactions";
+                _oplogSinceLastCompaction.reset();
+                // schedule compaction for oplog
+                std::string oldestAliveKey(_makePrefixedKey(_prefix, _oplogNextToDelete));
+                rocksdb::Slice begin(_prefix), end(oldestAliveKey);
+                rocksdb::experimental::SuggestCompactRange(_db, &begin, &end);
+
+                // schedule compaction for oplog tracker
+                std::string oplogKeyTrackerPrefix(rocksGetNextPrefix(_prefix));
+                oldestAliveKey = _makePrefixedKey(oplogKeyTrackerPrefix, _oplogNextToDelete);
+                begin = rocksdb::Slice(oplogKeyTrackerPrefix);
+                end = rocksdb::Slice(oldestAliveKey);
+                rocksdb::experimental::SuggestCompactRange(_db, &begin, &end);
+            }
+        }
+
         return docsRemoved;
     }
 
