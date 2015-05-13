@@ -61,6 +61,7 @@ namespace mongo {
                   _prefix(std::move(prefix)),
                   _nextPrefix(std::move(rocksGetNextPrefix(_prefix))),
                   _prefixSlice(_prefix.data(), _prefix.size()),
+                  _prefixSliceEpsilon(_prefix.data(), _prefix.size() + 1),
                   _baseIterator(baseIterator),
                   _compactionScheduler(compactionScheduler),
                   _upperBound(std::move(upperBound)) {
@@ -68,12 +69,14 @@ namespace mongo {
             }
 
             virtual bool Valid() const {
-                return _baseIterator->Valid() && _baseIterator->key().starts_with(_prefixSlice);
+                return _baseIterator->Valid() && _baseIterator->key().starts_with(_prefixSlice) &&
+                       _baseIterator->key().size() > _prefixSlice.size();
             }
 
             virtual void SeekToFirst() {
                 startOp();
-                _baseIterator->Seek(_prefixSlice);
+                // seek to first key bigger than prefix
+                _baseIterator->Seek(_prefixSliceEpsilon);
                 endOp();
             }
             virtual void SeekToLast() {
@@ -167,6 +170,8 @@ namespace mongo {
             std::string _prefix;
             std::string _nextPrefix;
             rocksdb::Slice _prefixSlice;
+            // the first possible key bigger than prefix. we use this for SeekToFirst()
+            rocksdb::Slice _prefixSliceEpsilon;
             std::unique_ptr<Iterator> _baseIterator;
 
             // can be nullptr

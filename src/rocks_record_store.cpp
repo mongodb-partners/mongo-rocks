@@ -200,6 +200,9 @@ namespace mongo {
           _shuttingDown(false) {
         _oplogSinceLastCompaction.reset();
 
+        LOG(1) << "opening collection " << ns << " with prefix "
+               << rocksdb::Slice(_prefix).ToString(true);
+
         if (_isCapped) {
             invariant(_cappedMaxSize > 0);
             invariant(_cappedMaxDocs == -1 || _cappedMaxDocs > 0);

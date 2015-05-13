@@ -270,13 +270,19 @@ namespace mongo {
     Status RocksEngine::createRecordStore(OperationContext* opCtx, StringData ns, StringData ident,
                                           const CollectionOptions& options) {
         auto s = _createIdentPrefix(ident);
-        if (NamespaceString::oplog(ns)) {
+        if (s.isOK() && NamespaceString::oplog(ns)) {
             _oplogIdent = ident.toString();
             // oplog needs two prefixes, so we also reserve the next one
+            uint64_t oplogTrackerPrefix = 0;
             {
                 boost::lock_guard<boost::mutex> lk(_identPrefixMapMutex);
-                ++_maxPrefix;
+                oplogTrackerPrefix = ++_maxPrefix;
             }
+            // we also need to write out the new prefix to the database. this is just an
+            // optimization
+            std::string encodedPrefix(encodePrefix(oplogTrackerPrefix));
+            s = rocksToMongoStatus(
+                _db->Put(rocksdb::WriteOptions(), encodedPrefix, rocksdb::Slice()));
         }
         return s;
     }
@@ -447,6 +453,12 @@ namespace mongo {
 
         auto s = _db->Put(rocksdb::WriteOptions(), kMetadataPrefix + ident.toString(),
                           rocksdb::Slice(config.objdata(), config.objsize()));
+
+        if (s.ok()) {
+            // As an optimization, add a key <prefix> to the DB
+            std::string encodedPrefix(encodePrefix(prefix));
+            s = _db->Put(rocksdb::WriteOptions(), encodedPrefix, rocksdb::Slice());
+        }
 
         return rocksToMongoStatus(s);
     }

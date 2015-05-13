@@ -44,6 +44,7 @@
 
 #include <rocksdb/db.h>
 #include <rocksdb/experimental.h>
+#include <rocksdb/slice.h>
 
 namespace mongo {
 
@@ -57,7 +58,8 @@ namespace mongo {
             }
         }
         if (schedule) {
-            log() << "Scheduling compaction to clean up tombstones";
+            log() << "Scheduling compaction to clean up tombstones for prefix "
+                  << rocksdb::Slice(prefix).ToString(true);
             // we schedule compaction now
             std::string nextPrefix(rocksGetNextPrefix(prefix));
             rocksdb::Slice begin(prefix), end(nextPrefix);
