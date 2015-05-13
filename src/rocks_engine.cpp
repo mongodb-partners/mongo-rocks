@@ -494,6 +494,7 @@ namespace mongo {
         // keep all RocksDB files opened.
         options.max_open_files = -1;
         options.compaction_filter_factory.reset(new PrefixDeletingCompactionFilterFactory(this));
+        options.enable_thread_tracking = true;
 
         options.compression_per_level.resize(3);
         options.compression_per_level[0] = rocksdb::kNoCompression;
