@@ -137,7 +137,13 @@ namespace mongo {
                     rocksdb::Slice(buffer.get(), _prefix.size() + target.size()));
 
                 *_upperBound.get() = rocksdb::Slice(tempUpperBound);
-                _baseIterator->Seek(rocksdb::Slice(buffer.get(), _prefix.size() + target.size()));
+                if (target.size() == 0) {
+                    // if target is empty, we'll try to seek to <prefix>, which is not good
+                    _baseIterator->Seek(_prefixSliceEpsilon);
+                } else {
+                    _baseIterator->Seek(
+                        rocksdb::Slice(buffer.get(), _prefix.size() + target.size()));
+                }
                 // reset back to original value
                 *_upperBound.get() = rocksdb::Slice(_nextPrefix);
             }
