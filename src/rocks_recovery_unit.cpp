@@ -202,7 +202,6 @@ namespace mongo {
           _transaction(transactionEngine),
           _writeBatch(),
           _snapshot(NULL),
-          _depth(0),
           _myTransactionCount(1) {
         RocksRecoveryUnit::_totalLiveRecoveryUnits.fetch_add(1, std::memory_order_relaxed);
     }
@@ -212,15 +211,9 @@ namespace mongo {
         RocksRecoveryUnit::_totalLiveRecoveryUnits.fetch_sub(1, std::memory_order_relaxed);
     }
 
-    void RocksRecoveryUnit::beginUnitOfWork(OperationContext* opCtx) {
-        _depth++;
-    }
+    void RocksRecoveryUnit::beginUnitOfWork(OperationContext* opCtx) { }
 
     void RocksRecoveryUnit::commitUnitOfWork() {
-        if (_depth > 1) {
-            return; // only outermost gets committed.
-        }
-
         if (_writeBatch) {
             _commit();
         }
@@ -238,11 +231,8 @@ namespace mongo {
         _releaseSnapshot();
     }
 
-    void RocksRecoveryUnit::endUnitOfWork() {
-        _depth--;
-        if (_depth == 0) {
-            _abort();
-        }
+    void RocksRecoveryUnit::abortUnitOfWork() {
+        _abort();
     }
 
     bool RocksRecoveryUnit::waitUntilDurable() {
@@ -255,10 +245,7 @@ namespace mongo {
         return true;
     }
 
-    void RocksRecoveryUnit::abandonSnapshot() {
-        invariant( _depth == 0 );
-        commitUnitOfWork();
-    }
+    void RocksRecoveryUnit::abandonSnapshot() { }
 
     // lazily initialized because Recovery Units are sometimes initialized just for reading,
     // which does not require write batches

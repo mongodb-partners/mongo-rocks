@@ -400,7 +400,9 @@ namespace mongo {
         RocksRecoveryUnit* realRecoveryUnit =
             checked_cast<RocksRecoveryUnit*>(txn->releaseRecoveryUnit());
         invariant(realRecoveryUnit);
-        txn->setRecoveryUnit(realRecoveryUnit->newRocksRecoveryUnit());
+        OperationContext::RecoveryUnitState const realRUstate =
+            txn->setRecoveryUnit(realRecoveryUnit->newRocksRecoveryUnit(),
+                                 OperationContext::kNotInUnitOfWork);
 
         int64_t dataSize = _dataSize.load() + realRecoveryUnit->getDeltaCounter(_dataSizeKey);
         int64_t numRecords = _numRecords.load() + realRecoveryUnit->getDeltaCounter(_numRecordsKey);
@@ -507,18 +509,18 @@ namespace mongo {
         }
         catch ( const WriteConflictException& wce ) {
             delete txn->releaseRecoveryUnit();
-            txn->setRecoveryUnit( realRecoveryUnit );
+            txn->setRecoveryUnit(realRecoveryUnit, realRUstate);
             log() << "got conflict truncating capped, ignoring";
             return 0;
         }
         catch ( ... ) {
             delete txn->releaseRecoveryUnit();
-            txn->setRecoveryUnit( realRecoveryUnit );
+            txn->setRecoveryUnit(realRecoveryUnit, realRUstate);
             throw;
         }
 
         delete txn->releaseRecoveryUnit();
-        txn->setRecoveryUnit( realRecoveryUnit );
+        txn->setRecoveryUnit(realRecoveryUnit, realRUstate);
 
         if (_isOplog) {
             if (_oplogSinceLastCompaction.minutes() >= kOplogCompactEveryMins) {

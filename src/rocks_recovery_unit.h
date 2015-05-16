@@ -83,8 +83,7 @@ namespace mongo {
 
         virtual void beginUnitOfWork(OperationContext* opCtx);
         virtual void commitUnitOfWork();
-
-        virtual void endUnitOfWork();
+        virtual void abortUnitOfWork();
 
         virtual bool waitUntilDurable();
 
@@ -164,7 +163,6 @@ namespace mongo {
         typedef OwnedPointerVector<Change> Changes;
         Changes _changes;
 
-        int _depth;
         uint64_t _myTransactionCount;
 
         RecordId _oplogReadTill;
