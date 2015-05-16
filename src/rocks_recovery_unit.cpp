@@ -245,7 +245,9 @@ namespace mongo {
         return true;
     }
 
-    void RocksRecoveryUnit::abandonSnapshot() { }
+    void RocksRecoveryUnit::abandonSnapshot() {
+        commitUnitOfWork();
+    }
 
     // lazily initialized because Recovery Units are sometimes initialized just for reading,
     // which does not require write batches
