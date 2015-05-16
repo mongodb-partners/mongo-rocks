@@ -245,9 +245,9 @@ namespace mongo {
         }
     }
 
-    bool RocksRecoveryUnit::awaitCommit() {
-        // Not sure what we should do here. awaitCommit() is called when WriteConcern is FSYNC or
-        // JOURNAL. In our case, we're doing JOURNAL WriteConcern for each transaction (no matter
+    bool RocksRecoveryUnit::waitUntilDurable() {
+        // Not sure what we should do here. waitUntilDurable() is called when WriteConcern is FSYNC
+        // or JOURNAL. In our case, we're doing JOURNAL WriteConcern for each transaction (no matter
         // WriteConcern). However, if WriteConcern is FSYNC we should probably call Write() with
         // sync option. So far we're just not doing anything. In the future we should figure which
         // of the WriteConcerns is this (FSYNC or JOURNAL) and then if it's FSYNC do something
@@ -255,7 +255,7 @@ namespace mongo {
         return true;
     }
 
-    void RocksRecoveryUnit::commitAndRestart() {
+    void RocksRecoveryUnit::abandonSnapshot() {
         invariant( _depth == 0 );
         commitUnitOfWork();
     }

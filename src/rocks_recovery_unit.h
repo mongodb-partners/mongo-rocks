@@ -86,9 +86,9 @@ namespace mongo {
 
         virtual void endUnitOfWork();
 
-        virtual bool awaitCommit();
+        virtual bool waitUntilDurable();
 
-        virtual void commitAndRestart();
+        virtual void abandonSnapshot();
 
         virtual void* writingPtr(void* data, size_t len) { invariant(!"don't call writingPtr"); }
 
