@@ -489,6 +489,7 @@ namespace mongo {
         options.target_file_size_base = 64 * 1024 * 1024; // 64MB
         options.soft_rate_limit = 2.5;
         options.hard_rate_limit = 3;
+        options.level_compaction_dynamic_level_bytes = true;
         options.max_bytes_for_level_base = 512 * 1024 * 1024;  // 512 MB
         // This means there is no limit on open files. Make sure to always set ulimit so that it can
         // keep all RocksDB files opened.
