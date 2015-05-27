@@ -292,7 +292,7 @@ namespace mongo {
             // _transaction.recordSnapshotId() and _db->GetSnapshot() and
             rocksdb::WriteOptions writeOptions;
             writeOptions.disableWAL = !_durable;
-            auto status = _db->Write(rocksdb::WriteOptions(), wb);
+            auto status = _db->Write(writeOptions, wb);
             invariantRocksOK(status);
             _transaction.commit();
         }
