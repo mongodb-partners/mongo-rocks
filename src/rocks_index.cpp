@@ -519,7 +519,7 @@ namespace mongo {
 
             *numKeysOut = 0;
             const auto requestedInfo = Cursor::kJustExistance;
-            for (auto entry = cursor->seek(minKey, true, requestedInfo);
+            for (auto entry = cursor->seek(BSONObj(), true, requestedInfo);
                     entry; entry = cursor->next(requestedInfo)) {
                 (*numKeysOut)++;
             }
