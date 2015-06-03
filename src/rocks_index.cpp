@@ -755,10 +755,12 @@ namespace mongo {
             return s;
         }
 
-        // If we're inserting an index element, this means we already "locked" the RecordId of the
-        // document. No need to register write here
         KeyString encodedKey(key, _order, loc);
         std::string prefixedKey(_makePrefixedKey(_prefix, encodedKey));
+        auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(txn);
+        if (!ru->transaction()->registerWrite(prefixedKey)) {
+            throw WriteConflictException();
+        }
 
         rocksdb::Slice value;
         if (!encodedKey.getTypeBits().isAllZeros()) {
@@ -770,7 +772,6 @@ namespace mongo {
         _indexStorageSize.fetch_add(static_cast<long long>(prefixedKey.size()),
                                     std::memory_order_relaxed);
 
-        auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(txn);
         ru->writeBatch()->Put(prefixedKey, value);
 
         return Status::OK();
@@ -779,15 +780,17 @@ namespace mongo {
     void RocksStandardIndex::unindex(OperationContext* txn, const BSONObj& key, const RecordId& loc,
                                      bool dupsAllowed) {
         invariant(dupsAllowed);
-        // If we're unindexing an index element, this means we already "locked" the RecordId of the
-        // document. No need to register write here
 
         KeyString encodedKey(key, _order, loc);
         std::string prefixedKey(_makePrefixedKey(_prefix, encodedKey));
 
+        auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(txn);
+        if (!ru->transaction()->registerWrite(prefixedKey)) {
+            throw WriteConflictException();
+        }
+
         _indexStorageSize.fetch_sub(static_cast<long long>(prefixedKey.size()),
                                     std::memory_order_relaxed);
-        auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(txn);
         ru->writeBatch()->Delete(prefixedKey);
     }
 

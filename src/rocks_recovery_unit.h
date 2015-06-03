@@ -39,6 +39,8 @@
 #include <boost/shared_ptr.hpp>
 
 #include <rocksdb/slice.h>
+#include <rocksdb/write_batch.h>
+#include <rocksdb/utilities/write_batch_with_index.h>
 
 #include "mongo/base/disallow_copying.h"
 #include "mongo/base/owned_pointer_vector.h"
@@ -69,6 +71,10 @@ namespace mongo {
         // This Seek is specific because it will succeed only if it finds a key with `target`
         // prefix. If there is no such key, it will be !Valid()
         virtual void SeekPrefix(const rocksdb::Slice& target) = 0;
+
+        virtual rocksdb::Slice* GetUpperBound() = 0;
+
+        virtual void Refresh(rocksdb::Iterator* newBaseIterator) = 0;
     };
 
     class OperationContext;
@@ -153,7 +159,7 @@ namespace mongo {
 
         RocksTransaction _transaction;
 
-        boost::scoped_ptr<rocksdb::WriteBatchWithIndex> _writeBatch; // owned
+        rocksdb::WriteBatchWithIndex _writeBatch;
 
         // bare because we need to call ReleaseSnapshot when we're done with this
         const rocksdb::Snapshot* _snapshot; // owned
@@ -166,6 +172,8 @@ namespace mongo {
         uint64_t _myTransactionCount;
 
         RecordId _oplogReadTill;
+
+        std::set<RocksIterator*> _liveIterators;
 
         static std::atomic<int> _totalLiveRecoveryUnits;
     };
