@@ -53,6 +53,7 @@
 #include "mongo/db/operation_context.h"
 #include "mongo/db/storage/oplog_hack.h"
 #include "mongo/platform/endian.h"
+#include "mongo/stdx/memory.h"
 #include "mongo/util/background.h"
 #include "mongo/util/log.h"
 #include "mongo/util/mongoutils/str.h"
@@ -639,43 +640,36 @@ namespace mongo {
         return Status::OK();
     }
 
-    RecordIterator* RocksRecordStore::getIterator(OperationContext* txn, const RecordId& start,
-                                                  const CollectionScanParams::Direction& dir)
-        const {
-        RecordId startIterator = start;
+    std::unique_ptr<RecordCursor> RocksRecordStore::getCursor(OperationContext* txn,
+                                                              bool forward) const {
+        RecordId startIterator;
 
         if (_isOplog) {
-            if (dir == CollectionScanParams::FORWARD) {
+            if (forward) {
                 auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(txn);
                 if (!ru->hasSnapshot() || ru->getOplogReadTill().isNull()) {
                     // we don't have snapshot, we can update our view
                     ru->setOplogReadTill(_cappedVisibilityManager->oplogStartHack());
                 }
-                if (start.isNull()) {
-                    startIterator = _cappedOldestKeyHint;
-                }
-            } else if (start.isNull()) {  // backward iterator + beginning not set
+
+                startIterator = _cappedOldestKeyHint;
+            } else {  // backward iterator + beginning not set
                 startIterator = _cappedVisibilityManager->oplogStartHack();
             }
-        } else if (_isCapped && start.isNull() && dir == CollectionScanParams::FORWARD) {
+        } else if (_isCapped && forward) {
             // seek to first in capped collection. we know that there are no records smaller than
             // _cappedOldestKeyHint that are alive
             startIterator = _cappedOldestKeyHint;
         }
 
-        return new Iterator(txn, _db, _prefix, _cappedVisibilityManager, dir, startIterator);
-    }
-
-    std::vector<RecordIterator*> RocksRecordStore::getManyIterators(OperationContext* txn) const {
-        return {new Iterator(txn, _db, _prefix, _cappedVisibilityManager,
-                             CollectionScanParams::FORWARD, RecordId())};
+        // TODO use startIterator.
+        return stdx::make_unique<Cursor>(txn, _db, _prefix, _cappedVisibilityManager, forward);
     }
 
     Status RocksRecordStore::truncate( OperationContext* txn ) {
-        boost::scoped_ptr<RecordIterator> iter( getIterator( txn ) );
-        while( !iter->isEOF() ) {
-            RecordId loc = iter->getNext();
-            deleteRecord( txn, loc );
+        auto cursor = getCursor(txn, true);
+        while (auto record = cursor->next()) {
+            deleteRecord( txn, record->id );
         }
 
         return Status::OK();
@@ -701,22 +695,19 @@ namespace mongo {
         long long nrecords = 0;
         long long dataSizeTotal = 0;
         if (scanData) {
-            boost::scoped_ptr<RecordIterator> iter(getIterator(txn));
+            auto cursor = getCursor(txn, true);
             results->valid = true;
-            while (!iter->isEOF()) {
+            while (auto record = cursor->next()) {
                 ++nrecords;
                 if (full) {
                     size_t dataSize;
-                    RecordId loc = iter->curr();
-                    RecordData data = dataFor(txn, loc);
-                    Status status = adaptor->validate(data, &dataSize);
+                    Status status = adaptor->validate(record->data, &dataSize);
                     if (!status.isOK()) {
                         results->valid = false;
-                        results->errors.push_back(str::stream() << loc << " is corrupted");
+                        results->errors.push_back(str::stream() << record->id << " is corrupted");
                     }
                     dataSizeTotal += static_cast<long long>(dataSize);
                 }
-                iter->getNext();
             }
 
             if (full && results->valid) {
@@ -835,11 +826,10 @@ namespace mongo {
                                                      bool inclusive ) {
         // copied from WiredTigerRecordStore::temp_cappedTruncateAfter()
         WriteUnitOfWork wuow(txn);
-        boost::scoped_ptr<RecordIterator> iter( getIterator( txn, end ) );
-        while( !iter->isEOF() ) {
-            RecordId loc = iter->getNext();
-            if ( end < loc || ( inclusive && end == loc ) ) {
-                deleteRecord( txn, loc );
+        auto cursor = getCursor(txn, true);
+        for (auto record = cursor->seekExact(end); record; record = cursor->next()) {
+            if ( end < record->id || ( inclusive && end == record->id ) ) {
+                deleteRecord( txn, record->id );
             }
         }
         wuow.commit();
@@ -907,166 +897,150 @@ namespace mongo {
 
     // --------
 
-    RocksRecordStore::Iterator::Iterator(
-        OperationContext* txn, rocksdb::DB* db, std::string prefix,
-        boost::shared_ptr<CappedVisibilityManager> cappedVisibilityManager,
-        const CollectionScanParams::Direction& dir, const RecordId& start)
+    RocksRecordStore::Cursor::Cursor(
+            OperationContext* txn,
+            rocksdb::DB* db,
+            std::string prefix,
+            boost::shared_ptr<CappedVisibilityManager> cappedVisibilityManager,
+            bool forward)
         : _txn(txn),
           _db(db),
           _prefix(std::move(prefix)),
           _cappedVisibilityManager(cappedVisibilityManager),
-          _dir(dir),
-          _eof(true),
+          _forward(forward),
           _readUntilForOplog(RocksRecoveryUnit::getRocksRecoveryUnit(txn)->getOplogReadTill()),
           _iterator(RocksRecoveryUnit::getRocksRecoveryUnit(txn)
                         ->NewIterator(_prefix, /* isOplog */ !_readUntilForOplog.isNull())) {
-
-        _locate(start);
     }
 
-    bool RocksRecordStore::Iterator::isEOF() {
-        return _eof;
-    }
 
-    RecordId RocksRecordStore::Iterator::curr() {
+    boost::optional<Record> RocksRecordStore::Cursor::next() {
         if (_eof) {
-            return RecordId();
+            return {};
         }
 
-        return _curr;
-    }
-
-    RecordId RocksRecordStore::Iterator::getNext() {
-        if (_eof) {
-            return RecordId();
-        }
-
-        RecordId toReturn = _curr;
-
-        if ( _forward() )
-            _iterator->Next();
-        else
-            _iterator->Prev();
-
-        if (_iterator->Valid()) {
-            _curr = _decodeCurr();
-            if (_cappedVisibilityManager.get()) {  // isCapped?
-                if (_readUntilForOplog.isNull()) {
-                    // this is the normal capped case
-                    if (_cappedVisibilityManager->isCappedHidden(_curr)) {
-                        _eof = true;
-                    }
-                } else {
-                    // this is for oplogs
-                    if (_curr > _readUntilForOplog ||
-                        (_curr == _readUntilForOplog &&
-                         _cappedVisibilityManager->isCappedHidden(_curr))) {
-                        _eof = true;
-                    }
+        if (!_lastMoveWasRestore) {
+            if (_needFirstSeek) {
+                _needFirstSeek = false;
+                if ( _forward ) {
+                    _iterator->SeekToFirst();
                 }
-            }  // isCapped?
-        } else {
-            invariantRocksOK(_iterator->status());
-            _eof = true;
-            // we leave _curr as it is on purpose
-        }
-
-        _lastLoc = toReturn;
-        return toReturn;
-    }
-
-    void RocksRecordStore::Iterator::invalidate( const RecordId& dl ) {
-        // this should never be called
-    }
-
-    void RocksRecordStore::Iterator::saveState() {
-        _iterator.reset();
-        _txn = nullptr;
-    }
-
-    bool RocksRecordStore::Iterator::restoreState(OperationContext* txn) {
-        _txn = txn;
-        if (_eof) {
-          return true;
-        }
-
-        auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(txn);
-        _iterator.reset(ru->NewIterator(_prefix, /* isOplog */ !_readUntilForOplog.isNull()));
-
-        RecordId saved = _lastLoc;
-        _locate(_lastLoc);
-
-        if (_eof) {
-            _lastLoc = RecordId();
-        } else if (_curr != saved) {
-            // _cappedVisibilityManager is not-null when isCapped == true
-            if (_cappedVisibilityManager.get() && saved != RecordId()) {
-                // Doc was deleted either by cappedDeleteAsNeeded() or cappedTruncateAfter().
-                // It is important that we error out in this case so that consumers don't
-                // silently get 'holes' when scanning capped collections. We don't make
-                // this guarantee for normal collections so it is ok to skip ahead in that case.
-                _eof = true;
-                return false;
-            }
-            // lastLoc was either deleted or never set (yielded before first call to getNext()),
-            // so bump ahead to the next record.
-        } else {
-            // we found where we left off! we advanced to the next one
-            getNext();
-            _lastLoc = saved;
-        }
-
-        return true;
-    }
-
-    RecordData RocksRecordStore::Iterator::dataFor(const RecordId& loc) const {
-        if (!_eof && loc == _curr && _iterator->Valid() && _iterator->status().ok()) {
-            SharedBuffer data = SharedBuffer::allocate(_iterator->value().size());
-            memcpy(data.get(), _iterator->value().data(), _iterator->value().size());
-            return RecordData(std::move(data), _iterator->value().size());
-        }
-        return RocksRecordStore::_getDataFor(_db, _prefix, _txn, loc);
-    }
-
-    void RocksRecordStore::Iterator::_locate(const RecordId& loc) {
-        if (_forward()) {
-            if (loc.isNull()) {
-                _iterator->SeekToFirst();
-            } else {
-                int64_t locStorage;
-                _iterator->Seek(RocksRecordStore::_makeKey(loc, &locStorage));
-            }
-        } else {  // backward iterator
-            if (loc.isNull()) {
-                _iterator->SeekToLast();
-            } else {
-                // lower bound on reverse iterator
-                int64_t locStorage;
-                _iterator->Seek(RocksRecordStore::_makeKey(loc, &locStorage));
-                if (!_iterator->Valid()) {
-                    invariantRocksOK(_iterator->status());
+                else {
                     _iterator->SeekToLast();
-                } else if (_decodeCurr() != loc) {
+                }
+            }
+            else {
+                if ( _forward ) {
+                    _iterator->Next();
+                }
+                else {
                     _iterator->Prev();
                 }
             }
         }
-        _eof = !_iterator->Valid();
-        if (_eof) {
-            invariantRocksOK(_iterator->status());
-            _curr = loc;
-        } else {
-            _curr = _decodeCurr();
+        _lastMoveWasRestore = false;
+
+        return curr();
+    }
+
+    boost::optional<Record> RocksRecordStore::Cursor::seekExact(const RecordId& id) {
+        _needFirstSeek = false;
+        _lastMoveWasRestore = false;
+        // TODO use more optimal call to rocksdb that can use bloom filters since we only care about
+        // exact matches.
+        int64_t keyStorage;
+        _iterator->Seek(_makeKey(id, &keyStorage));
+        if (_iterator->Valid() && _makeRecordId(_iterator->key()) != id) {
+            _eof = true;
+            return {};
         }
+        return curr();
     }
 
-    RecordId RocksRecordStore::Iterator::_decodeCurr() const {
-        invariant(_iterator && _iterator->Valid());
-        return _makeRecordId(_iterator->key());
+    void RocksRecordStore::Cursor::savePositioned() {
+        _iterator.reset();
+        _txn = nullptr;
     }
 
-    bool RocksRecordStore::Iterator::_forward() const {
-        return _dir == CollectionScanParams::FORWARD;
+    void RocksRecordStore::Cursor::saveUnpositioned() {
+        savePositioned();
+        _eof = true;
     }
 
+    bool RocksRecordStore::Cursor::restore(OperationContext* txn) {
+        _txn = txn;
+
+        auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(txn);
+        _iterator.reset(ru->NewIterator(_prefix, /* isOplog */ !_readUntilForOplog.isNull()));
+
+        // Need to initialize _iterator even if _eof since we may need to seek later.
+        if (_eof) return true;
+        if (_needFirstSeek) return true;
+
+        int64_t locStorage;
+        _iterator->Seek(RocksRecordStore::_makeKey(_lastLoc, &locStorage));
+        invariantRocksOK(_iterator->status());
+
+        if (_forward) {
+            _eof = !_iterator->Valid();
+            _lastMoveWasRestore = _eof || _lastLoc != _makeRecordId(_iterator->key());
+        }
+        else {
+            // Seek() lands on or after the key, while reverse cursors need to land on or before.
+            if (!_iterator->Valid()) {
+                // Nothing left on or after.
+                _iterator->SeekToLast();
+                invariantRocksOK(_iterator->status());
+                _eof = !_iterator->Valid();
+                _lastMoveWasRestore = true;
+            }
+            else {
+                _eof = false;
+                _lastMoveWasRestore = _lastLoc != _makeRecordId(_iterator->key());
+                if (_lastMoveWasRestore) {
+                    // Landed after.
+                    _iterator->Prev();
+                    invariantRocksOK(_iterator->status());
+                    _eof = !_iterator->Valid();
+                }
+            }
+        }
+
+        // If a capped cursor can't restore to where it was before, it means that the capped delete
+        // mechanism caught up to us. Return false since we can't silently skip data.
+        return _cappedVisibilityManager ? !_lastMoveWasRestore : true;
+    }
+
+    boost::optional<Record> RocksRecordStore::Cursor::curr() {
+        invariantRocksOK(_iterator->status());
+        if (!_iterator->Valid()) {
+            _eof = true;
+            return {};
+        }
+        _eof = false;
+        _lastLoc = _makeRecordId(_iterator->key());
+
+        if (_cappedVisibilityManager) {  // isCapped?
+            if (_readUntilForOplog.isNull()) {
+                // this is the normal capped case
+                if (_cappedVisibilityManager->isCappedHidden(_lastLoc)) {
+                    _eof = true;
+                    return {};
+                }
+            } else {
+                // this is for oplogs
+                if (_lastLoc > _readUntilForOplog ||
+                    (_lastLoc == _readUntilForOplog &&
+                     _cappedVisibilityManager->isCappedHidden(_lastLoc))) {
+                    _eof = true;
+                    return {};
+                }
+            }
+        }  // isCapped?
+
+        auto dataSlice = _iterator->value();
+        auto data = RecordData(dataSlice.data(), dataSlice.size());
+        data.makeOwned(); // TODO remove after SERVER-16444 is resolved.
+        return {{_lastLoc, std::move(data)}};
+    }
 }

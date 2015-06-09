@@ -331,10 +331,11 @@ namespace mongo {
 
         {
             scoped_ptr<OperationContext> opCtx( harnessHelper->newOperationContext() );
-            scoped_ptr<RecordIterator> it( rs->getIterator( opCtx.get(), loc1 ) );
-            ASSERT( !it->isEOF() );
-            ASSERT_EQ( loc1, it->getNext() );
-            ASSERT( it->isEOF() );
+            auto cursor = rs->getCursor(opCtx.get());
+            auto record = cursor->seekExact(loc1);
+            ASSERT( record );
+            ASSERT_EQ( loc1, record->id );
+            ASSERT( !cursor->next() );
         }
 
         {
@@ -356,10 +357,11 @@ namespace mongo {
 
             { // state should be the same
                 scoped_ptr<OperationContext> opCtx( harnessHelper->newOperationContext() );
-                scoped_ptr<RecordIterator> it( rs->getIterator( opCtx.get(), loc1 ) );
-                ASSERT( !it->isEOF() );
-                ASSERT_EQ( loc1, it->getNext() );
-                ASSERT( it->isEOF() );
+                auto cursor = rs->getCursor(opCtx.get());
+                auto record = cursor->seekExact(loc1);
+                ASSERT( record );
+                ASSERT_EQ( loc1, record->id );
+                ASSERT( !cursor->next() );
             }
 
             w1->commit();
@@ -367,14 +369,13 @@ namespace mongo {
 
         { // now all 3 docs should be visible
             scoped_ptr<OperationContext> opCtx( harnessHelper->newOperationContext() );
-            scoped_ptr<RecordIterator> it( rs->getIterator( opCtx.get(), loc1 ) );
-            ASSERT( !it->isEOF() );
-            ASSERT_EQ( loc1, it->getNext() );
-            ASSERT( !it->isEOF() );
-            it->getNext();
-            ASSERT( !it->isEOF() );
-            it->getNext();
-            ASSERT( it->isEOF() );
+            auto cursor = rs->getCursor(opCtx.get());
+            auto record = cursor->seekExact(loc1);
+            ASSERT( record );
+            ASSERT_EQ( loc1, record->id );
+            ASSERT( cursor->next() );
+            ASSERT( cursor->next() );
+            ASSERT( !cursor->next() );
         }
     }
 
@@ -414,10 +415,11 @@ namespace mongo {
 
         {
             scoped_ptr<OperationContext> opCtx( harnessHelper->newOperationContext() );
-            scoped_ptr<RecordIterator> it( rs->getIterator( opCtx.get(), loc1 ) );
-            ASSERT( !it->isEOF() );
-            ASSERT_EQ( loc1, it->getNext() );
-            ASSERT( it->isEOF() );
+            auto cursor = rs->getCursor(opCtx.get());
+            auto record = cursor->seekExact(loc1);
+            ASSERT( record );
+            ASSERT_EQ( loc1, record->id );
+            ASSERT(!cursor->next());
         }
 
         {
@@ -439,10 +441,11 @@ namespace mongo {
 
             { // state should be the same
                 scoped_ptr<OperationContext> opCtx( harnessHelper->newOperationContext() );
-                scoped_ptr<RecordIterator> it( rs->getIterator( opCtx.get(), loc1 ) );
-                ASSERT( !it->isEOF() );
-                ASSERT_EQ( loc1, it->getNext() );
-                ASSERT( it->isEOF() );
+                auto cursor = rs->getCursor(opCtx.get());
+                auto record = cursor->seekExact(loc1);
+                ASSERT( record );
+                ASSERT_EQ( loc1, record->id );
+                ASSERT(!cursor->next());
             }
 
             w1->commit();
@@ -450,14 +453,13 @@ namespace mongo {
 
         { // now all 3 docs should be visible
             scoped_ptr<OperationContext> opCtx( harnessHelper->newOperationContext() );
-            scoped_ptr<RecordIterator> it( rs->getIterator( opCtx.get(), loc1 ) );
-            ASSERT( !it->isEOF() );
-            ASSERT_EQ( loc1, it->getNext() );
-            ASSERT( !it->isEOF() );
-            it->getNext();
-            ASSERT( !it->isEOF() );
-            it->getNext();
-            ASSERT( it->isEOF() );
+            auto cursor = rs->getCursor(opCtx.get());
+            auto record = cursor->seekExact(loc1);
+            ASSERT( record );
+            ASSERT_EQ( loc1, record->id );
+            ASSERT( cursor->next() );
+            ASSERT( cursor->next() );
+            ASSERT( !cursor->next() );
         }
     }
 

@@ -137,12 +137,7 @@ namespace mongo {
                                           const char* damageSource,
                                           const mutablebson::DamageVector& damages );
 
-        virtual RecordIterator* getIterator( OperationContext* txn,
-                                             const RecordId& start = RecordId(),
-                                             const CollectionScanParams::Direction& dir =
-                                             CollectionScanParams::FORWARD ) const;
-
-        virtual std::vector<RecordIterator*> getManyIterators( OperationContext* txn ) const;
+        std::unique_ptr<RecordCursor> getCursor(OperationContext* txn, bool forward) const final;
 
         virtual Status truncate( OperationContext* txn );
 
@@ -191,35 +186,37 @@ namespace mongo {
     private:
         // we just need to expose _makePrefixedKey to RocksOplogKeyTracker
         friend class RocksOplogKeyTracker;
-        // NOTE: RecordIterator might outlive the RecordStore. That's why we use all those
+        // NOTE: RecordCursor might outlive the RecordStore. That's why we use all those
         // shared_ptrs
-        class Iterator : public RecordIterator {
+        class Cursor : public RecordCursor {
         public:
-            Iterator(OperationContext* txn, rocksdb::DB* db, std::string prefix,
+            Cursor(OperationContext* txn, rocksdb::DB* db, std::string prefix,
                      boost::shared_ptr<CappedVisibilityManager> cappedVisibilityManager,
-                     const CollectionScanParams::Direction& dir, const RecordId& start);
+                     bool forward);
 
-            virtual bool isEOF();
-            virtual RecordId curr();
-            virtual RecordId getNext();
-            virtual void invalidate(const RecordId& dl);
-            virtual void saveState();
-            virtual bool restoreState(OperationContext* txn);
-            virtual RecordData dataFor( const RecordId& loc ) const;
+            boost::optional<Record> next() final;
+            boost::optional<Record> seekExact(const RecordId& id) final;
+            void savePositioned() final;
+            void saveUnpositioned() final;
+            bool restore(OperationContext* txn) final;
 
         private:
-            void _locate(const RecordId& loc);
-            RecordId _decodeCurr() const;
-            bool _forward() const;
+            /**
+             * Returns the current position of _iterator and updates _eof and _lastLoc.
+             * Correctly handles !_iterator->Valid().
+             * Hides records that shouldn't be seen due to _cappedVisibilityManager.
+             */
+            boost::optional<Record> curr();
 
             OperationContext* _txn;
             rocksdb::DB* _db; // not owned
             std::string _prefix;
             boost::shared_ptr<CappedVisibilityManager> _cappedVisibilityManager;
-            CollectionScanParams::Direction _dir;
-            bool _eof;
+            bool _forward;
+            bool _eof = false;
+            bool _needFirstSeek = true;
+            bool _lastMoveWasRestore = false;
             const RecordId _readUntilForOplog;
-            RecordId _curr;
             RecordId _lastLoc;
             boost::scoped_ptr<rocksdb::Iterator> _iterator;
         };
