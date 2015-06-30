@@ -88,7 +88,7 @@ namespace mongo {
 
     void CappedVisibilityManager::addUncommittedRecord(OperationContext* txn,
                                                        const RecordId& record) {
-        boost::lock_guard<boost::mutex> lk(_lock);
+        stdx::lock_guard<stdx::mutex> lk(_lock);
         _addUncommittedRecord_inlock(txn, record);
     }
 
@@ -102,14 +102,14 @@ namespace mongo {
 
     RecordId CappedVisibilityManager::getNextAndAddUncommittedRecord(
         OperationContext* txn, std::function<RecordId()> nextId) {
-        boost::lock_guard<boost::mutex> lk(_lock);
+        stdx::lock_guard<stdx::mutex> lk(_lock);
         RecordId record = nextId();
         _addUncommittedRecord_inlock(txn, record);
         return record;
     }
 
     void CappedVisibilityManager::dealtWithCappedRecord(const RecordId& record) {
-        boost::lock_guard<boost::mutex> lk(_lock);
+        stdx::lock_guard<stdx::mutex> lk(_lock);
         std::vector<RecordId>::iterator it =
             std::find(_uncommittedRecords.begin(), _uncommittedRecords.end(), record);
         invariant(it != _uncommittedRecords.end());
@@ -117,7 +117,7 @@ namespace mongo {
     }
 
     bool CappedVisibilityManager::isCappedHidden(const RecordId& record) const {
-        boost::lock_guard<boost::mutex> lk(_lock);
+        stdx::lock_guard<stdx::mutex> lk(_lock);
         if (_uncommittedRecords.empty()) {
             return false;
         }
@@ -126,7 +126,7 @@ namespace mongo {
 
     void CappedVisibilityManager::updateHighestSeen(const RecordId& record) {
         if (record > _oplog_highestSeen) {
-            boost::lock_guard<boost::mutex> lk(_lock);
+            stdx::lock_guard<stdx::mutex> lk(_lock);
             if (record > _oplog_highestSeen) {
                 _oplog_highestSeen = record;
             }
@@ -134,7 +134,7 @@ namespace mongo {
     }
 
     RecordId CappedVisibilityManager::oplogStartHack() const {
-        boost::lock_guard<boost::mutex> lk(_lock);
+        stdx::lock_guard<stdx::mutex> lk(_lock);
         if (_uncommittedRecords.empty()) {
             return _oplog_highestSeen;
         } else {
@@ -268,7 +268,7 @@ namespace mongo {
 
     RocksRecordStore::~RocksRecordStore() {
         {
-            boost::lock_guard<boost::timed_mutex> lk(_cappedDeleterMutex);
+            stdx::lock_guard<stdx::timed_mutex> lk(_cappedDeleterMutex);
             _shuttingDown = true;
         }
         delete _oplogKeyTracker;
@@ -357,7 +357,7 @@ namespace mongo {
         }
 
         // ensure only one thread at a time can do deletes, otherwise they'll conflict.
-        boost::unique_lock<boost::timed_mutex> lock(_cappedDeleterMutex, boost::defer_lock);
+        stdx::unique_lock<stdx::timed_mutex> lock(_cappedDeleterMutex, stdx::defer_lock);
 
         if (_cappedMaxDocs != -1) {
             lock.lock(); // Max docs has to be exact, so have to check every time.
@@ -373,7 +373,10 @@ namespace mongo {
             // Back pressure needed!
             // We're not actually going to delete anything, but we're going to syncronize
             // on the deleter thread.
-            (void)lock.timed_lock(boost::posix_time::millisec(200));
+
+            if (!lock.try_lock()) {
+                (void)lock.try_lock_for(stdx::chrono::milliseconds(200));
+            }
             return 0;
         } else {
             if (!lock.try_lock()) {
@@ -382,7 +385,7 @@ namespace mongo {
                 if ((_dataSize.load() - _cappedMaxSize) < _cappedMaxSizeSlack)
                     return 0;
 
-                if (!lock.timed_lock(boost::posix_time::millisec(200)))
+                if (!lock.try_lock_for(stdx::chrono::milliseconds(200)))
                     return 0;
 
                 // If we already waited, let someone else do cleanup unless we are significantly

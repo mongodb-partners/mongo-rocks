@@ -43,6 +43,7 @@
 #include "mongo/db/storage/capped_callback.h"
 #include "mongo/db/storage/record_store.h"
 #include "mongo/platform/atomic_word.h"
+#include "mongo/stdx/mutex.h"
 #include "mongo/util/timer.h"
 
 namespace rocksdb {
@@ -72,7 +73,7 @@ namespace mongo {
         void _addUncommittedRecord_inlock(OperationContext* txn, const RecordId& record);
 
         // protects the state
-        mutable boost::mutex _lock;
+        mutable stdx::mutex _lock;
         std::vector<RecordId> _uncommittedRecords;
         RecordId _oplog_highestSeen;
     };
@@ -179,7 +180,7 @@ namespace mongo {
 
         int64_t cappedDeleteAsNeeded(OperationContext* txn, const RecordId& justInserted);
         int64_t cappedDeleteAsNeeded_inlock(OperationContext* txn, const RecordId& justInserted);
-        boost::timed_mutex& cappedDeleterMutex() { return _cappedDeleterMutex; }
+        stdx::timed_mutex& cappedDeleterMutex() { return _cappedDeleterMutex; }
 
         static rocksdb::Comparator* newRocksCollectionComparator();
 
@@ -245,7 +246,7 @@ namespace mongo {
         const int64_t _cappedMaxSizeSlack;  // when to start applying backpressure
         const int64_t _cappedMaxDocs;
         CappedDocumentDeleteCallback* _cappedDeleteCallback;
-        mutable boost::timed_mutex _cappedDeleterMutex;  // see comment in ::cappedDeleteAsNeeded
+        mutable stdx::timed_mutex _cappedDeleterMutex;  // see comment in ::cappedDeleteAsNeeded
         int _cappedDeleteCheckCount;      // see comment in ::cappedDeleteAsNeeded
 
         const bool _isOplog;

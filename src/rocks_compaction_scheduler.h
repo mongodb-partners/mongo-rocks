@@ -35,11 +35,10 @@
 #include <string>
 #include <list>
 
-#include <boost/thread/mutex.hpp>
-
 #include <rocksdb/db.h>
 #include <rocksdb/slice.h>
 
+#include "mongo/stdx/mutex.h"
 #include "mongo/util/timer.h"
 
 namespace mongo {
@@ -55,7 +54,7 @@ namespace mongo {
     private:
         rocksdb::DB* _db;  // not owned
 
-        boost::mutex _lock;
+        stdx::mutex _lock;
         // protected by _lock
         Timer _timer;
 

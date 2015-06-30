@@ -35,12 +35,11 @@
 #include <string>
 #include <list>
 
-#include <boost/thread/mutex.hpp>
-
 #include <rocksdb/db.h>
 #include <rocksdb/slice.h>
 
 #include "mongo/base/string_data.h"
+#include "mongo/stdx/mutex.h"
 
 namespace mongo {
 
@@ -63,7 +62,7 @@ namespace mongo {
 
         rocksdb::DB* _db; // not owned
         const bool _crashSafe;
-        boost::mutex _lock;
+        stdx::mutex _lock;
         // protected by _lock
         bool _syncing;
         // protected by _lock

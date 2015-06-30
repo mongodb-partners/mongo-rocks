@@ -38,6 +38,7 @@
 #include <string>
 
 // for invariant()
+#include "mongo/stdx/mutex.h"
 #include "mongo/util/assert_util.h"
 #include "mongo/util/log.h"
 #include "rocks_util.h"
@@ -51,7 +52,7 @@ namespace mongo {
     void RocksCompactionScheduler::reportSkippedDeletionsAboveThreshold(const std::string& prefix) {
         bool schedule = false;
         {
-            boost::mutex::scoped_lock lk(_lock);
+            stdx::lock_guard<stdx::mutex> lk(_lock);
             if (_timer.minutes() >= kMinCompactionIntervalMins) {
                 schedule = true;
                 _timer.reset();
