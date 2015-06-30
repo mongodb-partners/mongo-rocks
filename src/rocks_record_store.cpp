@@ -142,6 +142,11 @@ namespace mongo {
         }
     }
 
+    RecordId CappedVisibilityManager::lowestCappedHiddenRecord() const {
+        boost::lock_guard<boost::mutex> lk(_lock);
+        return _uncommittedRecords.empty() ? RecordId() : _uncommittedRecords.front();
+    }
+
     // this object keeps track of keys in oplog. The format is this:
     // <prefix>RecordId --> dataSize (small endian 32 bytes)
     // <prefix> is oplog_prefix+1 (reserved by rocks_engine.cpp)
@@ -922,26 +927,51 @@ namespace mongo {
             return {};
         }
 
-        if (!_lastMoveWasRestore) {
-            if (_needFirstSeek) {
-                _needFirstSeek = false;
-                if ( _forward ) {
-                    _iterator->SeekToFirst();
-                }
-                else {
-                    _iterator->SeekToLast();
-                }
-            }
-            else {
-                if ( _forward ) {
-                    _iterator->Next();
-                }
-                else {
-                    _iterator->Prev();
+        if (_lastMoveWasRestore) {
+          _lastMoveWasRestore = false;
+          return curr();
+        }
+
+        bool mustAdvance = true;
+        if (_needFirstSeek && !_forward && _cappedVisibilityManager != nullptr ) {
+            const RecordId reverseCappedInitialSeekPoint =
+                _readUntilForOplog.isNull() ? _cappedVisibilityManager->lowestCappedHiddenRecord()
+                                            : _readUntilForOplog;
+
+            if (!reverseCappedInitialSeekPoint.isNull()) {
+                int64_t keyStorage;
+                auto encodedKey = _makeKey(reverseCappedInitialSeekPoint, &keyStorage);
+                _iterator->Seek(encodedKey);
+                if (_iterator->Valid()) {
+                    // we don't want to SeekToLast(), we just need to do a Prev()
+                    _needFirstSeek = false;
+                    // we must do a Prev() if a iterator key is hidden. this happens in two cases:
+                    // * we seeked past our seek target. in that case we're sure that the target is
+                    // hidden
+                    // * we seeked exactly at our seek target, but the target is hidden
+                    mustAdvance =
+                        (_iterator->key() != encodedKey) ||
+                        _cappedVisibilityManager->isCappedHidden(reverseCappedInitialSeekPoint);
+                } else {
+                    invariantRocksOK(_iterator->status());
                 }
             }
         }
-        _lastMoveWasRestore = false;
+
+        if (_needFirstSeek) {
+            _needFirstSeek = false;
+            if (_forward) {
+                _iterator->SeekToFirst();
+            } else {
+                _iterator->SeekToLast();
+            }
+        } else if (mustAdvance) {
+            if (_forward) {
+                _iterator->Next();
+            } else {
+                _iterator->Prev();
+            }
+        }
 
         return curr();
     }
@@ -953,11 +983,21 @@ namespace mongo {
         // exact matches.
         int64_t keyStorage;
         _iterator->Seek(_makeKey(id, &keyStorage));
-        if (_iterator->Valid() && _makeRecordId(_iterator->key()) != id) {
+        if (!_iterator->Valid() || _makeRecordId(_iterator->key()) != id) {
+            invariantRocksOK(_iterator->status());
             _eof = true;
             return {};
         }
-        return curr();
+
+        // seekExact() does not honor the visibility guaranatees in capped collections
+        _lastLoc = _makeRecordId(_iterator->key());
+
+        auto dataSlice = _iterator->value();
+        auto data = RecordData(dataSlice.data(), dataSlice.size());
+        data.makeOwned(); // TODO remove after SERVER-16444 is resolved.
+
+        _eof = false;
+        return {{_lastLoc, std::move(data)}};
     }
 
     void RocksRecordStore::Cursor::savePositioned() {

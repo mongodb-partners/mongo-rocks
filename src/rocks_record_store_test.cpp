@@ -29,7 +29,6 @@
 #include "mongo/platform/basic.h"
 
 #include <boost/filesystem/operations.hpp>
-#include <boost/scoped_ptr.hpp>
 #include <boost/shared_ptr.hpp>
 #include <memory>
 #include <vector>
@@ -50,11 +49,10 @@
 
 namespace mongo {
 
-    using boost::scoped_ptr;
     using boost::shared_ptr;
     using std::string;
 
-    class RocksRecordStoreHarnessHelper : public HarnessHelper {
+    class RocksRecordStoreHarnessHelper final : public HarnessHelper {
     public:
         RocksRecordStoreHarnessHelper() : _tempDir(_testNamespace) {
             boost::filesystem::remove_all(_tempDir.path());
@@ -67,43 +65,57 @@ namespace mongo {
             _counterManager.reset(new RocksCounterManager(_db.get(), true));
         }
 
-        virtual RecordStore* newNonCappedRecordStore() {
+        virtual std::unique_ptr<RecordStore> newNonCappedRecordStore() {
           return newNonCappedRecordStore("foo.bar");
         }
-        RecordStore* newNonCappedRecordStore(const std::string& ns) {
-            return new RocksRecordStore(ns, "1", _db.get(), _counterManager.get(), "prefix");
+        std::unique_ptr<RecordStore> newNonCappedRecordStore(const std::string& ns) {
+            return stdx::make_unique<RocksRecordStore>(ns, "1", _db.get(), _counterManager.get(),
+                                                       "prefix");
         }
 
-        RecordStore* newCappedRecordStore(const std::string& ns, int64_t cappedMaxSize,
-                                          int64_t cappedMaxDocs) {
-            return new RocksRecordStore(ns, "1", _db.get(), _counterManager.get(), "prefix", true,
-                                        cappedMaxSize, cappedMaxDocs);
+        std::unique_ptr<RecordStore> newCappedRecordStore(int64_t cappedMaxSize,
+                                                          int64_t cappedMaxDocs) final {
+            return newCappedRecordStore("a.b", cappedMaxSize, cappedMaxDocs);
         }
 
-        virtual RecoveryUnit* newRecoveryUnit() {
+        std::unique_ptr<RecordStore> newCappedRecordStore(const std::string& ns,
+                                                          int64_t cappedMaxSize,
+                                                          int64_t cappedMaxDocs) {
+            return stdx::make_unique<RocksRecordStore>(ns, "1", _db.get(), _counterManager.get(),
+                                                       "prefix", true, cappedMaxSize,
+                                                       cappedMaxDocs);
+        }
+
+        RecoveryUnit* newRecoveryUnit() final {
             return new RocksRecoveryUnit(&_transactionEngine, _db.get(), _counterManager.get(),
                                          nullptr, true);
+        }
+
+        bool supportsDocLocking() final {
+          return true;
         }
 
     private:
         string _testNamespace = "mongo-rocks-record-store-test";
         unittest::TempDir _tempDir;
-        boost::scoped_ptr<rocksdb::DB> _db;
+        std::unique_ptr<rocksdb::DB> _db;
         RocksTransactionEngine _transactionEngine;
-        scoped_ptr<RocksCounterManager> _counterManager;
+        std::unique_ptr<RocksCounterManager> _counterManager;
     };
 
-    HarnessHelper* newHarnessHelper() { return new RocksRecordStoreHarnessHelper(); }
+    std::unique_ptr<HarnessHelper> newHarnessHelper() {
+        return stdx::make_unique<RocksRecordStoreHarnessHelper>();
+    }
 
     TEST(RocksRecordStoreTest, Isolation1 ) {
-        scoped_ptr<HarnessHelper> harnessHelper( newHarnessHelper() );
-        scoped_ptr<RecordStore> rs( harnessHelper->newNonCappedRecordStore() );
+        std::unique_ptr<HarnessHelper> harnessHelper(newHarnessHelper());
+        std::unique_ptr<RecordStore> rs(harnessHelper->newNonCappedRecordStore());
 
         RecordId loc1;
         RecordId loc2;
 
         {
-            scoped_ptr<OperationContext> opCtx( harnessHelper->newOperationContext() );
+            std::unique_ptr<OperationContext> opCtx( harnessHelper->newOperationContext() );
             {
                 WriteUnitOfWork uow( opCtx.get() );
 
@@ -120,11 +132,11 @@ namespace mongo {
         }
 
         {
-            scoped_ptr<OperationContext> t1( harnessHelper->newOperationContext() );
-            scoped_ptr<OperationContext> t2( harnessHelper->newOperationContext() );
+            std::unique_ptr<OperationContext> t1( harnessHelper->newOperationContext() );
+            std::unique_ptr<OperationContext> t2( harnessHelper->newOperationContext() );
 
-            scoped_ptr<WriteUnitOfWork> w1( new WriteUnitOfWork( t1.get() ) );
-            scoped_ptr<WriteUnitOfWork> w2( new WriteUnitOfWork( t2.get() ) );
+            std::unique_ptr<WriteUnitOfWork> w1( new WriteUnitOfWork( t1.get() ) );
+            std::unique_ptr<WriteUnitOfWork> w2( new WriteUnitOfWork( t2.get() ) );
 
             rs->dataFor( t1.get(), loc1 );
             rs->dataFor( t2.get(), loc1 );
@@ -141,14 +153,14 @@ namespace mongo {
     }
 
     TEST(RocksRecordStoreTest, Isolation2 ) {
-        scoped_ptr<HarnessHelper> harnessHelper( newHarnessHelper() );
-        scoped_ptr<RecordStore> rs( harnessHelper->newNonCappedRecordStore() );
+        std::unique_ptr<HarnessHelper> harnessHelper( newHarnessHelper() );
+        std::unique_ptr<RecordStore> rs( harnessHelper->newNonCappedRecordStore() );
 
         RecordId loc1;
         RecordId loc2;
 
         {
-            scoped_ptr<OperationContext> opCtx( harnessHelper->newOperationContext() );
+            std::unique_ptr<OperationContext> opCtx( harnessHelper->newOperationContext() );
             {
                 WriteUnitOfWork uow( opCtx.get() );
 
@@ -165,8 +177,8 @@ namespace mongo {
         }
 
         {
-            scoped_ptr<OperationContext> t1( harnessHelper->newOperationContext() );
-            scoped_ptr<OperationContext> t2( harnessHelper->newOperationContext() );
+            std::unique_ptr<OperationContext> t1( harnessHelper->newOperationContext() );
+            std::unique_ptr<OperationContext> t2( harnessHelper->newOperationContext() );
 
             // ensure we start transactions
             rs->dataFor( t1.get(), loc2 );
@@ -188,8 +200,8 @@ namespace mongo {
         }
     }
 
-    StatusWith<RecordId> insertBSON(scoped_ptr<OperationContext>& opCtx,
-                                   scoped_ptr<RecordStore>& rs,
+    StatusWith<RecordId> insertBSON(std::unique_ptr<OperationContext>& opCtx,
+                                   std::unique_ptr<RecordStore>& rs,
                                    const Timestamp& opTime) {
         BSONObj obj = BSON( "ts" << opTime );
         WriteUnitOfWork wuow(opCtx.get());
@@ -209,9 +221,9 @@ namespace mongo {
 
     TEST(RocksRecordStoreTest, OplogHack) {
         RocksRecordStoreHarnessHelper harnessHelper;
-        scoped_ptr<RecordStore> rs(harnessHelper.newNonCappedRecordStore("local.oplog.foo"));
+        std::unique_ptr<RecordStore> rs(harnessHelper.newNonCappedRecordStore("local.oplog.foo"));
         {
-            scoped_ptr<OperationContext> opCtx(harnessHelper.newOperationContext());
+            std::unique_ptr<OperationContext> opCtx(harnessHelper.newOperationContext());
 
             // always illegal
             ASSERT_EQ(insertBSON(opCtx, rs, Timestamp(2,-1)).getStatus(),
@@ -245,7 +257,7 @@ namespace mongo {
         }
 
         {
-            scoped_ptr<OperationContext> opCtx(harnessHelper.newOperationContext());
+            std::unique_ptr<OperationContext> opCtx(harnessHelper.newOperationContext());
             // find start
             ASSERT_EQ(rs->oplogStartHack(opCtx.get(), RecordId(0,1)), RecordId()); // nothing <=
             ASSERT_EQ(rs->oplogStartHack(opCtx.get(), RecordId(2,1)), RecordId(1,2)); // between
@@ -254,53 +266,53 @@ namespace mongo {
         }
 
         {
-            scoped_ptr<OperationContext> opCtx(harnessHelper.newOperationContext());
+            std::unique_ptr<OperationContext> opCtx(harnessHelper.newOperationContext());
             rs->temp_cappedTruncateAfter(opCtx.get(), RecordId(2,2),  false); // no-op
         }
 
         {
-            scoped_ptr<OperationContext> opCtx(harnessHelper.newOperationContext());
+            std::unique_ptr<OperationContext> opCtx(harnessHelper.newOperationContext());
             ASSERT_EQ(rs->oplogStartHack(opCtx.get(), RecordId(2,3)), RecordId(2,2));
         }
 
         {
-            scoped_ptr<OperationContext> opCtx(harnessHelper.newOperationContext());
+            std::unique_ptr<OperationContext> opCtx(harnessHelper.newOperationContext());
             rs->temp_cappedTruncateAfter(opCtx.get(), RecordId(1,2),  false); // deletes 2,2
         }
 
         {
-            scoped_ptr<OperationContext> opCtx(harnessHelper.newOperationContext());
+            std::unique_ptr<OperationContext> opCtx(harnessHelper.newOperationContext());
             ASSERT_EQ(rs->oplogStartHack(opCtx.get(), RecordId(2,3)), RecordId(1,2));
         }
 
         {
-            scoped_ptr<OperationContext> opCtx(harnessHelper.newOperationContext());
+            std::unique_ptr<OperationContext> opCtx(harnessHelper.newOperationContext());
             rs->temp_cappedTruncateAfter(opCtx.get(), RecordId(1,2),  true); // deletes 1,2
         }
 
         {
-            scoped_ptr<OperationContext> opCtx(harnessHelper.newOperationContext());
+            std::unique_ptr<OperationContext> opCtx(harnessHelper.newOperationContext());
             ASSERT_EQ(rs->oplogStartHack(opCtx.get(), RecordId(2,3)), RecordId(1,1));
         }
 
         {
-            scoped_ptr<OperationContext> opCtx(harnessHelper.newOperationContext());
+            std::unique_ptr<OperationContext> opCtx(harnessHelper.newOperationContext());
             WriteUnitOfWork wuow(opCtx.get());
             ASSERT_OK(rs->truncate(opCtx.get())); // deletes 1,1 and leaves collection empty
             wuow.commit();
         }
 
         {
-            scoped_ptr<OperationContext> opCtx(harnessHelper.newOperationContext());
+            std::unique_ptr<OperationContext> opCtx(harnessHelper.newOperationContext());
             ASSERT_EQ(rs->oplogStartHack(opCtx.get(), RecordId(2,3)), RecordId());
         }
     }
 
     TEST(RocksRecordStoreTest, OplogHackOnNonOplog) {
         RocksRecordStoreHarnessHelper harnessHelper;
-        scoped_ptr<RecordStore> rs(harnessHelper.newNonCappedRecordStore("local.NOT_oplog.foo"));
+        std::unique_ptr<RecordStore> rs(harnessHelper.newNonCappedRecordStore("local.NOT_oplog.foo"));
 
-        scoped_ptr<OperationContext> opCtx(harnessHelper.newOperationContext());
+        std::unique_ptr<OperationContext> opCtx(harnessHelper.newOperationContext());
 
         BSONObj obj = BSON( "ts" << Timestamp(2,-1) );
         {
@@ -313,13 +325,13 @@ namespace mongo {
     }
 
     TEST(RocksRecordStoreTest, CappedOrder) {
-        scoped_ptr<RocksRecordStoreHarnessHelper> harnessHelper(new RocksRecordStoreHarnessHelper());
-        scoped_ptr<RecordStore> rs(harnessHelper->newCappedRecordStore("a.b", 100000,10000));
+        std::unique_ptr<RocksRecordStoreHarnessHelper> harnessHelper(new RocksRecordStoreHarnessHelper());
+        std::unique_ptr<RecordStore> rs(harnessHelper->newCappedRecordStore("a.b", 100000,10000));
 
         RecordId loc1;
 
         { // first insert a document
-            scoped_ptr<OperationContext> opCtx( harnessHelper->newOperationContext() );
+            std::unique_ptr<OperationContext> opCtx( harnessHelper->newOperationContext() );
             {
                 WriteUnitOfWork uow( opCtx.get() );
                 StatusWith<RecordId> res = rs->insertRecord( opCtx.get(), "a", 2, false );
@@ -330,7 +342,7 @@ namespace mongo {
         }
 
         {
-            scoped_ptr<OperationContext> opCtx( harnessHelper->newOperationContext() );
+            std::unique_ptr<OperationContext> opCtx( harnessHelper->newOperationContext() );
             auto cursor = rs->getCursor(opCtx.get());
             auto record = cursor->seekExact(loc1);
             ASSERT( record );
@@ -341,13 +353,13 @@ namespace mongo {
         {
             // now we insert 2 docs, but commit the 2nd one fiirst
             // we make sure we can't find the 2nd until the first is commited
-            scoped_ptr<OperationContext> t1( harnessHelper->newOperationContext() );
-            scoped_ptr<WriteUnitOfWork> w1( new WriteUnitOfWork( t1.get() ) );
+            std::unique_ptr<OperationContext> t1( harnessHelper->newOperationContext() );
+            std::unique_ptr<WriteUnitOfWork> w1( new WriteUnitOfWork( t1.get() ) );
             rs->insertRecord( t1.get(), "b", 2, false );
             // do not commit yet
 
             { // create 2nd doc
-                scoped_ptr<OperationContext> t2( harnessHelper->newOperationContext() );
+                std::unique_ptr<OperationContext> t2( harnessHelper->newOperationContext() );
                 {
                     WriteUnitOfWork w2( t2.get() );
                     rs->insertRecord( t2.get(), "c", 2, false );
@@ -356,7 +368,7 @@ namespace mongo {
             }
 
             { // state should be the same
-                scoped_ptr<OperationContext> opCtx( harnessHelper->newOperationContext() );
+                std::unique_ptr<OperationContext> opCtx( harnessHelper->newOperationContext() );
                 auto cursor = rs->getCursor(opCtx.get());
                 auto record = cursor->seekExact(loc1);
                 ASSERT( record );
@@ -368,7 +380,7 @@ namespace mongo {
         }
 
         { // now all 3 docs should be visible
-            scoped_ptr<OperationContext> opCtx( harnessHelper->newOperationContext() );
+            std::unique_ptr<OperationContext> opCtx( harnessHelper->newOperationContext() );
             auto cursor = rs->getCursor(opCtx.get());
             auto record = cursor->seekExact(loc1);
             ASSERT( record );
@@ -380,7 +392,7 @@ namespace mongo {
     }
 
     RecordId _oplogOrderInsertOplog( OperationContext* txn,
-                                    scoped_ptr<RecordStore>& rs,
+                                    std::unique_ptr<RecordStore>& rs,
                                     int inc ) {
         Timestamp opTime = Timestamp(5,inc);
         RocksRecordStore* rrs = dynamic_cast<RocksRecordStore*>(rs.get());
@@ -393,9 +405,9 @@ namespace mongo {
     }
 
     TEST(RocksRecordStoreTest, OplogOrder) {
-        scoped_ptr<RocksRecordStoreHarnessHelper> harnessHelper(
+        std::unique_ptr<RocksRecordStoreHarnessHelper> harnessHelper(
             new RocksRecordStoreHarnessHelper());
-        scoped_ptr<RecordStore> rs(
+        std::unique_ptr<RecordStore> rs(
             harnessHelper->newCappedRecordStore("local.oplog.foo", 100000, 10000));
         {
             const RocksRecordStore* rrs = dynamic_cast<RocksRecordStore*>(rs.get());
@@ -405,7 +417,7 @@ namespace mongo {
         RecordId loc1;
 
         { // first insert a document
-            scoped_ptr<OperationContext> opCtx( harnessHelper->newOperationContext() );
+            std::unique_ptr<OperationContext> opCtx( harnessHelper->newOperationContext() );
             {
                 WriteUnitOfWork uow( opCtx.get() );
                 loc1 = _oplogOrderInsertOplog( opCtx.get(), rs, 1 );
@@ -414,7 +426,7 @@ namespace mongo {
         }
 
         {
-            scoped_ptr<OperationContext> opCtx( harnessHelper->newOperationContext() );
+            std::unique_ptr<OperationContext> opCtx( harnessHelper->newOperationContext() );
             auto cursor = rs->getCursor(opCtx.get());
             auto record = cursor->seekExact(loc1);
             ASSERT( record );
@@ -425,13 +437,13 @@ namespace mongo {
         {
             // now we insert 2 docs, but commit the 2nd one fiirst
             // we make sure we can't find the 2nd until the first is commited
-            scoped_ptr<OperationContext> t1( harnessHelper->newOperationContext() );
-            scoped_ptr<WriteUnitOfWork> w1( new WriteUnitOfWork( t1.get() ) );
+            std::unique_ptr<OperationContext> t1( harnessHelper->newOperationContext() );
+            std::unique_ptr<WriteUnitOfWork> w1( new WriteUnitOfWork( t1.get() ) );
             _oplogOrderInsertOplog( t1.get(), rs, 2 );
             // do not commit yet
 
             { // create 2nd doc
-                scoped_ptr<OperationContext> t2( harnessHelper->newOperationContext() );
+                std::unique_ptr<OperationContext> t2( harnessHelper->newOperationContext() );
                 {
                     WriteUnitOfWork w2( t2.get() );
                     _oplogOrderInsertOplog( t2.get(), rs, 3 );
@@ -440,7 +452,7 @@ namespace mongo {
             }
 
             { // state should be the same
-                scoped_ptr<OperationContext> opCtx( harnessHelper->newOperationContext() );
+                std::unique_ptr<OperationContext> opCtx( harnessHelper->newOperationContext() );
                 auto cursor = rs->getCursor(opCtx.get());
                 auto record = cursor->seekExact(loc1);
                 ASSERT( record );
@@ -452,7 +464,7 @@ namespace mongo {
         }
 
         { // now all 3 docs should be visible
-            scoped_ptr<OperationContext> opCtx( harnessHelper->newOperationContext() );
+            std::unique_ptr<OperationContext> opCtx( harnessHelper->newOperationContext() );
             auto cursor = rs->getCursor(opCtx.get());
             auto record = cursor->seekExact(loc1);
             ASSERT( record );

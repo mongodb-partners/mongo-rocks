@@ -69,6 +69,8 @@ namespace mongo {
         bool isCappedHidden(const RecordId& record) const;
         RecordId oplogStartHack() const;
 
+        RecordId lowestCappedHiddenRecord() const;
+
     private:
         void _addUncommittedRecord_inlock(OperationContext* txn, const RecordId& record);
 
