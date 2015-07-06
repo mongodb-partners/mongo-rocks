@@ -97,7 +97,7 @@ namespace mongo {
                         return 0;
                     }
 
-                    OldClientContext ctx(&txn, _ns, false);
+                    OldClientContext ctx(&txn, _ns.ns(), false);
                     RocksRecordStore* rs =
                         checked_cast<RocksRecordStore*>(collection->getRecordStore());
                     WriteUnitOfWork wuow(&txn);
