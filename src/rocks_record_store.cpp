@@ -242,29 +242,6 @@ namespace mongo {
         invariant(_dataSize.load() >= 0);
         invariant(_numRecords.load() >= 0);
 
-        if (!emptyCollection && !_counterManager->crashSafe() &&
-            _numRecords.load() < kCollectionScanOnCreationThreshold) {
-            LOG(1) << "doing scan of collection " << ns << " to get info";
-
-            _numRecords.store(0);
-            _dataSize.store(0);
-
-            long long numRecords = 0, dataSize = 0;
-            for (iter->SeekToFirst(); iter->Valid(); iter->Next()) {
-                numRecords++;
-                dataSize += static_cast<long long>(iter->value().size());
-            }
-
-            _numRecords.store(numRecords);
-            _dataSize.store(dataSize);
-
-            rocksdb::WriteBatch wb;
-            _counterManager->updateCounter(_numRecordsKey, numRecords, &wb);
-            _counterManager->updateCounter(_dataSizeKey, dataSize, &wb);
-            auto s = _db->Write(rocksdb::WriteOptions(), &wb);
-            invariantRocksOK(s);
-        }
-
         _hasBackgroundThread = RocksEngine::initRsOplogBackgroundThread(ns);
     }
 

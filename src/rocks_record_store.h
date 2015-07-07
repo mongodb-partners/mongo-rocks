@@ -279,12 +279,5 @@ namespace mongo {
 
         bool _shuttingDown;
         bool _hasBackgroundThread;
-
-        /**
-         * During record store creation, if a record count is under
-         * 'kCollectionScanOnCreationThreshold', perform a collection scan to update the
-         * number of records and data size counters
-         */
-        static const long long kCollectionScanOnCreationThreshold = 10000;
     };
 }
