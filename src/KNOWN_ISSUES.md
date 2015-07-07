@@ -1,1 +1,1 @@
-* Don't create indexes on oplog. We will not properly unindex documents that we remove from the beginning of the oplog.
+* Building the background index with concurrent updates to the same collection has a small chance to inconsistencies. Track the bug in https://jira.mongodb.org/browse/SERVER-18844
