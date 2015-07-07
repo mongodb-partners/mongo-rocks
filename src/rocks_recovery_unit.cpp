@@ -253,7 +253,9 @@ namespace mongo {
     }
 
     void RocksRecoveryUnit::abandonSnapshot() {
-        commitUnitOfWork();
+        _deltaCounters.clear();
+        _writeBatch.Clear();
+        _releaseSnapshot();
     }
 
     rocksdb::WriteBatchWithIndex* RocksRecoveryUnit::writeBatch() { return &_writeBatch; }
