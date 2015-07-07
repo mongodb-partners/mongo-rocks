@@ -33,9 +33,7 @@
 
 #include "rocks_record_store.h"
 
-#include <boost/scoped_array.hpp>
-#include <boost/shared_ptr.hpp>
-#include <boost/thread/locks.hpp>
+#include <mutex>
 #include <memory>
 #include <algorithm>
 
@@ -65,7 +63,6 @@
 
 namespace mongo {
 
-    using boost::shared_ptr;
     using std::string;
 
     namespace {
@@ -143,7 +140,7 @@ namespace mongo {
     }
 
     RecordId CappedVisibilityManager::lowestCappedHiddenRecord() const {
-        boost::lock_guard<boost::mutex> lk(_lock);
+        stdx::lock_guard<stdx::mutex> lk(_lock);
         return _uncommittedRecords.empty() ? RecordId() : _uncommittedRecords.front();
     }
 
@@ -219,7 +216,7 @@ namespace mongo {
         }
 
         // Get next id
-        boost::scoped_ptr<RocksIterator> iter(
+        std::unique_ptr<RocksIterator> iter(
             RocksRecoveryUnit::NewIteratorNoSnapshot(_db, _prefix));
         // first check if the collection is empty
         iter->SeekPrefix("");
@@ -427,7 +424,7 @@ namespace mongo {
         try {
             WriteUnitOfWork wuow(txn);
             auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(txn);
-            boost::scoped_ptr<rocksdb::Iterator> iter;
+            std::unique_ptr<rocksdb::Iterator> iter;
             if (_isOplog) {
                 // we're using _oplogKeyTracker to find which keys to delete -- this is much faster
                 // because we don't need to read any values. We theoretically need values to pass
@@ -598,7 +595,8 @@ namespace mongo {
                                                         const DocWriter* doc,
                                                         bool enforceQuota ) {
         const int len = doc->documentSize();
-        boost::scoped_array<char> buf( new char[len] );
+
+        std::unique_ptr<char[]> buf(new char[len]);
         doc->writeDocument( buf.get() );
 
         return insertRecord( txn, buf.get(), len, enforceQuota );
@@ -793,7 +791,7 @@ namespace mongo {
         // we use _oplogKeyTracker, which contains exactly the same keys as oplog. the difference is
         // that values are different (much smaller), so reading is faster. in this case, we only
         // need keys (we never touch the values), so this works nicely
-        boost::scoped_ptr<rocksdb::Iterator> iter(_oplogKeyTracker->newIterator(ru));
+        std::unique_ptr<rocksdb::Iterator> iter(_oplogKeyTracker->newIterator(ru));
         int64_t storage;
         iter->Seek(_makeKey(startingPosition, &storage));
         if (!iter->Valid()) {
@@ -909,7 +907,7 @@ namespace mongo {
             OperationContext* txn,
             rocksdb::DB* db,
             std::string prefix,
-            boost::shared_ptr<CappedVisibilityManager> cappedVisibilityManager,
+            std::shared_ptr<CappedVisibilityManager> cappedVisibilityManager,
             bool forward)
         : _txn(txn),
           _db(db),

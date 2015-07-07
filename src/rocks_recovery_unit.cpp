@@ -309,7 +309,7 @@ namespace mongo {
             // _transaction.recordSnapshotId() and _db->GetSnapshot() and
             rocksdb::WriteOptions writeOptions;
             // If _durable == false, then the call to goingToWaitUntilDurable
-            // will have no effect 
+            // will have no effect
             writeOptions.sync = _sync && _durable;
             writeOptions.disableWAL = !_durable;
             auto status = _db->Write(writeOptions, wb);
@@ -353,7 +353,7 @@ namespace mongo {
 
     rocksdb::Status RocksRecoveryUnit::Get(const rocksdb::Slice& key, std::string* value) {
         if (_writeBatch.GetWriteBatch()->Count() > 0) {
-            boost::scoped_ptr<rocksdb::WBWIIterator> wb_iterator(_writeBatch.NewIterator());
+            std::unique_ptr<rocksdb::WBWIIterator> wb_iterator(_writeBatch.NewIterator());
             wb_iterator->Seek(key);
             if (wb_iterator->Valid() && wb_iterator->Entry().key == key) {
                 const auto& entry = wb_iterator->Entry();

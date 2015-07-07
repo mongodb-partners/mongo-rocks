@@ -35,7 +35,7 @@
 #include <string>
 #include <list>
 
-#include <boost/thread/mutex.hpp>
+#include "mongo/stdx/mutex.h"
 
 #include "mongo/base/string_data.h"
 
@@ -76,7 +76,7 @@ namespace mongo {
         uint64_t _latestSnapshotId;
         std::atomic<uint64_t> _nextTransactionId;
         // Lock when mutating state here
-        boost::mutex _lock;
+        stdx::mutex _lock;
 
         // The following data structures keep information about when were the keys committed.
         // They can answer the following questions:

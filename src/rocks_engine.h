@@ -36,9 +36,6 @@
 #include <unordered_set>
 
 #include <boost/optional.hpp>
-#include <boost/scoped_ptr.hpp>
-#include <boost/shared_ptr.hpp>
-#include <boost/thread/mutex.hpp>
 
 #include <rocksdb/cache.h>
 #include <rocksdb/rate_limiter.h>
@@ -149,7 +146,7 @@ namespace mongo {
         rocksdb::Options _options() const;
 
         std::string _path;
-        boost::scoped_ptr<rocksdb::DB> _db;
+        std::unique_ptr<rocksdb::DB> _db;
         std::shared_ptr<rocksdb::Cache> _block_cache;
         int _maxWriteMBPerSec;
         std::shared_ptr<rocksdb::RateLimiter> _rateLimiter;
@@ -157,7 +154,7 @@ namespace mongo {
         const bool _durable;
 
         // ident prefix map stores mapping from ident to a prefix (uint32_t)
-        mutable boost::mutex _identPrefixMapMutex;
+        mutable stdx::mutex _identPrefixMapMutex;
         typedef StringMap<uint32_t> IdentPrefixMap;
         IdentPrefixMap _identPrefixMap;
         std::string _oplogIdent;
@@ -167,23 +164,23 @@ namespace mongo {
 
         // _identObjectMapMutex protects both _identIndexMap and _identCollectionMap. It should
         // never be locked together with _identPrefixMapMutex
-        mutable boost::mutex _identObjectMapMutex;
+        mutable stdx::mutex _identObjectMapMutex;
         // mapping from ident --> index object. we don't own the object
         StringMap<RocksIndexBase*> _identIndexMap;
         // mapping from ident --> collection object
         StringMap<RocksRecordStore*> _identCollectionMap;
 
         // set of all prefixes that are deleted. we delete them in the background thread
-        mutable boost::mutex _droppedPrefixesMutex;
+        mutable stdx::mutex _droppedPrefixesMutex;
         std::unordered_set<uint32_t> _droppedPrefixes;
 
         // This is for concurrency control
         RocksTransactionEngine _transactionEngine;
 
         // CounterManages manages counters like numRecords and dataSize for record stores
-        boost::scoped_ptr<RocksCounterManager> _counterManager;
+        std::unique_ptr<RocksCounterManager> _counterManager;
 
-        boost::scoped_ptr<RocksCompactionScheduler> _compactionScheduler;
+        std::unique_ptr<RocksCompactionScheduler> _compactionScheduler;
 
         static const std::string kMetadataPrefix;
         static const std::string kDroppedPrefix;

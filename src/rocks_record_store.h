@@ -30,9 +30,7 @@
 #pragma once
 
 #include <atomic>
-#include <boost/scoped_ptr.hpp>
-#include <boost/shared_ptr.hpp>
-#include <boost/thread/mutex.hpp>
+#include <memory>
 #include <string>
 #include <memory>
 #include <vector>
@@ -194,7 +192,7 @@ namespace mongo {
         class Cursor : public RecordCursor {
         public:
             Cursor(OperationContext* txn, rocksdb::DB* db, std::string prefix,
-                     boost::shared_ptr<CappedVisibilityManager> cappedVisibilityManager,
+                     std::shared_ptr<CappedVisibilityManager> cappedVisibilityManager,
                      bool forward);
 
             boost::optional<Record> next() final;
@@ -214,14 +212,14 @@ namespace mongo {
             OperationContext* _txn;
             rocksdb::DB* _db; // not owned
             std::string _prefix;
-            boost::shared_ptr<CappedVisibilityManager> _cappedVisibilityManager;
+            std::shared_ptr<CappedVisibilityManager> _cappedVisibilityManager;
             bool _forward;
             bool _eof = false;
             bool _needFirstSeek = true;
             bool _lastMoveWasRestore = false;
             const RecordId _readUntilForOplog;
             RecordId _lastLoc;
-            boost::scoped_ptr<rocksdb::Iterator> _iterator;
+            std::unique_ptr<rocksdb::Iterator> _iterator;
         };
 
         static RecordId _makeRecordId( const rocksdb::Slice& slice );
@@ -269,7 +267,7 @@ namespace mongo {
         // _cappedVisibilityManager and checking isCappedHidden() during deletions
         RecordId _cappedOldestKeyHint;
 
-        boost::shared_ptr<CappedVisibilityManager> _cappedVisibilityManager;
+        std::shared_ptr<CappedVisibilityManager> _cappedVisibilityManager;
 
         std::string _ident;
         AtomicUInt64 _nextIdNum;

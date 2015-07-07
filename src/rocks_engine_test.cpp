@@ -29,7 +29,7 @@
 #include "mongo/platform/basic.h"
 
 #include <boost/filesystem/operations.hpp>
-#include <boost/scoped_ptr.hpp>
+#include <memory>
 
 #include <rocksdb/comparator.h>
 #include <rocksdb/db.h>
@@ -63,7 +63,7 @@ namespace mongo {
     private:
         unittest::TempDir _dbpath;
 
-        boost::scoped_ptr<RocksEngine> _engine;
+        std::unique_ptr<RocksEngine> _engine;
     };
 
     KVHarnessHelper* KVHarnessHelper::create() { return new RocksEngineHarnessHelper(); }

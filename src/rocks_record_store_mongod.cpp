@@ -31,8 +31,8 @@
 
 #include "mongo/platform/basic.h"
 
-#include <boost/thread/mutex.hpp>
 #include <set>
+#include <mutex>
 
 #include "mongo/base/checked_cast.h"
 #include "mongo/db/catalog/collection.h"
@@ -56,7 +56,7 @@ namespace mongo {
     namespace {
 
         std::set<NamespaceString> _backgroundThreadNamespaces;
-        boost::mutex _backgroundThreadMutex;
+        stdx::mutex _backgroundThreadMutex;
 
         class RocksRecordStoreThread : public BackgroundJob {
         public:
@@ -101,7 +101,7 @@ namespace mongo {
                     RocksRecordStore* rs =
                         checked_cast<RocksRecordStore*>(collection->getRecordStore());
                     WriteUnitOfWork wuow(&txn);
-                    boost::lock_guard<boost::timed_mutex> lock(rs->cappedDeleterMutex());
+                    stdx::lock_guard<stdx::timed_mutex> lock(rs->cappedDeleterMutex());
                     int64_t removed = rs->cappedDeleteAsNeeded_inlock(&txn, RecordId::max());
                     wuow.commit();
                     return removed;
@@ -153,7 +153,7 @@ namespace mongo {
             return false;
         }
 
-        boost::lock_guard<boost::mutex> lock(_backgroundThreadMutex);
+        stdx::lock_guard<stdx::mutex> lock(_backgroundThreadMutex);
         NamespaceString nss(ns);
         if (_backgroundThreadNamespaces.count(nss)) {
             log() << "RocksRecordStoreThread " << ns << " already started";

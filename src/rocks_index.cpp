@@ -32,8 +32,6 @@
 
 #include "rocks_index.h"
 
-#include <boost/scoped_ptr.hpp>
-#include <boost/shared_ptr.hpp>
 #include <cstdlib>
 #include <memory>
 #include <sstream>
@@ -59,8 +57,6 @@
 
 namespace mongo {
 
-    using boost::scoped_ptr;
-    using boost::shared_ptr;
     using std::string;
     using std::stringstream;
     using std::vector;
@@ -290,7 +286,7 @@ namespace mongo {
 
             rocksdb::DB* _db;                                       // not owned
             std::string _prefix;
-            boost::scoped_ptr<RocksIterator> _iterator;
+            std::unique_ptr<RocksIterator> _iterator;
             const bool _forward;
             bool _lastMoveWasRestore = false;
             Ordering _order;
@@ -528,7 +524,7 @@ namespace mongo {
 
     bool RocksIndexBase::isEmpty(OperationContext* txn) {
         auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(txn);
-        boost::scoped_ptr<rocksdb::Iterator> it(ru->NewIterator(_prefix));
+        std::unique_ptr<rocksdb::Iterator> it(ru->NewIterator(_prefix));
 
         it->SeekToFirst();
         return !it->Valid();

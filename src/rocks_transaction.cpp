@@ -34,8 +34,7 @@
 #include <map>
 #include <memory>
 #include <string>
-
-#include <boost/thread/locks.hpp>
+#include <mutex>
 
 // for invariant()
 #include "mongo/util/assert_util.h"
@@ -44,11 +43,11 @@ namespace mongo {
     RocksTransactionEngine::RocksTransactionEngine() : _latestSnapshotId(1), _nextTransactionId(1) {}
 
     size_t RocksTransactionEngine::numKeysTracked() {
-        boost::lock_guard<boost::mutex> lk(_lock);
+        stdx::lock_guard<stdx::mutex> lk(_lock);
         return _keyInfo.size();
     }
     size_t RocksTransactionEngine::numActiveSnapshots() {
-        boost::lock_guard<boost::mutex> lk(_lock);
+        stdx::lock_guard<stdx::mutex> lk(_lock);
         return _activeSnapshots.size();
     }
 
@@ -100,7 +99,7 @@ namespace mongo {
         }
         uint64_t newSnapshotId = 0;
         {
-            boost::lock_guard<boost::mutex> lk(_transactionEngine->_lock);
+            stdx::lock_guard<stdx::mutex> lk(_transactionEngine->_lock);
             for (const auto& key : _writtenKeys) {
                 invariant(
                     !_transactionEngine->_isKeyCommittedAfterSnapshot_inlock(key, _snapshotId));
@@ -119,7 +118,7 @@ namespace mongo {
     }
 
     bool RocksTransaction::registerWrite(const std::string& key) {
-        boost::lock_guard<boost::mutex> lk(_transactionEngine->_lock);
+        stdx::lock_guard<stdx::mutex> lk(_transactionEngine->_lock);
         if (_transactionEngine->_isKeyCommittedAfterSnapshot_inlock(key, _snapshotId)) {
             // write-committed write conflict
             return false;
@@ -140,7 +139,7 @@ namespace mongo {
             return;
         }
         {
-            boost::lock_guard<boost::mutex> lk(_transactionEngine->_lock);
+            stdx::lock_guard<stdx::mutex> lk(_transactionEngine->_lock);
             for (const auto& key : _writtenKeys) {
                 _transactionEngine->_uncommittedTransactionId.erase(key);
             }
@@ -151,7 +150,7 @@ namespace mongo {
 
     void RocksTransaction::recordSnapshotId() {
         {
-            boost::lock_guard<boost::mutex> lk(_transactionEngine->_lock);
+            stdx::lock_guard<stdx::mutex> lk(_transactionEngine->_lock);
             _cleanup_inlock();
             _activeSnapshotsIter = _transactionEngine->_getLatestSnapshotId_inlock();
         }

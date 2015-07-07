@@ -34,11 +34,9 @@
 #include "rocks_engine.h"
 
 #include <algorithm>
+#include <mutex>
 
 #include <boost/filesystem/operations.hpp>
-#include <boost/make_shared.hpp>
-#include <boost/shared_ptr.hpp>
-#include <boost/scoped_ptr.hpp>
 
 #include <rocksdb/cache.h>
 #include <rocksdb/compaction_filter.h>
@@ -184,7 +182,7 @@ namespace mongo {
         _compactionScheduler.reset(new RocksCompactionScheduler(_db.get()));
 
         // open iterator
-        boost::scoped_ptr<rocksdb::Iterator> iter(_db->NewIterator(rocksdb::ReadOptions()));
+        std::unique_ptr<rocksdb::Iterator> iter(_db->NewIterator(rocksdb::ReadOptions()));
 
         // find maxPrefix
         iter->SeekToLast();
@@ -198,7 +196,7 @@ namespace mongo {
         // load ident to prefix map. also update _maxPrefix if there's any prefix bigger than
         // current _maxPrefix
         {
-            boost::lock_guard<boost::mutex> lk(_identPrefixMapMutex);
+            stdx::lock_guard<stdx::mutex> lk(_identPrefixMapMutex);
             for (iter->Seek(kMetadataPrefix);
                  iter->Valid() && iter->key().starts_with(kMetadataPrefix); iter->Next()) {
                 invariantRocksOK(iter->status());
@@ -229,8 +227,7 @@ namespace mongo {
         {
             rocksdb::WriteBatch wb;
             // we will use this iter to check if prefixes are still alive
-            boost::scoped_ptr<rocksdb::Iterator> prefixIter(
-                _db->NewIterator(rocksdb::ReadOptions()));
+            std::unique_ptr<rocksdb::Iterator> prefixIter(_db->NewIterator(rocksdb::ReadOptions()));
             for (iter->Seek(kDroppedPrefix);
                  iter->Valid() && iter->key().starts_with(kDroppedPrefix); iter->Next()) {
                 invariantRocksOK(iter->status());
@@ -244,7 +241,7 @@ namespace mongo {
                     bool ok = extractPrefix(prefix, &int_prefix);
                     invariant(ok);
                     {
-                        boost::lock_guard<boost::mutex> lk(_droppedPrefixesMutex);
+                        stdx::lock_guard<stdx::mutex> lk(_droppedPrefixesMutex);
                         _droppedPrefixes.insert(int_prefix);
                     }
                 } else {
@@ -275,7 +272,7 @@ namespace mongo {
             // oplog needs two prefixes, so we also reserve the next one
             uint64_t oplogTrackerPrefix = 0;
             {
-                boost::lock_guard<boost::mutex> lk(_identPrefixMapMutex);
+                stdx::lock_guard<stdx::mutex> lk(_identPrefixMapMutex);
                 oplogTrackerPrefix = ++_maxPrefix;
             }
             // we also need to write out the new prefix to the database. this is just an
@@ -302,7 +299,7 @@ namespace mongo {
                                        _getIdentPrefix(ident));
 
         {
-            boost::lock_guard<boost::mutex> lk(_identObjectMapMutex);
+            stdx::lock_guard<stdx::mutex> lk(_identObjectMapMutex);
             _identCollectionMap[ident] = recordStore;
         }
         return recordStore;
@@ -325,7 +322,7 @@ namespace mongo {
                                            Ordering::make(desc->keyPattern()));
         }
         {
-            boost::lock_guard<boost::mutex> lk(_identObjectMapMutex);
+            stdx::lock_guard<stdx::mutex> lk(_identObjectMapMutex);
             _identIndexMap[ident] = index;
         }
         return index;
@@ -361,13 +358,13 @@ namespace mongo {
 
         // remove from map
         {
-            boost::lock_guard<boost::mutex> lk(_identPrefixMapMutex);
+            stdx::lock_guard<stdx::mutex> lk(_identPrefixMapMutex);
             _identPrefixMap.erase(ident);
         }
 
         // instruct compaction filter to start deleting
         {
-            boost::lock_guard<boost::mutex> lk(_droppedPrefixesMutex);
+            stdx::lock_guard<stdx::mutex> lk(_droppedPrefixesMutex);
             for (const auto& prefix : prefixesToDrop) {
                 uint32_t int_prefix;
                 bool ok = extractPrefix(prefix, &int_prefix);
@@ -380,7 +377,7 @@ namespace mongo {
     }
 
     bool RocksEngine::hasIdent(OperationContext* opCtx, StringData ident) const {
-        boost::lock_guard<boost::mutex> lk(_identPrefixMapMutex);
+        stdx::lock_guard<stdx::mutex> lk(_identPrefixMapMutex);
         return _identPrefixMap.find(ident) != _identPrefixMap.end();
     }
 
@@ -395,7 +392,7 @@ namespace mongo {
     void RocksEngine::cleanShutdown() { _counterManager->sync(); }
 
     int64_t RocksEngine::getIdentSize(OperationContext* opCtx, StringData ident) {
-        boost::lock_guard<boost::mutex> lk(_identObjectMapMutex);
+        stdx::lock_guard<stdx::mutex> lk(_identObjectMapMutex);
 
         auto indexIter = _identIndexMap.find(ident);
         if (indexIter != _identIndexMap.end()) {
@@ -427,7 +424,7 @@ namespace mongo {
     }
 
     std::unordered_set<uint32_t> RocksEngine::getDroppedPrefixes() const {
-        boost::lock_guard<boost::mutex> lk(_droppedPrefixesMutex);
+        stdx::lock_guard<stdx::mutex> lk(_droppedPrefixesMutex);
         // this will copy the set. that way compaction filter has its own copy and doesn't need to
         // worry about thread safety
         return _droppedPrefixes;
@@ -437,7 +434,7 @@ namespace mongo {
     Status RocksEngine::_createIdentPrefix(StringData ident) {
         uint32_t prefix = 0;
         {
-            boost::lock_guard<boost::mutex> lk(_identPrefixMapMutex);
+            stdx::lock_guard<stdx::mutex> lk(_identPrefixMapMutex);
             if (_identPrefixMap.find(ident) != _identPrefixMap.end()) {
                 // already exists
                 return Status::OK();
@@ -464,7 +461,7 @@ namespace mongo {
     }
 
     std::string RocksEngine::_getIdentPrefix(StringData ident) {
-        boost::lock_guard<boost::mutex> lk(_identPrefixMapMutex);
+        stdx::lock_guard<stdx::mutex> lk(_identPrefixMapMutex);
         auto prefixIter = _identPrefixMap.find(ident);
         invariant(prefixIter != _identPrefixMap.end());
         return encodePrefix(prefixIter->second);

@@ -29,7 +29,6 @@
 #include "mongo/platform/basic.h"
 
 #include <boost/filesystem/operations.hpp>
-#include <boost/shared_ptr.hpp>
 #include <memory>
 #include <vector>
 
@@ -49,7 +48,6 @@
 
 namespace mongo {
 
-    using boost::shared_ptr;
     using std::string;
 
     class RocksRecordStoreHarnessHelper final : public HarnessHelper {
