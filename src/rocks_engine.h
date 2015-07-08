@@ -105,6 +105,8 @@ namespace mongo {
             return false;
         }
 
+        virtual int flushAllFiles(bool sync) override;
+
         virtual bool isDurable() const override { return _durable; }
 
         virtual int64_t getIdentSize(OperationContext* opCtx, StringData ident);
