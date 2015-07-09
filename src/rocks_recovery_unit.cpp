@@ -243,6 +243,10 @@ namespace mongo {
     }
 
     bool RocksRecoveryUnit::waitUntilDurable() {
+        // We expect goingToWaitUntilDurable() to always be called before
+        // waitUntilDurable()
+        invariant(_sync);
+
         // Not sure mongo throws away RecoveryUnits after commit, so reset
         // _sync to false here
         _sync = false;
