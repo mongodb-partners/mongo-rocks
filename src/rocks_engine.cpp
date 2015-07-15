@@ -389,7 +389,12 @@ namespace mongo {
         return indents;
     }
 
-    void RocksEngine::cleanShutdown() { _counterManager->sync(); }
+    void RocksEngine::cleanShutdown() {
+        _counterManager->sync();
+        _counterManager.reset();
+        _compactionScheduler.reset();
+        _db.reset();
+    }
 
     int64_t RocksEngine::getIdentSize(OperationContext* opCtx, StringData ident) {
         stdx::lock_guard<stdx::mutex> lk(_identObjectMapMutex);
