@@ -105,15 +105,15 @@ namespace mongo {
                 : _db(db),
                   _prefix(prefix),
                   _forward(forward),
-                  _order(order) {
-                auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(txn);
-                _iterator.reset(ru->NewIterator(_prefix));
-                _currentSequenceNumber = ru->snapshot()->GetSequenceNumber();
+                  _order(order),
+                  _txn(txn) {
+                _currentSequenceNumber = RocksRecoveryUnit::getRocksRecoveryUnit(txn)->snapshot()
+                    ->GetSequenceNumber();
             }
 
             boost::optional<IndexKeyEntry> next(RequestedInfo parts) override {
                 // Advance on a cursor at the end is a no-op
-                if (isEOF()) {
+                if (_eof) {
                     return {};
                 }
                 if (!_lastMoveWasRestore) {
@@ -170,7 +170,7 @@ namespace mongo {
 
             void savePositioned() override {
                 if (!_lastMoveWasRestore) {
-                    _savedEOF = isEOF();
+                    _savedEOF = _eof;
                 }
             }
 
@@ -179,9 +179,12 @@ namespace mongo {
             }
 
             void restore(OperationContext* txn) override {
+                _txn = txn;
                 auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(txn);
                 if (_currentSequenceNumber != ru->snapshot()->GetSequenceNumber()) {
-                    _iterator.reset(ru->NewIterator(_prefix));
+                    if (_iterator.get() != nullptr) {
+                        _iterator.reset(ru->NewIterator(_prefix));
+                    }
                     _currentSequenceNumber = ru->snapshot()->GetSequenceNumber();
 
                     if (!_savedEOF) {
@@ -198,7 +201,7 @@ namespace mongo {
             virtual void updateLocAndTypeBits() = 0;
 
             boost::optional<IndexKeyEntry> curr(RequestedInfo parts) const {
-                if (isEOF()) {
+                if (_eof) {
                     return {};
                 }
 
@@ -210,50 +213,52 @@ namespace mongo {
                 return {{std::move(bson), _loc}};
             }
 
-            bool isEOF() const { return _iterator.get() == nullptr || !_iterator->Valid(); }
-
             void advanceCursor() {
+                if (_eof) {
+                    return;
+                }
+                if (_iterator.get() == nullptr) {
+                    _iterator.reset(RocksRecoveryUnit::getRocksRecoveryUnit(_txn)
+                            ->NewIterator(_prefix));
+                    _iterator->SeekPrefix(rocksdb::Slice(_key.getBuffer(), _key.getSize()));
+                    // advanceCursor() should only ever be called in states where the above seek
+                    // will succeed in finding the exact key
+                    invariant(_iterator->Valid());
+                }
                 if (_forward) {
                     _iterator->Next();
                 } else {
                     _iterator->Prev();
                 }
-                if (!_iterator->Valid()) {
-                    invariantRocksOK(_iterator->status());
-                }
+                _updateOnIteratorValidity();
             }
 
             // Seeks to query. Returns true on exact match.
             bool seekCursor(const KeyString& query) {
+                auto * iter = iterator();
                 const rocksdb::Slice keySlice(query.getBuffer(), query.getSize());
-                _iterator->Seek(keySlice);
-                if (!_iterator->Valid()) {
-                    invariantRocksOK(_iterator->status());
+                iter->Seek(keySlice);
+                if (!_updateOnIteratorValidity()) {
                     if (!_forward) {
                         // this will give lower bound behavior for backwards
-                        _iterator->SeekToLast();
-                        if (!_iterator->Valid()) {
-                            invariantRocksOK(_iterator->status());
-                        }
+                        iter->SeekToLast();
+                        _updateOnIteratorValidity();
                     }
                     return false;
                 }
 
-                if (_iterator->key() == keySlice) {
+                if (iter->key() == keySlice) {
                     return true;
                 }
 
                 if (!_forward) {
-                    // if we can't find the exact result going backwards, we need to call Prev() so
-                    // that we're at the first value less than (to the left of) what we were
-                    // searching
-                    // for, rather than the first value greater than (to the right of) the value we
-                    // were
-                    // searching for.
-                    _iterator->Prev();
-                    if (!_iterator->Valid()) {
-                        invariantRocksOK(_iterator->status());
-                    }
+                    // if we can't find the exact result going backwards, we
+                    // need to call Prev() so that we're at the first value
+                    // less than (to the left of) what we were searching for,
+                    // rather than the first value greater than (to the right
+                    // of) the value we were searching for.
+                    iter->Prev();
+                    _updateOnIteratorValidity();
                 }
 
                 return false;
@@ -261,27 +266,56 @@ namespace mongo {
 
             void updatePosition() {
                 _lastMoveWasRestore = false;
-                if (isEOF()) {
+                if (_eof) {
                     _loc = RecordId();
                     return;
                 }
 
-                auto key = _iterator->key();
-                _key.resetFromBuffer(key.data(), key.size());
+                if (_iterator.get() == nullptr) {
+                    // _iterator is out of position because we just did a seekExact
+                    _key.resetFromBuffer(_query.getBuffer(), _query.getSize());
+                } else {
+                    auto key = _iterator->key();
+                    _key.resetFromBuffer(key.data(), key.size());
+                }
 
                 if (_endPosition) {
                     int cmp = _key.compare(*_endPosition);
                     if (_forward ? cmp > 0 : cmp < 0) {
-                        // TODO: use a better way to mark us as EOF.
-                        _iterator->SeekToLast();
-                        _iterator->Next();
-                        invariant(!_iterator->Valid());
-                        invariant(isEOF());
+                        _eof = true;
                         return;
                     }
                 }
 
                 updateLocAndTypeBits();
+            }
+
+            // ensure that _iterator is initialized and return a pointer to it
+            RocksIterator * iterator() {
+                if (_iterator.get() == nullptr) {
+                    _iterator.reset(RocksRecoveryUnit::getRocksRecoveryUnit(_txn)
+                            ->NewIterator(_prefix));
+                }
+                return _iterator.get();
+            }
+
+            // Update _eof based on _iterator->Valid() and return _iterator->Valid()
+            bool _updateOnIteratorValidity() {
+                if (_iterator->Valid()) {
+                    _eof = false;
+                    return true;
+                } else {
+                    _eof = true;
+                    invariantRocksOK(_iterator->status());
+                    return false;
+                }
+            }
+
+            rocksdb::Slice _valueSlice() {
+                if (_iterator.get() == nullptr) {
+                    return rocksdb::Slice(_value);
+                }
+                return rocksdb::Slice(_iterator->value());
             }
 
             rocksdb::DB* _db;                                       // not owned
@@ -303,13 +337,21 @@ namespace mongo {
             KeyString _query;
 
             std::unique_ptr<KeyString> _endPosition;
+
+            bool _eof = false;
+            OperationContext* _txn;
+
+            // stores the value associated with the latest call to seekExact()
+            std::string _value;
         };
 
         class RocksStandardCursor final : public RocksCursorBase {
         public:
             RocksStandardCursor(OperationContext* txn, rocksdb::DB* db, std::string prefix,
                                 bool forward, Ordering order)
-                : RocksCursorBase(txn, db, prefix, forward, order) {}
+                : RocksCursorBase(txn, db, prefix, forward, order) {
+                iterator();
+            }
 
             virtual bool _locate(const KeyString& query, RecordId loc) {
                 // loc already encoded in _key
@@ -318,8 +360,7 @@ namespace mongo {
 
             virtual void updateLocAndTypeBits() {
                 _loc = KeyString::decodeRecordIdAtEnd(_key.getBuffer(), _key.getSize());
-                auto value = _iterator->value();
-                BufReader br(value.data(), value.size());
+                BufReader br(_valueSlice().data(), _valueSlice().size());
                 _typeBits.resetFromBuffer(&br);
             }
         };
@@ -332,12 +373,19 @@ namespace mongo {
 
             boost::optional<IndexKeyEntry> seekExact(const BSONObj& key,
                                                      RequestedInfo parts) override {
-                _query.resetToKey(stripFieldNames(key), _order);
-                const rocksdb::Slice keySlice(_query.getBuffer(), _query.getSize());
+                _eof = false;
+                _iterator.reset();
 
-                _iterator->SeekPrefix(keySlice);
-                if (!_iterator->Valid()) {
-                    invariantRocksOK(_iterator->status());
+                std::string prefixedKey(_prefix);
+                _query.resetToKey(stripFieldNames(key), _order);
+                prefixedKey.append(_query.getBuffer(), _query.getSize());
+                rocksdb::Status status = RocksRecoveryUnit::getRocksRecoveryUnit(_txn)
+                    ->Get(prefixedKey, &_value);
+
+                if (status.IsNotFound()) {
+                    _eof = true;
+                } else if (!status.ok()) {
+                    invariantRocksOK(status);
                 }
                 updatePosition();
                 return curr(parts);
@@ -348,13 +396,11 @@ namespace mongo {
                     // If didn't seek to exact key, start at beginning of wherever we ended up.
                     return false;
                 }
-                dassert(!isEOF());
+                dassert(!_eof);
 
                 // If we get here we need to look at the actual RecordId for this key and make sure
                 // we are supposed to see it.
-
-                auto value = _iterator->value();
-                BufReader br(value.data(), value.size());
+                BufReader br(_valueSlice().data(), _valueSlice().size());
                 RecordId locInIndex = KeyString::decodeRecordId(&br);
 
                 if ((_forward && (locInIndex < loc)) || (!_forward && (locInIndex > loc))) {
@@ -370,9 +416,7 @@ namespace mongo {
                 // state,
                 // where no duplicates are possible. The cases where dups are allowed should hold
                 // sufficient locks to ensure that no cursor ever sees them.
-
-                auto value = _iterator->value();
-                BufReader br(value.data(), value.size());
+                BufReader br(_valueSlice().data(), _valueSlice().size());
                 _loc = KeyString::decodeRecordId(&br);
                 _typeBits.resetFromBuffer(&br);
 

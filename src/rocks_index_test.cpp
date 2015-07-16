@@ -150,4 +150,34 @@ namespace mongo {
             ASSERT_THROWS(sorted->insert(t2.get(), key5, loc3, false), WriteConflictException);
         }
     }
+
+    void testSeekExactRemoveNext(bool forward, bool unique) {
+        auto harnessHelper = newHarnessHelper();
+        auto opCtx = harnessHelper->newOperationContext();
+        auto sorted = harnessHelper->newSortedDataInterface(unique,
+                {{key1, loc1}, {key2, loc1}, {key3, loc1}});
+        auto cursor = sorted->newCursor(opCtx.get(), forward);
+        ASSERT_EQ(cursor->seekExact(key2), IndexKeyEntry(key2, loc1));
+        cursor->savePositioned();
+        removeFromIndex(opCtx, sorted, {{key2, loc1}});
+        cursor->restore(opCtx.get());
+        ASSERT_EQ(cursor->next(), forward ? IndexKeyEntry(key3, loc1) : IndexKeyEntry(key1, loc1));
+        ASSERT_EQ(cursor->next(), boost::none);
+    }
+
+    TEST(RocksIndexTest, SeekExactRemoveNext_Forward_Unique) {
+        testSeekExactRemoveNext(true, true);
+    }
+
+    TEST(RocksIndexTest, SeekExactRemoveNext_Forward_Standard) {
+        testSeekExactRemoveNext(true, false);
+    }
+
+    TEST(RocksIndexTest, SeekExactRemoveNext_Reverse_Unique) {
+        testSeekExactRemoveNext(false, true);
+    }
+
+    TEST(RocksIndexTest, SeekExactRemoveNext_Reverse_Standard) {
+        testSeekExactRemoveNext(false, false);
+    }
 }
