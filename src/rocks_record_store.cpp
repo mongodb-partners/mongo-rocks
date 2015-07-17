@@ -894,6 +894,8 @@ namespace mongo {
           _readUntilForOplog(RocksRecoveryUnit::getRocksRecoveryUnit(txn)->getOplogReadTill()),
           _iterator(RocksRecoveryUnit::getRocksRecoveryUnit(txn)
                         ->NewIterator(_prefix, /* isOplog */ !_readUntilForOplog.isNull())) {
+        _currentSequenceNumber =
+            RocksRecoveryUnit::getRocksRecoveryUnit(txn)->snapshot()->GetSequenceNumber();
     }
 
 
@@ -975,21 +977,16 @@ namespace mongo {
         return {{_lastLoc, std::move(data)}};
     }
 
-    void RocksRecordStore::Cursor::savePositioned() {
-        _iterator.reset();
-        _txn = nullptr;
-    }
+    void RocksRecordStore::Cursor::savePositioned() {}
 
-    void RocksRecordStore::Cursor::saveUnpositioned() {
-        savePositioned();
-        _eof = true;
-    }
+    void RocksRecordStore::Cursor::saveUnpositioned() { _eof = true; }
 
-    bool RocksRecordStore::Cursor::restore(OperationContext* txn) {
-        _txn = txn;
-
-        auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(txn);
-        _iterator.reset(ru->NewIterator(_prefix, /* isOplog */ !_readUntilForOplog.isNull()));
+    bool RocksRecordStore::Cursor::restore() {
+        auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(_txn);
+        if (!_iterator.get() || _currentSequenceNumber != ru->snapshot()->GetSequenceNumber()) {
+            _iterator.reset(ru->NewIterator(_prefix, /* isOplog */ !_readUntilForOplog.isNull()));
+            _currentSequenceNumber = ru->snapshot()->GetSequenceNumber();
+        }
 
         // Need to initialize _iterator even if _eof since we may need to seek later.
         if (_eof) return true;
@@ -1027,6 +1024,16 @@ namespace mongo {
         // If a capped cursor can't restore to where it was before, it means that the capped delete
         // mechanism caught up to us. Return false since we can't silently skip data.
         return _cappedVisibilityManager ? !_lastMoveWasRestore : true;
+    }
+
+    void RocksRecordStore::Cursor::detachFromOperationContext() {
+        _txn = nullptr;
+        _iterator.reset();
+    }
+
+    void RocksRecordStore::Cursor::reattachToOperationContext(OperationContext* txn) {
+        _txn = txn;
+        // iterator recreated in restore()
     }
 
     boost::optional<Record> RocksRecordStore::Cursor::curr() {

@@ -178,19 +178,27 @@ namespace mongo {
                 _savedEOF = true;
             }
 
-            void restore(OperationContext* txn) override {
-                _txn = txn;
-                auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(txn);
-                if (_currentSequenceNumber != ru->snapshot()->GetSequenceNumber()) {
-                    if (_iterator.get() != nullptr) {
-                        _iterator.reset(ru->NewIterator(_prefix));
-                    }
+            void restore() override {
+                auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(_txn);
+                if (!_iterator.get() ||
+                    _currentSequenceNumber != ru->snapshot()->GetSequenceNumber()) {
+                    _iterator.reset(ru->NewIterator(_prefix));
                     _currentSequenceNumber = ru->snapshot()->GetSequenceNumber();
 
                     if (!_savedEOF) {
                         _lastMoveWasRestore = !_locate(_key, _loc);
                     }
                 }
+            }
+
+            void detachFromOperationContext() final {
+                _txn = nullptr;
+                _iterator.reset();
+            }
+
+            void reattachToOperationContext(OperationContext* txn) final {
+                _txn = txn;
+                // iterator recreated in restore()
             }
 
         protected:

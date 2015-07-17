@@ -199,7 +199,9 @@ namespace mongo {
             boost::optional<Record> seekExact(const RecordId& id) final;
             void savePositioned() final;
             void saveUnpositioned() final;
-            bool restore(OperationContext* txn) final;
+            bool restore() final;
+            void detachFromOperationContext() final;
+            void reattachToOperationContext(OperationContext* txn) final;
 
         private:
             /**
@@ -217,6 +219,7 @@ namespace mongo {
             bool _eof = false;
             bool _needFirstSeek = true;
             bool _lastMoveWasRestore = false;
+            rocksdb::SequenceNumber _currentSequenceNumber;
             const RecordId _readUntilForOplog;
             RecordId _lastLoc;
             std::unique_ptr<rocksdb::Iterator> _iterator;
