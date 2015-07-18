@@ -646,7 +646,8 @@ namespace mongo {
         }
 
         // TODO use startIterator.
-        return stdx::make_unique<Cursor>(txn, _db, _prefix, _cappedVisibilityManager, forward);
+        return stdx::make_unique<Cursor>(txn, _db, _prefix, _cappedVisibilityManager, forward,
+                                         _isCapped);
     }
 
     Status RocksRecordStore::truncate( OperationContext* txn ) {
@@ -885,28 +886,75 @@ namespace mongo {
             rocksdb::DB* db,
             std::string prefix,
             std::shared_ptr<CappedVisibilityManager> cappedVisibilityManager,
-            bool forward)
+            bool forward,
+            bool isCapped)
         : _txn(txn),
           _db(db),
           _prefix(std::move(prefix)),
           _cappedVisibilityManager(cappedVisibilityManager),
           _forward(forward),
-          _readUntilForOplog(RocksRecoveryUnit::getRocksRecoveryUnit(txn)->getOplogReadTill()),
-          _iterator(RocksRecoveryUnit::getRocksRecoveryUnit(txn)
-                        ->NewIterator(_prefix, /* isOplog */ !_readUntilForOplog.isNull())) {
+          _isCapped(isCapped),
+          _readUntilForOplog(RocksRecoveryUnit::getRocksRecoveryUnit(txn)->getOplogReadTill()) {
         _currentSequenceNumber =
-            RocksRecoveryUnit::getRocksRecoveryUnit(txn)->snapshot()->GetSequenceNumber();
+          RocksRecoveryUnit::getRocksRecoveryUnit(txn)->snapshot()->GetSequenceNumber();
     }
 
+    // requires !_eof
+    void RocksRecordStore::Cursor::positionIterator() {
+        int64_t locStorage;
+        _iterator->Seek(RocksRecordStore::_makeKey(_lastLoc, &locStorage));
+        invariantRocksOK(_iterator->status());
+
+        if (_forward) {
+            _lastMoveWasRestore =
+                !_iterator->Valid() || _lastLoc != _makeRecordId(_iterator->key());
+        }
+        else {
+            // Seek() lands on or after the key, while reverse cursors need to land on or before.
+            if (!_iterator->Valid()) {
+                // Nothing left on or after.
+                _iterator->SeekToLast();
+                invariantRocksOK(_iterator->status());
+                _lastMoveWasRestore = true;
+            }
+            else {
+                _lastMoveWasRestore = _lastLoc != _makeRecordId(_iterator->key());
+                if (_lastMoveWasRestore) {
+                    // Landed after.
+                    // Since iterator is valid and Seek() landed after key,
+                    // iterator will still be valid after we call Prev().
+                    _iterator->Prev();
+                }
+            }
+        }
+        // _lastLoc != _makeRecordId(_iterator->key()) indicates that the record _lastLoc was
+        // deleted. In this case, mark _eof only if the collection is capped.
+        _eof = !_iterator->Valid() || (_isCapped && _lastLoc != _makeRecordId(_iterator->key()));
+    }
+
+    rocksdb::Iterator* RocksRecordStore::Cursor::iterator() {
+        if (_iterator.get() != nullptr) {
+            return _iterator.get();
+        }
+        _iterator.reset(RocksRecoveryUnit::getRocksRecoveryUnit(_txn)
+                ->NewIterator(_prefix, /* isOplog */ !_readUntilForOplog.isNull()));
+        if (!_needFirstSeek) {
+            positionIterator();
+        }
+        return _iterator.get();
+    }
 
     boost::optional<Record> RocksRecordStore::Cursor::next() {
         if (_eof) {
             return {};
         }
 
+        auto iter = iterator();
+        // ignore _eof
+
         if (_lastMoveWasRestore) {
-          _lastMoveWasRestore = false;
-          return curr();
+            _lastMoveWasRestore = false;
+            return curr();
         }
 
         bool mustAdvance = true;
@@ -918,8 +966,8 @@ namespace mongo {
             if (!reverseCappedInitialSeekPoint.isNull()) {
                 int64_t keyStorage;
                 auto encodedKey = _makeKey(reverseCappedInitialSeekPoint, &keyStorage);
-                _iterator->Seek(encodedKey);
-                if (_iterator->Valid()) {
+                iter->Seek(encodedKey);
+                if (iter->Valid()) {
                     // we don't want to SeekToLast(), we just need to do a Prev()
                     _needFirstSeek = false;
                     // we must do a Prev() if a iterator key is hidden. this happens in two cases:
@@ -927,10 +975,10 @@ namespace mongo {
                     // hidden
                     // * we seeked exactly at our seek target, but the target is hidden
                     mustAdvance =
-                        (_iterator->key() != encodedKey) ||
+                        (iter->key() != encodedKey) ||
                         _cappedVisibilityManager->isCappedHidden(reverseCappedInitialSeekPoint);
                 } else {
-                    invariantRocksOK(_iterator->status());
+                    invariantRocksOK(iter->status());
                 }
             }
         }
@@ -938,15 +986,15 @@ namespace mongo {
         if (_needFirstSeek) {
             _needFirstSeek = false;
             if (_forward) {
-                _iterator->SeekToFirst();
+                iter->SeekToFirst();
             } else {
-                _iterator->SeekToLast();
+                iter->SeekToLast();
             }
         } else if (mustAdvance) {
             if (_forward) {
-                _iterator->Next();
+                iter->Next();
             } else {
-                _iterator->Prev();
+                iter->Prev();
             }
         }
 
@@ -956,24 +1004,26 @@ namespace mongo {
     boost::optional<Record> RocksRecordStore::Cursor::seekExact(const RecordId& id) {
         _needFirstSeek = false;
         _lastMoveWasRestore = false;
-        // TODO use more optimal call to rocksdb that can use bloom filters since we only care about
-        // exact matches.
-        int64_t keyStorage;
-        _iterator->Seek(_makeKey(id, &keyStorage));
-        if (!_iterator->Valid() || _makeRecordId(_iterator->key()) != id) {
-            invariantRocksOK(_iterator->status());
+        _iterator.reset();
+
+        std::string value;
+        rocksdb::Status status = RocksRecoveryUnit::getRocksRecoveryUnit(_txn)
+            ->Get(_makePrefixedKey(_prefix, id), &value);
+
+        if (status.IsNotFound()) {
             _eof = true;
+            return {};
+        } else if (!status.ok()) {
+            invariantRocksOK(status);
             return {};
         }
 
-        // seekExact() does not honor the visibility guaranatees in capped collections
-        _lastLoc = _makeRecordId(_iterator->key());
+        _eof = false;
+        _lastLoc = id;
 
-        auto dataSlice = _iterator->value();
-        auto data = RecordData(dataSlice.data(), dataSlice.size());
+        auto data = RecordData(value.data(), value.size());
         data.makeOwned(); // TODO remove after SERVER-16444 is resolved.
 
-        _eof = false;
         return {{_lastLoc, std::move(data)}};
     }
 
@@ -988,41 +1038,10 @@ namespace mongo {
             _currentSequenceNumber = ru->snapshot()->GetSequenceNumber();
         }
 
-        // Need to initialize _iterator even if _eof since we may need to seek later.
         if (_eof) return true;
         if (_needFirstSeek) return true;
 
-        int64_t locStorage;
-        _iterator->Seek(RocksRecordStore::_makeKey(_lastLoc, &locStorage));
-        invariantRocksOK(_iterator->status());
-
-        if (_forward) {
-            _eof = !_iterator->Valid();
-            _lastMoveWasRestore = _eof || _lastLoc != _makeRecordId(_iterator->key());
-        }
-        else {
-            // Seek() lands on or after the key, while reverse cursors need to land on or before.
-            if (!_iterator->Valid()) {
-                // Nothing left on or after.
-                _iterator->SeekToLast();
-                invariantRocksOK(_iterator->status());
-                _eof = !_iterator->Valid();
-                _lastMoveWasRestore = true;
-            }
-            else {
-                _eof = false;
-                _lastMoveWasRestore = _lastLoc != _makeRecordId(_iterator->key());
-                if (_lastMoveWasRestore) {
-                    // Landed after.
-                    _iterator->Prev();
-                    invariantRocksOK(_iterator->status());
-                    _eof = !_iterator->Valid();
-                }
-            }
-        }
-
-        // If a capped cursor can't restore to where it was before, it means that the capped delete
-        // mechanism caught up to us. Return false since we can't silently skip data.
+        positionIterator();
         return _cappedVisibilityManager ? !_lastMoveWasRestore : true;
     }
 

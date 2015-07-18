@@ -192,8 +192,8 @@ namespace mongo {
         class Cursor : public RecordCursor {
         public:
             Cursor(OperationContext* txn, rocksdb::DB* db, std::string prefix,
-                     std::shared_ptr<CappedVisibilityManager> cappedVisibilityManager,
-                     bool forward);
+                   std::shared_ptr<CappedVisibilityManager> cappedVisibilityManager,
+                   bool forward, bool _isCapped);
 
             boost::optional<Record> next() final;
             boost::optional<Record> seekExact(const RecordId& id) final;
@@ -216,6 +216,7 @@ namespace mongo {
             std::string _prefix;
             std::shared_ptr<CappedVisibilityManager> _cappedVisibilityManager;
             bool _forward;
+            bool _isCapped;
             bool _eof = false;
             bool _needFirstSeek = true;
             bool _lastMoveWasRestore = false;
@@ -223,6 +224,8 @@ namespace mongo {
             const RecordId _readUntilForOplog;
             RecordId _lastLoc;
             std::unique_ptr<rocksdb::Iterator> _iterator;
+            void positionIterator();
+            rocksdb::Iterator* iterator();
         };
 
         static RecordId _makeRecordId( const rocksdb::Slice& slice );

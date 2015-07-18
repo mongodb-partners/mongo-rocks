@@ -306,6 +306,55 @@ namespace mongo {
         }
     }
 
+    void testDeleteSeekExactRecord(bool forward, bool capped) {
+        RocksRecordStoreHarnessHelper harnessHelper;
+        std::unique_ptr<RecordStore> rs;
+        if (capped) {
+            rs = harnessHelper.newCappedRecordStore("local.oplog.foo", 100000, 10000);
+        } else {
+            rs = harnessHelper.newNonCappedRecordStore("local.oplog.foo");
+        }
+        std::unique_ptr<OperationContext> opCtx(harnessHelper.newOperationContext());
+        ASSERT_EQ(insertBSON(opCtx, rs, Timestamp(1,1)).getValue(),
+                  RecordId(1,1));
+
+        ASSERT_EQ(insertBSON(opCtx, rs, Timestamp(1,2)).getValue(),
+                  RecordId(1,2));
+
+        ASSERT_EQ(insertBSON(opCtx, rs, Timestamp(2,2)).getValue(),
+                  RecordId(2,2));
+
+        auto cursor = rs->getCursor(opCtx.get(), forward);
+        auto record = cursor->seekExact(RecordId(1,2));
+        ASSERT(record);
+        cursor->savePositioned();
+        rs->deleteRecord(opCtx.get(), RecordId(1,2));
+        cursor->restore();
+
+        if (!capped) {
+            auto next = cursor->next();
+            ASSERT(next);
+            ASSERT_EQ(next->id, forward ? RecordId(2,2) : RecordId(1,1));
+        }
+        ASSERT(!cursor->next());
+    }
+
+    TEST(RocksRecordStoreTest, DeleteSeekExactRecord_Forward_Capped) {
+        testDeleteSeekExactRecord(true, true);
+    }
+
+    TEST(RocksRecordStoreTest, DeleteSeekExactRecord_Forward_NonCapped) {
+        testDeleteSeekExactRecord(true, false);
+    }
+
+    TEST(RocksRecordStoreTest, DeleteSeekExactRecord_Reversed_Capped) {
+        testDeleteSeekExactRecord(false, true);
+    }
+
+    TEST(RocksRecordStoreTest, DeleteSeekExactRecord_Reversed_NonCapped) {
+        testDeleteSeekExactRecord(false, false);
+    }
+
     TEST(RocksRecordStoreTest, OplogHackOnNonOplog) {
         RocksRecordStoreHarnessHelper harnessHelper;
         std::unique_ptr<RecordStore> rs(harnessHelper.newNonCappedRecordStore("local.NOT_oplog.foo"));
