@@ -46,7 +46,7 @@
 #include <rocksdb/options.h>
 #include <rocksdb/rate_limiter.h>
 #include <rocksdb/table.h>
-#include <rocksdb/utilities/convenience.h>
+#include <rocksdb/convenience.h>
 #include <rocksdb/filter_policy.h>
 #include <rocksdb/utilities/write_batch_with_index.h>
 #include <rocksdb/utilities/checkpoint.h>
