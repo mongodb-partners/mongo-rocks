@@ -812,8 +812,12 @@ namespace mongo {
         WriteUnitOfWork wuow(txn);
         auto cursor = getCursor(txn, true);
         for (auto record = cursor->seekExact(end); record; record = cursor->next()) {
-            if ( end < record->id || ( inclusive && end == record->id ) ) {
-                deleteRecord( txn, record->id );
+            if (end < record->id || (inclusive && end == record->id)) {
+                if (_cappedDeleteCallback) {
+                    uassertStatusOK(
+                        _cappedDeleteCallback->aboutToDeleteCapped(txn, record->id, record->data));
+                }
+                deleteRecord(txn, record->id);
             }
         }
         wuow.commit();
