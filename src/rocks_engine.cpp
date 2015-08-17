@@ -123,7 +123,8 @@ namespace mongo {
 
         class PrefixDeletingCompactionFilterFactory : public rocksdb::CompactionFilterFactory {
         public:
-            explicit PrefixDeletingCompactionFilterFactory(const RocksEngine* engine) : _engine(engine) {}
+            explicit
+            PrefixDeletingCompactionFilterFactory(const RocksEngine* engine) : _engine(engine) {}
 
             virtual std::unique_ptr<rocksdb::CompactionFilter> CreateCompactionFilter(
                 const rocksdb::CompactionFilter::Context& context) override {

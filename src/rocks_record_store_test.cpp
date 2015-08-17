@@ -357,7 +357,8 @@ namespace mongo {
 
     TEST(RocksRecordStoreTest, OplogHackOnNonOplog) {
         RocksRecordStoreHarnessHelper harnessHelper;
-        std::unique_ptr<RecordStore> rs(harnessHelper.newNonCappedRecordStore("local.NOT_oplog.foo"));
+        std::unique_ptr<RecordStore> rs(
+                harnessHelper.newNonCappedRecordStore("local.NOT_oplog.foo"));
 
         std::unique_ptr<OperationContext> opCtx(harnessHelper.newOperationContext());
 
@@ -372,7 +373,8 @@ namespace mongo {
     }
 
     TEST(RocksRecordStoreTest, CappedOrder) {
-        std::unique_ptr<RocksRecordStoreHarnessHelper> harnessHelper(new RocksRecordStoreHarnessHelper());
+        std::unique_ptr<RocksRecordStoreHarnessHelper> harnessHelper(
+                new RocksRecordStoreHarnessHelper());
         std::unique_ptr<RecordStore> rs(harnessHelper->newCappedRecordStore("a.b", 100000,10000));
 
         RecordId loc1;

@@ -443,7 +443,8 @@ namespace mongo {
      */
     class RocksIndexBase::StandardBulkBuilder : public SortedDataBuilderInterface {
     public:
-        StandardBulkBuilder(RocksStandardIndex* index, OperationContext* txn) : _index(index), _txn(txn) {}
+        StandardBulkBuilder(RocksStandardIndex* index, OperationContext* txn) : _index(index),
+                                                                                _txn(txn) {}
 
         Status addKey(const BSONObj& key, const RecordId& loc) {
             return _index->insert(_txn, key, loc, true);
@@ -469,8 +470,14 @@ namespace mongo {
      */
     class RocksIndexBase::UniqueBulkBuilder : public SortedDataBuilderInterface {
     public:
-        UniqueBulkBuilder(std::string prefix, Ordering ordering, OperationContext* txn, bool dupsAllowed)
-            : _prefix(std::move(prefix)), _ordering(ordering), _txn(txn), _dupsAllowed(dupsAllowed) {}
+        UniqueBulkBuilder(std::string prefix,
+                          Ordering ordering,
+                          OperationContext* txn,
+                          bool dupsAllowed)
+            : _prefix(std::move(prefix)),
+              _ordering(ordering),
+              _txn(txn),
+              _dupsAllowed(dupsAllowed) {}
 
         Status addKey(const BSONObj& newKey, const RecordId& loc) {
             Status s = checkKeySize(newKey);

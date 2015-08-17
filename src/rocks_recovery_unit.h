@@ -132,7 +132,8 @@ namespace mongo {
             std::atomic<long long>* _value;
             long long _delta;
             Counter() : Counter(nullptr, 0) {}
-            Counter(std::atomic<long long>* value, long long delta) : _value(value), _delta(delta) {}
+            Counter(std::atomic<long long>* value, long long delta) : _value(value),
+                                                                      _delta(delta) {}
         };
 
         typedef std::unordered_map<std::string, Counter> CounterMap;

@@ -40,7 +40,8 @@
 #include "mongo/util/assert_util.h"
 
 namespace mongo {
-    RocksTransactionEngine::RocksTransactionEngine() : _latestSnapshotId(1), _nextTransactionId(1) {}
+    RocksTransactionEngine::RocksTransactionEngine() : _latestSnapshotId(1),
+                                                       _nextTransactionId(1) {}
 
     size_t RocksTransactionEngine::numKeysTracked() {
         stdx::lock_guard<stdx::mutex> lk(_lock);
@@ -69,12 +70,14 @@ namespace mongo {
             _keyInfo.erase(iter);
         }
 
-        auto listIter = _keysSortedBySnapshot.insert(_keysSortedBySnapshot.end(), {key, newSnapshotId});
+        auto listIter = _keysSortedBySnapshot.insert(_keysSortedBySnapshot.end(),
+                                                     {key, newSnapshotId});
         _keyInfo.insert({StringData(listIter->first), {newSnapshotId, listIter}});
     }
 
     void RocksTransactionEngine::_cleanUpKeysCommittedBeforeSnapshot_inlock(uint64_t snapshotId) {
-        while (!_keysSortedBySnapshot.empty() && _keysSortedBySnapshot.begin()->second <= snapshotId) {
+        while (!_keysSortedBySnapshot.empty() &&
+               _keysSortedBySnapshot.begin()->second <= snapshotId) {
             auto keyInfoIter = _keyInfo.find(_keysSortedBySnapshot.begin()->first);
             invariant(keyInfoIter != _keyInfo.end());
             _keyInfo.erase(keyInfoIter);

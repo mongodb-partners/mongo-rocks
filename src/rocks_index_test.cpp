@@ -92,7 +92,9 @@ namespace mongo {
 
     TEST(RocksIndexTest, Isolation) {
         const std::unique_ptr<HarnessHelper> harnessHelper(newHarnessHelper());
-        const std::unique_ptr<SortedDataInterface> sorted(harnessHelper->newSortedDataInterface(true));
+
+        const std::unique_ptr<SortedDataInterface>
+        sorted(harnessHelper->newSortedDataInterface(true));
 
         {
             const std::unique_ptr<OperationContext> opCtx(harnessHelper->newOperationContext());

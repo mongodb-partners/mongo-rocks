@@ -222,7 +222,8 @@ namespace mongo {
         }
 
         try {
-            for (Changes::const_iterator it = _changes.begin(), end = _changes.end(); it != end; ++it) {
+            for (Changes::const_iterator it = _changes.begin(), end = _changes.end(); it != end;
+                    ++it) {
                 (*it)->commit();
             }
             _changes.clear();
