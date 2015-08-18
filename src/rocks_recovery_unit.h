@@ -50,6 +50,7 @@
 #include "rocks_compaction_scheduler.h"
 #include "rocks_transaction.h"
 #include "rocks_counter_manager.h"
+#include "rocks_snapshot_manager.h"
 
 namespace rocksdb {
     class DB;
@@ -78,7 +79,8 @@ namespace mongo {
     class RocksRecoveryUnit : public RecoveryUnit {
         MONGO_DISALLOW_COPYING(RocksRecoveryUnit);
     public:
-        RocksRecoveryUnit(RocksTransactionEngine* transactionEngine, rocksdb::DB* db,
+        RocksRecoveryUnit(RocksTransactionEngine* transactionEngine,
+                          RocksSnapshotManager* snapshotManager, rocksdb::DB* db,
                           RocksCounterManager* counterManager,
                           RocksCompactionScheduler* compactionScheduler, bool durable);
         virtual ~RocksRecoveryUnit();
@@ -92,6 +94,13 @@ namespace mongo {
 
         virtual void abandonSnapshot();
 
+        Status setReadFromMajorityCommittedSnapshot() final;
+        bool isReadingFromMajorityCommittedSnapshot() const final {
+            return _readFromMajorityCommittedSnapshot;
+        }
+
+        boost::optional<SnapshotName> getMajorityCommittedSnapshot() const final;
+
         virtual void* writingPtr(void* data, size_t len) { invariant(!"don't call writingPtr"); }
 
         virtual void registerChange(Change* change);
@@ -104,8 +113,13 @@ namespace mongo {
 
         rocksdb::WriteBatchWithIndex* writeBatch();
 
+        const rocksdb::Snapshot* dbGetSnapshot();
+        void dbReleaseSnapshot(const rocksdb::Snapshot* snapshot);
+
+        // Returns snapshot, creating one if needed. Considers _readFromMajorityCommittedSnapshot.
         const rocksdb::Snapshot* snapshot();
-        bool hasSnapshot() { return _snapshot != nullptr; }
+
+        bool hasSnapshot() { return _snapshot != nullptr || _snapshotHolder.get() != nullptr; }
 
         RocksTransaction* transaction() { return &_transaction; }
 
@@ -124,7 +138,7 @@ namespace mongo {
         RecordId getOplogReadTill() const { return _oplogReadTill; }
 
         RocksRecoveryUnit* newRocksRecoveryUnit() {
-            return new RocksRecoveryUnit(_transactionEngine, _db, _counterManager,
+            return new RocksRecoveryUnit(_transactionEngine, _snapshotManager, _db, _counterManager,
                                          _compactionScheduler, _durable);
         }
 
@@ -142,6 +156,10 @@ namespace mongo {
 
         static int getTotalLiveRecoveryUnits() { return _totalLiveRecoveryUnits.load(); }
 
+        void prepareForCreateSnapshot(OperationContext* opCtx);
+
+        void setCommittedSnapshot(const rocksdb::Snapshot* committedSnapshot);
+
     private:
         void _releaseSnapshot();
 
@@ -149,6 +167,7 @@ namespace mongo {
 
         void _abort();
         RocksTransactionEngine* _transactionEngine;      // not owned
+        RocksSnapshotManager* _snapshotManager;          // not owned
         rocksdb::DB* _db;                                // not owned
         RocksCounterManager* _counterManager;            // not owned
         RocksCompactionScheduler* _compactionScheduler;  // not owned
@@ -173,6 +192,13 @@ namespace mongo {
         RecordId _oplogReadTill;
 
         static std::atomic<int> _totalLiveRecoveryUnits;
+
+        // If we read from a committed snapshot, then ownership of the snapshot
+        // should be shared here to ensure that it is not released early
+        std::shared_ptr<RocksSnapshotManager::SnapshotHolder> _snapshotHolder;
+
+        bool _readFromMajorityCommittedSnapshot = false;
+        bool _areWriteUnitOfWorksBanned = false;
     };
 
 }

@@ -45,6 +45,7 @@
 #include "rocks_record_store.h"
 #include "rocks_recovery_unit.h"
 #include "rocks_transaction.h"
+#include "rocks_snapshot_manager.h"
 
 namespace mongo {
 
@@ -85,8 +86,8 @@ namespace mongo {
         }
 
         RecoveryUnit* newRecoveryUnit() final {
-            return new RocksRecoveryUnit(&_transactionEngine, _db.get(), _counterManager.get(),
-                                         nullptr, true);
+            return new RocksRecoveryUnit(&_transactionEngine, &_snapshotManager, _db.get(),
+                                         _counterManager.get(), nullptr, true);
         }
 
         bool supportsDocLocking() final {
@@ -98,6 +99,7 @@ namespace mongo {
         unittest::TempDir _tempDir;
         std::unique_ptr<rocksdb::DB> _db;
         RocksTransactionEngine _transactionEngine;
+        RocksSnapshotManager _snapshotManager;
         std::unique_ptr<RocksCounterManager> _counterManager;
     };
 

@@ -49,6 +49,8 @@
 #include "rocks_transaction.h"
 #include "rocks_util.h"
 
+#include "rocks_snapshot_manager.h"
+
 namespace mongo {
     namespace {
         class PrefixStrippingIterator : public RocksIterator {
@@ -192,11 +194,13 @@ namespace mongo {
 
     std::atomic<int> RocksRecoveryUnit::_totalLiveRecoveryUnits(0);
 
-    RocksRecoveryUnit::RocksRecoveryUnit(RocksTransactionEngine* transactionEngine, rocksdb::DB* db,
+    RocksRecoveryUnit::RocksRecoveryUnit(RocksTransactionEngine* transactionEngine,
+                                         RocksSnapshotManager* snapshotManager, rocksdb::DB* db,
                                          RocksCounterManager* counterManager,
                                          RocksCompactionScheduler* compactionScheduler,
                                          bool durable)
         : _transactionEngine(transactionEngine),
+          _snapshotManager(snapshotManager),
           _db(db),
           _counterManager(counterManager),
           _compactionScheduler(compactionScheduler),
@@ -204,7 +208,7 @@ namespace mongo {
           _durable(durable),
           _transaction(transactionEngine),
           _writeBatch(rocksdb::BytewiseComparator(), 0, true),
-          _snapshot(NULL),
+          _snapshot(nullptr),
           _myTransactionCount(1) {
         RocksRecoveryUnit::_totalLiveRecoveryUnits.fetch_add(1, std::memory_order_relaxed);
     }
@@ -214,7 +218,9 @@ namespace mongo {
         RocksRecoveryUnit::_totalLiveRecoveryUnits.fetch_sub(1, std::memory_order_relaxed);
     }
 
-    void RocksRecoveryUnit::beginUnitOfWork(OperationContext* opCtx) { }
+    void RocksRecoveryUnit::beginUnitOfWork(OperationContext* opCtx) {
+        invariant(!_areWriteUnitOfWorksBanned);
+    }
 
     void RocksRecoveryUnit::commitUnitOfWork() {
         if (_writeBatch.GetWriteBatch()->Count() > 0) {
@@ -261,6 +267,7 @@ namespace mongo {
         _deltaCounters.clear();
         _writeBatch.Clear();
         _releaseSnapshot();
+        _areWriteUnitOfWorksBanned = false;
     }
 
     rocksdb::WriteBatchWithIndex* RocksRecoveryUnit::writeBatch() { return &_writeBatch; }
@@ -268,6 +275,23 @@ namespace mongo {
     void RocksRecoveryUnit::setOplogReadTill(const RecordId& record) { _oplogReadTill = record; }
 
     void RocksRecoveryUnit::registerChange(Change* change) { _changes.push_back(change); }
+
+    Status RocksRecoveryUnit::setReadFromMajorityCommittedSnapshot() {
+        if (!_snapshotManager->haveCommittedSnapshot()) {
+            return {ErrorCodes::ReadConcernMajorityNotAvailableYet,
+                    "Read concern majority reads are currently not possible."};
+        }
+        invariant(_snapshot == nullptr);
+
+        _readFromMajorityCommittedSnapshot = true;
+        return Status::OK();
+    }
+
+    boost::optional<SnapshotName> RocksRecoveryUnit::getMajorityCommittedSnapshot() const {
+        if (!_readFromMajorityCommittedSnapshot)
+            return {};
+        return SnapshotName(_snapshotManager->getCommittedSnapshot().get()->name);
+    }
 
     SnapshotId RocksRecoveryUnit::getSnapshotId() const { return SnapshotId(_myTransactionCount); }
 
@@ -277,8 +301,14 @@ namespace mongo {
             _db->ReleaseSnapshot(_snapshot);
             _snapshot = nullptr;
         }
+        _snapshotHolder.reset();
 
         _myTransactionCount++;
+    }
+
+    void RocksRecoveryUnit::prepareForCreateSnapshot(OperationContext* opCtx) {
+        invariant(!_readFromMajorityCommittedSnapshot);
+        _areWriteUnitOfWorksBanned = true;
     }
 
     void RocksRecoveryUnit::_commit() {
@@ -326,14 +356,28 @@ namespace mongo {
         _releaseSnapshot();
     }
 
+    const rocksdb::Snapshot* RocksRecoveryUnit::dbGetSnapshot() {
+        return _db->GetSnapshot();
+    }
+
+    void RocksRecoveryUnit::dbReleaseSnapshot(const rocksdb::Snapshot* snapshot) {
+        _db->ReleaseSnapshot(snapshot);
+    }
+
     const rocksdb::Snapshot* RocksRecoveryUnit::snapshot() {
-        if ( !_snapshot ) {
+        if (_readFromMajorityCommittedSnapshot) {
+            if (_snapshotHolder.get() == nullptr) {
+                _snapshotHolder = _snapshotManager->getCommittedSnapshot();
+            }
+            return _snapshotHolder->snapshot;
+        }
+        if (!_snapshot) {
+            // RecoveryUnit might be used for writing, so we need to call recordSnapshotId().
             // Order of operations here is important. It needs to be synchronized with
             // _db->Write() and _transaction.commit()
             _transaction.recordSnapshotId();
             _snapshot = _db->GetSnapshot();
         }
-
         return _snapshot;
     }
 

@@ -261,8 +261,8 @@ namespace mongo {
     RocksEngine::~RocksEngine() { cleanShutdown(); }
 
     RecoveryUnit* RocksEngine::newRecoveryUnit() {
-        return new RocksRecoveryUnit(&_transactionEngine, _db.get(), _counterManager.get(),
-                                     _compactionScheduler.get(), _durable);
+        return new RocksRecoveryUnit(&_transactionEngine, &_snapshotManager, _db.get(),
+                                     _counterManager.get(), _compactionScheduler.get(), _durable);
     }
 
     Status RocksEngine::createRecordStore(OperationContext* opCtx, StringData ns, StringData ident,

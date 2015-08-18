@@ -11,6 +11,7 @@ env.Library(
         'src/rocks_recovery_unit.cpp',
         'src/rocks_index.cpp',
         'src/rocks_transaction.cpp',
+        'src/rocks_snapshot_manager.cpp',
         'src/rocks_util.cpp',
         ],
     LIBDEPS= [

@@ -49,6 +49,7 @@
 #include "rocks_compaction_scheduler.h"
 #include "rocks_counter_manager.h"
 #include "rocks_transaction.h"
+#include "rocks_snapshot_manager.h"
 
 namespace rocksdb {
     class ColumnFamilyHandle;
@@ -67,7 +68,7 @@ namespace mongo {
     class RocksIndexBase;
     class RocksRecordStore;
 
-    class RocksEngine : public KVEngine {
+    class RocksEngine final : public KVEngine {
         MONGO_DISALLOW_COPYING( RocksEngine );
     public:
         RocksEngine(const std::string& path, bool durable);
@@ -117,6 +118,10 @@ namespace mongo {
         }
 
         virtual void cleanShutdown();
+
+        virtual SnapshotManager* getSnapshotManager() const final {
+            return (SnapshotManager*) &_snapshotManager;
+        }
 
         /**
          * Initializes a background job to remove excess documents in the oplog collections.
@@ -178,6 +183,8 @@ namespace mongo {
 
         // This is for concurrency control
         RocksTransactionEngine _transactionEngine;
+
+        RocksSnapshotManager _snapshotManager;
 
         // CounterManages manages counters like numRecords and dataSize for record stores
         std::unique_ptr<RocksCounterManager> _counterManager;
