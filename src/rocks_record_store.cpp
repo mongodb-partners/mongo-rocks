@@ -37,6 +37,8 @@
 #include <memory>
 #include <algorithm>
 
+#include <boost/thread/locks.hpp>
+
 #include <rocksdb/comparator.h>
 #include <rocksdb/db.h>
 #include <rocksdb/experimental.h>
@@ -247,7 +249,7 @@ namespace mongo {
 
     RocksRecordStore::~RocksRecordStore() {
         {
-            stdx::lock_guard<stdx::timed_mutex> lk(_cappedDeleterMutex);
+            stdx::lock_guard<boost::timed_mutex> lk(_cappedDeleterMutex);
             _shuttingDown = true;
         }
         delete _oplogKeyTracker;
@@ -336,7 +338,7 @@ namespace mongo {
         }
 
         // ensure only one thread at a time can do deletes, otherwise they'll conflict.
-        stdx::unique_lock<stdx::timed_mutex> lock(_cappedDeleterMutex, stdx::defer_lock);
+       boost::unique_lock<boost::timed_mutex> lock(_cappedDeleterMutex, boost::defer_lock);
 
         if (_cappedMaxDocs != -1) {
             lock.lock(); // Max docs has to be exact, so have to check every time.
@@ -354,7 +356,7 @@ namespace mongo {
             // on the deleter thread.
 
             if (!lock.try_lock()) {
-                (void)lock.try_lock_for(stdx::chrono::milliseconds(200));
+                (void)lock.try_lock_for(boost::chrono::milliseconds(200));
             }
             return 0;
         } else {
@@ -364,7 +366,7 @@ namespace mongo {
                 if ((_dataSize.load() - _cappedMaxSize) < _cappedMaxSizeSlack)
                     return 0;
 
-                if (!lock.try_lock_for(stdx::chrono::milliseconds(200)))
+                if (!lock.try_lock_for(boost::chrono::milliseconds(200)))
                     return 0;
 
                 // If we already waited, let someone else do cleanup unless we are significantly

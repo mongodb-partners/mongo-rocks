@@ -38,6 +38,8 @@
 
 #include <rocksdb/options.h>
 
+#include <boost/thread/mutex.hpp>
+
 #include "mongo/db/storage/capped_callback.h"
 #include "mongo/db/storage/record_store.h"
 #include "mongo/platform/atomic_word.h"
@@ -180,7 +182,7 @@ namespace mongo {
 
         int64_t cappedDeleteAsNeeded(OperationContext* txn, const RecordId& justInserted);
         int64_t cappedDeleteAsNeeded_inlock(OperationContext* txn, const RecordId& justInserted);
-        stdx::timed_mutex& cappedDeleterMutex() { return _cappedDeleterMutex; }
+        boost::timed_mutex& cappedDeleterMutex() { return _cappedDeleterMutex; }
 
         static rocksdb::Comparator* newRocksCollectionComparator();
 
@@ -252,7 +254,7 @@ namespace mongo {
         const int64_t _cappedMaxSizeSlack;  // when to start applying backpressure
         const int64_t _cappedMaxDocs;
         CappedDocumentDeleteCallback* _cappedDeleteCallback;
-        mutable stdx::timed_mutex _cappedDeleterMutex;  // see comment in ::cappedDeleteAsNeeded
+        mutable boost::timed_mutex _cappedDeleterMutex;  // see comment in ::cappedDeleteAsNeeded
         int _cappedDeleteCheckCount;      // see comment in ::cappedDeleteAsNeeded
 
         const bool _isOplog;
