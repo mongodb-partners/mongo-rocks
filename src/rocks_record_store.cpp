@@ -54,6 +54,7 @@
 #include "mongo/db/storage/oplog_hack.h"
 #include "mongo/platform/endian.h"
 #include "mongo/stdx/memory.h"
+#include "mongo/util/assert_util.h"
 #include "mongo/util/background.h"
 #include "mongo/util/log.h"
 #include "mongo/util/mongoutils/str.h"
@@ -616,13 +617,13 @@ namespace mongo {
         return false;
     }
 
-    Status RocksRecordStore::updateWithDamages( OperationContext* txn,
-                                                const RecordId& loc,
-                                                const RecordData& oldRec,
-                                                const char* damageSource,
-                                                const mutablebson::DamageVector& damages ) {
-        invariant(false);
-        return Status::OK();
+    StatusWith<RecordData> RocksRecordStore::updateWithDamages(
+        OperationContext* txn,
+        const RecordId& loc,
+        const RecordData& oldRec,
+        const char* damageSource,
+        const mutablebson::DamageVector& damages) {
+        MONGO_UNREACHABLE;
     }
 
     std::unique_ptr<RecordCursor> RocksRecordStore::getCursor(OperationContext* txn,
