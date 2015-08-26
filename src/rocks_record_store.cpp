@@ -1013,9 +1013,8 @@ namespace mongo {
         _lastMoveWasRestore = false;
         _iterator.reset();
 
-        std::string value;
         rocksdb::Status status = RocksRecoveryUnit::getRocksRecoveryUnit(_txn)
-            ->Get(_makePrefixedKey(_prefix, id), &value);
+            ->Get(_makePrefixedKey(_prefix, id), &_seekExactResult);
 
         if (status.IsNotFound()) {
             _eof = true;
@@ -1028,10 +1027,7 @@ namespace mongo {
         _eof = false;
         _lastLoc = id;
 
-        auto data = RecordData(value.data(), value.size());
-        data.makeOwned(); // TODO remove after SERVER-16444 is resolved.
-
-        return {{_lastLoc, std::move(data)}};
+        return {{_lastLoc, {_seekExactResult.data(), static_cast<int>(_seekExactResult.size())}}};
     }
 
     void RocksRecordStore::Cursor::savePositioned() {}
@@ -1090,8 +1086,6 @@ namespace mongo {
         }  // isCapped?
 
         auto dataSlice = _iterator->value();
-        auto data = RecordData(dataSlice.data(), dataSlice.size());
-        data.makeOwned(); // TODO remove after SERVER-16444 is resolved.
-        return {{_lastLoc, std::move(data)}};
+        return {{_lastLoc, {dataSlice.data(), static_cast<int>(dataSlice.size())}}};
     }
 }

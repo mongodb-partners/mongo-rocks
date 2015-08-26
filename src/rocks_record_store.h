@@ -226,6 +226,7 @@ namespace mongo {
             const RecordId _readUntilForOplog;
             RecordId _lastLoc;
             std::unique_ptr<rocksdb::Iterator> _iterator;
+            std::string _seekExactResult;
             void positionIterator();
             rocksdb::Iterator* iterator();
         };
