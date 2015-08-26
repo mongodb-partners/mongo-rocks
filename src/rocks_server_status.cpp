@@ -92,6 +92,8 @@ namespace mongo {
             std::string statsString;
             if (!_engine->getDB()->GetProperty("rocksdb." + property.first, &statsString)) {
                 statsString = "<error> unable to retrieve statistics";
+                bob.append(property.first, statsString);
+                continue;
             }
             if (property.first == "stats") {
                 // special casing because we want to turn it into array
