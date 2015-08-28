@@ -168,7 +168,7 @@ namespace mongo {
                 return curr(parts);
             }
 
-            void savePositioned() override {
+            void save() override {
                 if (!_lastMoveWasRestore) {
                     _savedEOF = _eof;
                 }

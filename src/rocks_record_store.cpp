@@ -626,8 +626,8 @@ namespace mongo {
         MONGO_UNREACHABLE;
     }
 
-    std::unique_ptr<RecordCursor> RocksRecordStore::getCursor(OperationContext* txn,
-                                                              bool forward) const {
+    std::unique_ptr<SeekableRecordCursor> RocksRecordStore::getCursor(OperationContext* txn,
+                                                                      bool forward) const {
         RecordId startIterator;
 
         if (_isOplog) {
@@ -1030,7 +1030,7 @@ namespace mongo {
         return {{_lastLoc, {_seekExactResult.data(), static_cast<int>(_seekExactResult.size())}}};
     }
 
-    void RocksRecordStore::Cursor::savePositioned() {}
+    void RocksRecordStore::Cursor::save() {}
 
     void RocksRecordStore::Cursor::saveUnpositioned() { _eof = true; }
 

@@ -163,7 +163,7 @@ namespace mongo {
                 {{key1, loc1}, {key2, loc1}, {key3, loc1}});
         auto cursor = sorted->newCursor(opCtx.get(), forward);
         ASSERT_EQ(cursor->seekExact(key2), IndexKeyEntry(key2, loc1));
-        cursor->savePositioned();
+        cursor->save();
         removeFromIndex(opCtx, sorted, {{key2, loc1}});
         cursor->restore();
         ASSERT_EQ(cursor->next(), forward ? IndexKeyEntry(key3, loc1) : IndexKeyEntry(key1, loc1));

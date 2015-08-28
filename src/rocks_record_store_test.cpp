@@ -329,7 +329,7 @@ namespace mongo {
         auto cursor = rs->getCursor(opCtx.get(), forward);
         auto record = cursor->seekExact(RecordId(1,2));
         ASSERT(record);
-        cursor->savePositioned();
+        cursor->save();
         rs->deleteRecord(opCtx.get(), RecordId(1,2));
         cursor->restore();
 

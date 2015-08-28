@@ -140,7 +140,7 @@ namespace mongo {
                                                          const char* damageSource,
                                                          const mutablebson::DamageVector& damages);
 
-        std::unique_ptr<RecordCursor> getCursor(OperationContext* txn, bool forward) const final;
+        std::unique_ptr<SeekableRecordCursor> getCursor(OperationContext* txn, bool forward) const final;
 
         virtual Status truncate( OperationContext* txn );
 
@@ -189,9 +189,9 @@ namespace mongo {
     private:
         // we just need to expose _makePrefixedKey to RocksOplogKeyTracker
         friend class RocksOplogKeyTracker;
-        // NOTE: RecordCursor might outlive the RecordStore. That's why we use all those
+        // NOTE: Cursor might outlive the RecordStore. That's why we use all those
         // shared_ptrs
-        class Cursor : public RecordCursor {
+        class Cursor : public SeekableRecordCursor {
         public:
             Cursor(OperationContext* txn, rocksdb::DB* db, std::string prefix,
                    std::shared_ptr<CappedVisibilityManager> cappedVisibilityManager,
@@ -199,7 +199,7 @@ namespace mongo {
 
             boost::optional<Record> next() final;
             boost::optional<Record> seekExact(const RecordId& id) final;
-            void savePositioned() final;
+            void save() final;
             void saveUnpositioned() final;
             bool restore() final;
             void detachFromOperationContext() final;
