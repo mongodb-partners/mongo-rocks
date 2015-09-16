@@ -502,6 +502,7 @@ namespace mongo {
         // This means there is no limit on open files. Make sure to always set ulimit so that it can
         // keep all RocksDB files opened.
         options.max_open_files = -1;
+        options.optimize_filters_for_hits = true;
         options.compaction_filter_factory.reset(new PrefixDeletingCompactionFilterFactory(this));
         options.enable_thread_tracking = true;
 
