@@ -182,7 +182,7 @@ namespace mongo {
     RocksRecordStore::RocksRecordStore(StringData ns, StringData id, rocksdb::DB* db,
                                        RocksCounterManager* counterManager, std::string prefix,
                                        bool isCapped, int64_t cappedMaxSize, int64_t cappedMaxDocs,
-                                       CappedDocumentDeleteCallback* cappedDeleteCallback)
+                                       CappedCallback* cappedDeleteCallback)
         : RecordStore(ns),
           _db(db),
           _counterManager(counterManager),

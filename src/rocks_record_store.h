@@ -89,7 +89,7 @@ namespace mongo {
                          RocksCounterManager* counterManager, std::string prefix,
                          bool isCapped = false, int64_t cappedMaxSize = -1,
                          int64_t cappedMaxDocs = -1,
-                         CappedDocumentDeleteCallback* cappedDeleteCallback = NULL);
+                         CappedCallback* cappedDeleteCallback = NULL);
 
         virtual ~RocksRecordStore();
 
@@ -173,7 +173,7 @@ namespace mongo {
         virtual void updateStatsAfterRepair(OperationContext* txn, long long numRecords,
                                             long long dataSize);
 
-        void setCappedDeleteCallback(CappedDocumentDeleteCallback* cb) {
+        void setCappedDeleteCallback(CappedCallback* cb) {
           _cappedDeleteCallback = cb;
         }
         bool cappedMaxDocs() const { invariant(_isCapped); return _cappedMaxDocs; }
@@ -254,7 +254,7 @@ namespace mongo {
         const int64_t _cappedMaxSize;
         const int64_t _cappedMaxSizeSlack;  // when to start applying backpressure
         const int64_t _cappedMaxDocs;
-        CappedDocumentDeleteCallback* _cappedDeleteCallback;
+        CappedCallback* _cappedDeleteCallback;
         mutable boost::timed_mutex _cappedDeleterMutex;  // see comment in ::cappedDeleteAsNeeded
         int _cappedDeleteCheckCount;      // see comment in ::cappedDeleteAsNeeded
 
