@@ -182,7 +182,7 @@ namespace mongo {
     RocksRecordStore::RocksRecordStore(StringData ns, StringData id, rocksdb::DB* db,
                                        RocksCounterManager* counterManager, std::string prefix,
                                        bool isCapped, int64_t cappedMaxSize, int64_t cappedMaxDocs,
-                                       CappedCallback* cappedDeleteCallback)
+                                       CappedCallback* cappedCallback)
         : RecordStore(ns),
           _db(db),
           _counterManager(counterManager),
@@ -191,7 +191,7 @@ namespace mongo {
           _cappedMaxSize(cappedMaxSize),
           _cappedMaxSizeSlack(std::min(cappedMaxSize / 10, int64_t(16 * 1024 * 1024))),
           _cappedMaxDocs(cappedMaxDocs),
-          _cappedDeleteCallback(cappedDeleteCallback),
+          _cappedCallback(cappedCallback),
           _cappedDeleteCheckCount(0),
           _isOplog(NamespaceString::oplog(ns)),
           _oplogKeyTracker(_isOplog
@@ -408,7 +408,7 @@ namespace mongo {
             if (_isOplog) {
                 // we're using _oplogKeyTracker to find which keys to delete -- this is much faster
                 // because we don't need to read any values. We theoretically need values to pass
-                // the document to the cappedDeleteCallback, but the callback is only using
+                // the document to the cappedCallback, but the callback is only using
                 // documents to remove them from indexes. opLog doesn't have indexes, so there
                 // should be no need for us to reconstruct the document to pass it to the callback
                 iter.reset(_oplogKeyTracker->newIterator(ru));
@@ -457,8 +457,8 @@ namespace mongo {
                     sizeSaved += oldValue.size();
                 }
 
-                if (_cappedDeleteCallback) {
-                    uassertStatusOK(_cappedDeleteCallback->aboutToDeleteCapped(
+                if (_cappedCallback) {
+                    uassertStatusOK(_cappedCallback->aboutToDeleteCapped(
                         txn, newestOld,
                         RecordData(static_cast<const char*>(oldValue.data()), oldValue.size())));
                 }
@@ -816,9 +816,9 @@ namespace mongo {
         auto cursor = getCursor(txn, true);
         for (auto record = cursor->seekExact(end); record; record = cursor->next()) {
             if (end < record->id || (inclusive && end == record->id)) {
-                if (_cappedDeleteCallback) {
+                if (_cappedCallback) {
                     uassertStatusOK(
-                        _cappedDeleteCallback->aboutToDeleteCapped(txn, record->id, record->data));
+                        _cappedCallback->aboutToDeleteCapped(txn, record->id, record->data));
                 }
                 deleteRecord(txn, record->id);
             }

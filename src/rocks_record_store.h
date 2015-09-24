@@ -173,8 +173,8 @@ namespace mongo {
         virtual void updateStatsAfterRepair(OperationContext* txn, long long numRecords,
                                             long long dataSize);
 
-        void setCappedDeleteCallback(CappedCallback* cb) {
-          _cappedDeleteCallback = cb;
+        void setCappedCallback(CappedCallback* cb) {
+          _cappedCallback = cb;
         }
         bool cappedMaxDocs() const { invariant(_isCapped); return _cappedMaxDocs; }
         bool cappedMaxSize() const { invariant(_isCapped); return _cappedMaxSize; }
@@ -254,7 +254,7 @@ namespace mongo {
         const int64_t _cappedMaxSize;
         const int64_t _cappedMaxSizeSlack;  // when to start applying backpressure
         const int64_t _cappedMaxDocs;
-        CappedCallback* _cappedDeleteCallback;
+        CappedCallback* _cappedCallback;
         mutable boost::timed_mutex _cappedDeleterMutex;  // see comment in ::cappedDeleteAsNeeded
         int _cappedDeleteCheckCount;      // see comment in ::cappedDeleteAsNeeded
 
