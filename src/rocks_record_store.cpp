@@ -661,13 +661,16 @@ namespace mongo {
                                          _isCapped);
     }
 
-    Status RocksRecordStore::truncate( OperationContext* txn ) {
-        auto cursor = getCursor(txn, true);
-        while (auto record = cursor->next()) {
-            deleteRecord( txn, record->id );
+    Status RocksRecordStore::truncate(OperationContext* txn) {
+        // We can't use getCursor() here because we need to ignore the visibility of records (i.e.
+        // we need to delete all records, regardless of visibility)
+        auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(txn);
+        std::unique_ptr<RocksIterator> iterator(ru->NewIterator(_prefix, _isOplog));
+        for (iterator->SeekToFirst(); iterator->Valid(); iterator->Next()) {
+            deleteRecord(txn, _makeRecordId(iterator->key()));
         }
 
-        return Status::OK();
+        return rocksToMongoStatus(iterator->status());
     }
 
     Status RocksRecordStore::compact( OperationContext* txn,
