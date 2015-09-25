@@ -57,7 +57,8 @@ namespace mongo {
     class RocksCounterManager;
     class CappedVisibilityManager {
     public:
-        CappedVisibilityManager() : _oplog_highestSeen(RecordId::min()) {}
+        CappedVisibilityManager(CappedCallback* cappedCallback)
+            : _cappedCallback(cappedCallback), _oplog_highestSeen(RecordId::min()) {}
         void dealtWithCappedRecord(const RecordId& record);
         void updateHighestSeen(const RecordId& record);
         void addUncommittedRecord(OperationContext* txn, const RecordId& record);
@@ -76,6 +77,7 @@ namespace mongo {
 
         // protects the state
         mutable stdx::mutex _lock;
+        CappedCallback* _cappedCallback;
         std::vector<RecordId> _uncommittedRecords;
         RecordId _oplog_highestSeen;
     };

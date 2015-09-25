@@ -73,15 +73,23 @@ namespace mongo {
         class CappedInsertChange : public RecoveryUnit::Change {
         public:
             CappedInsertChange(CappedVisibilityManager* cappedVisibilityManager,
-                               const RecordId& record)
-                : _cappedVisibilityManager(cappedVisibilityManager), _record(record) {}
+                               CappedCallback* cappedCallback, const RecordId& record)
+                : _cappedVisibilityManager(cappedVisibilityManager),
+                  _cappedCallback(cappedCallback),
+                  _record(record) {}
 
             virtual void commit() { _cappedVisibilityManager->dealtWithCappedRecord(_record); }
 
-            virtual void rollback() { _cappedVisibilityManager->dealtWithCappedRecord(_record); }
+            virtual void rollback() {
+                _cappedVisibilityManager->dealtWithCappedRecord(_record);
+                if (_cappedCallback) {
+                    _cappedCallback->notifyCappedWaitersIfNeeded();
+                }
+            }
 
         private:
             CappedVisibilityManager* _cappedVisibilityManager;
+            CappedCallback* _cappedCallback;
             RecordId _record;
         };
     }  // namespace
@@ -96,7 +104,7 @@ namespace mongo {
                                                                const RecordId& record) {
         dassert(_uncommittedRecords.empty() || _uncommittedRecords.back() < record);
         _uncommittedRecords.push_back(record);
-        txn->recoveryUnit()->registerChange(new CappedInsertChange(this, record));
+        txn->recoveryUnit()->registerChange(new CappedInsertChange(this, _cappedCallback, record));
         _oplog_highestSeen = record;
     }
 
@@ -198,8 +206,8 @@ namespace mongo {
                                ? new RocksOplogKeyTracker(std::move(rocksGetNextPrefix(_prefix)))
                                : nullptr),
           _cappedOldestKeyHint(0),
-          _cappedVisibilityManager((_isCapped || _isOplog) ? new CappedVisibilityManager()
-                                                           : nullptr),
+          _cappedVisibilityManager(
+              (_isCapped || _isOplog) ? new CappedVisibilityManager(_cappedCallback) : nullptr),
           _ident(id.toString()),
           _dataSizeKey(std::string("\0\0\0\0", 4) + "datasize-" + id.toString()),
           _numRecordsKey(std::string("\0\0\0\0", 4) + "numrecords-" + id.toString()),
