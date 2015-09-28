@@ -42,6 +42,7 @@
 #include <rocksdb/compaction_filter.h>
 #include <rocksdb/comparator.h>
 #include <rocksdb/db.h>
+#include <rocksdb/experimental.h>
 #include <rocksdb/slice.h>
 #include <rocksdb/options.h>
 #include <rocksdb/rate_limiter.h>
@@ -371,6 +372,19 @@ namespace mongo {
                 bool ok = extractPrefix(prefix, &int_prefix);
                 invariant(ok);
                 _droppedPrefixes.insert(int_prefix);
+            }
+        }
+
+        // Suggest compaction for the prefixes that we need to drop, So that
+        // we free space as fast as possible.
+        for (auto& prefix : prefixesToDrop) {
+            std::string end_prefix_str = rocksGetNextPrefix(prefix);
+
+            rocksdb::Slice start_prefix = prefix;
+            rocksdb::Slice end_prefix = end_prefix_str;
+            s = rocksdb::experimental::SuggestCompactRange(_db.get(), &start_prefix, &end_prefix);
+            if (!s.ok()) {
+                log() << "failed to suggest compaction for prefix " << prefix;
             }
         }
 
