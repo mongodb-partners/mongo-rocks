@@ -113,7 +113,7 @@ namespace mongo {
 
         rocksdb::WriteBatchWithIndex* writeBatch();
 
-        const rocksdb::Snapshot* dbGetSnapshot();
+        const rocksdb::Snapshot* getPreparedSnapshot();
         void dbReleaseSnapshot(const rocksdb::Snapshot* snapshot);
 
         // Returns snapshot, creating one if needed. Considers _readFromMajorityCommittedSnapshot.
@@ -181,6 +181,10 @@ namespace mongo {
 
         // bare because we need to call ReleaseSnapshot when we're done with this
         const rocksdb::Snapshot* _snapshot; // owned
+
+        // snapshot that got prepared in prepareForCreateSnapshot
+        // it is consumed by getPreparedSnapshot()
+        const rocksdb::Snapshot* _preparedSnapshot;  // owned
 
         CounterMap _deltaCounters;
 

@@ -209,11 +209,17 @@ namespace mongo {
           _transaction(transactionEngine),
           _writeBatch(rocksdb::BytewiseComparator(), 0, true),
           _snapshot(nullptr),
+          _preparedSnapshot(nullptr),
           _myTransactionCount(1) {
         RocksRecoveryUnit::_totalLiveRecoveryUnits.fetch_add(1, std::memory_order_relaxed);
     }
 
     RocksRecoveryUnit::~RocksRecoveryUnit() {
+        if (_preparedSnapshot) {
+            // somebody didn't call getPreparedSnapshot() after prepareForCreateSnapshot()
+            _db->ReleaseSnapshot(_preparedSnapshot);
+            _preparedSnapshot = nullptr;
+        }
         _abort();
         RocksRecoveryUnit::_totalLiveRecoveryUnits.fetch_sub(1, std::memory_order_relaxed);
     }
@@ -309,6 +315,11 @@ namespace mongo {
     void RocksRecoveryUnit::prepareForCreateSnapshot(OperationContext* opCtx) {
         invariant(!_readFromMajorityCommittedSnapshot);
         _areWriteUnitOfWorksBanned = true;
+        if (_preparedSnapshot) {
+            // release old one, in case somebody calls prepareForCreateSnapshot twice in a row
+            _db->ReleaseSnapshot(_preparedSnapshot);
+        }
+        _preparedSnapshot = _db->GetSnapshot();
     }
 
     void RocksRecoveryUnit::_commit() {
@@ -356,8 +367,10 @@ namespace mongo {
         _releaseSnapshot();
     }
 
-    const rocksdb::Snapshot* RocksRecoveryUnit::dbGetSnapshot() {
-        return _db->GetSnapshot();
+    const rocksdb::Snapshot* RocksRecoveryUnit::getPreparedSnapshot() {
+        auto ret = _preparedSnapshot;
+        _preparedSnapshot = nullptr;
+        return ret;
     }
 
     void RocksRecoveryUnit::dbReleaseSnapshot(const rocksdb::Snapshot* snapshot) {

@@ -405,6 +405,7 @@ namespace mongo {
     }
 
     void RocksEngine::cleanShutdown() {
+        _snapshotManager.dropAllSnapshots();
         _counterManager->sync();
         _counterManager.reset();
         _compactionScheduler.reset();

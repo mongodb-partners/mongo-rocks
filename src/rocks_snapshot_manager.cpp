@@ -88,13 +88,17 @@ namespace mongo {
     std::shared_ptr<RocksSnapshotManager::SnapshotHolder>
     RocksSnapshotManager::getCommittedSnapshot() const {
         stdx::lock_guard<stdx::mutex> lock(_mutex);
+
+        uassert(ErrorCodes::ReadConcernMajorityNotAvailableYet,
+                "Committed view disappeared while running operation", _committedSnapshot);
+
         return _snapshotMap.at(*_committedSnapshot);
     }
 
     RocksSnapshotManager::SnapshotHolder::SnapshotHolder(OperationContext* opCtx, uint64_t name_) {
         name = name_;
         ru = RocksRecoveryUnit::getRocksRecoveryUnit(opCtx);
-        snapshot = ru->dbGetSnapshot();
+        snapshot = ru->getPreparedSnapshot();
     }
 
     RocksSnapshotManager::SnapshotHolder::~SnapshotHolder() {
