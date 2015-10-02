@@ -434,6 +434,12 @@ namespace mongo {
         return 0;
     }
 
+    Status RocksEngine::beginBackup(OperationContext* txn) {
+        return rocksToMongoStatus(_db->PauseBackgroundWork());
+    }
+
+    void RocksEngine::endBackup(OperationContext* txn) { _db->ContinueBackgroundWork(); }
+
     void RocksEngine::setMaxWriteMBPerSec(int maxWriteMBPerSec) {
         _maxWriteMBPerSec = maxWriteMBPerSec;
         _rateLimiter->SetBytesPerSecond(static_cast<int64_t>(_maxWriteMBPerSec) * 1024 * 1024);

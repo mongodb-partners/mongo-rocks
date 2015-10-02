@@ -108,6 +108,10 @@ namespace mongo {
 
         virtual int flushAllFiles(bool sync) override;
 
+        virtual Status beginBackup(OperationContext* txn) override;
+
+        virtual void endBackup(OperationContext* txn) override;
+
         virtual bool isDurable() const override { return _durable; }
 
         virtual int64_t getIdentSize(OperationContext* opCtx, StringData ident);
