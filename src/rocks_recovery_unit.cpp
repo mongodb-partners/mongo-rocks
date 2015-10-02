@@ -258,7 +258,11 @@ namespace mongo {
     bool RocksRecoveryUnit::waitUntilDurable() {
         // We expect goingToWaitUntilDurable() to always be called before
         // waitUntilDurable()
-        invariant(_sync);
+        // TODO We're lying here. Mongo no longer calls goingToWaitUntilDurable() before
+        // waitUntilDurable(). I asked a question at https://jira.mongodb.org/browse/SERVER-20176 to
+        // clarify the difference in behavior. As a short-term test fix, I'm removing this
+        // invariant.
+        // invariant(_sync);
 
         // Not sure mongo throws away RecoveryUnits after commit, so reset
         // _sync to false here
