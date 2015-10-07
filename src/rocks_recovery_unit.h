@@ -172,7 +172,10 @@ namespace mongo {
         RocksCounterManager* _counterManager;            // not owned
         RocksCompactionScheduler* _compactionScheduler;  // not owned
 
+        // if true, next write will be synced
         bool _sync;
+        // true means that our write was synced to disk
+        bool _synced;
         const bool _durable;
 
         RocksTransaction _transaction;

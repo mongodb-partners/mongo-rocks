@@ -205,6 +205,7 @@ namespace mongo {
           _counterManager(counterManager),
           _compactionScheduler(compactionScheduler),
           _sync(false),
+          _synced(false),
           _durable(durable),
           _transaction(transactionEngine),
           _writeBatch(rocksdb::BytewiseComparator(), 0, true),
@@ -253,23 +254,24 @@ namespace mongo {
 
     void RocksRecoveryUnit::goingToWaitUntilDurable() {
         _sync = true;
+        _synced = false;
     }
 
     bool RocksRecoveryUnit::waitUntilDurable() {
-        // We expect goingToWaitUntilDurable() to always be called before
-        // waitUntilDurable()
-        // TODO We're lying here. Mongo no longer calls goingToWaitUntilDurable() before
-        // waitUntilDurable(). I asked a question at https://jira.mongodb.org/browse/SERVER-20176 to
-        // clarify the difference in behavior. As a short-term test fix, I'm removing this
-        // invariant.
-        // invariant(_sync);
+        if (!_durable) {
+            return false;
+        }
 
-        // Not sure mongo throws away RecoveryUnits after commit, so reset
-        // _sync to false here
+        if (!_synced) {
+            // in case the prior write was not synced, we need to explicitly call SyncWAL().
+            auto s = _db->SyncWAL();
+            if (!s.ok()) {
+                return false;
+            }
+        }
+
         _sync = false;
 
-        // Writes will be synced to disk before being considered complete, so
-        // all writes prior to this call are already durable
         return true;
     }
 
@@ -345,6 +347,7 @@ namespace mongo {
             writeOptions.disableWAL = !_durable;
             auto status = _db->Write(writeOptions, wb);
             invariantRocksOK(status);
+            _synced = writeOptions.sync;
             _transaction.commit();
         }
         _deltaCounters.clear();
