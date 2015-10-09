@@ -68,7 +68,12 @@ namespace mongo {
         }
 
         auto it = _snapshots.begin();
-        for (; it != _snapshots.end() && *it != _committedSnapshot; it++);
+        for (; it != _snapshots.end() && *it != _committedSnapshot; it++) {
+            auto snapshotHolder = _snapshotMap.find(*it);
+            // _snapshots and _snapshotMap have to have the same snapshots
+            invariant(snapshotHolder != _snapshotMap.end());
+            _snapshotMap.erase(snapshotHolder);
+        }
         invariant(it != _snapshots.end());
         _snapshots.erase(_snapshots.begin(), it);
     }
