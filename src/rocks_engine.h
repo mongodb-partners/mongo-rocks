@@ -124,7 +124,10 @@ namespace mongo {
         virtual void cleanShutdown();
 
         virtual SnapshotManager* getSnapshotManager() const final {
-            return (SnapshotManager*) &_snapshotManager;
+            // SERVER-21311 -- temporarily disable snapshot manager because it's causing some tests
+            // to crash. reenable it once we're confident that tests have been fixed.
+            // return (SnapshotManager*) &_snapshotManager;
+            return nullptr;
         }
 
         /**
