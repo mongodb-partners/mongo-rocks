@@ -289,14 +289,18 @@ namespace mongo {
     void RocksRecoveryUnit::registerChange(Change* change) { _changes.push_back(change); }
 
     Status RocksRecoveryUnit::setReadFromMajorityCommittedSnapshot() {
-        if (!_snapshotManager->haveCommittedSnapshot()) {
+        // SERVER-21311 -- temporarily disable snapshot manager because it's causing some tests
+        // to crash. reenable it once we're confident that tests have been fixed.
+        return Status(ErrorCodes::CommandNotSupported, "Temporarily disabled snapshot manager");
+
+        /*if (!_snapshotManager->haveCommittedSnapshot()) {
             return {ErrorCodes::ReadConcernMajorityNotAvailableYet,
                     "Read concern majority reads are currently not possible."};
         }
         invariant(_snapshot == nullptr);
 
         _readFromMajorityCommittedSnapshot = true;
-        return Status::OK();
+        return Status::OK();*/
     }
 
     boost::optional<SnapshotName> RocksRecoveryUnit::getMajorityCommittedSnapshot() const {
