@@ -160,6 +160,8 @@ namespace mongo {
 
         void setCommittedSnapshot(const rocksdb::Snapshot* committedSnapshot);
 
+        rocksdb::DB* getDB() const { return _db; }
+
     private:
         void _releaseSnapshot();
 
