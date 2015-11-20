@@ -149,7 +149,7 @@ namespace mongo {
                 // unique vs non-unique key formats since both start with the key.
                 _query.resetToKey(finalKey, _order, discriminator);
 
-                _locate(_query, RecordId());
+                seekCursor(_query);
                 updatePosition();
                 return curr(parts);
             }
@@ -163,7 +163,7 @@ namespace mongo {
                 const auto discriminator = _forward ? KeyString::kExclusiveBefore
                                                     : KeyString::kExclusiveAfter;
                 _query.resetToKey(key, _order, discriminator);
-                _locate(_query, RecordId());
+                seekCursor(_query);
                 updatePosition();
                 return curr(parts);
             }
@@ -186,7 +186,7 @@ namespace mongo {
                     _currentSequenceNumber = ru->snapshot()->GetSequenceNumber();
 
                     if (!_savedEOF) {
-                        _lastMoveWasRestore = !_locate(_key, _loc);
+                        _lastMoveWasRestore = !seekCursor(_key);
                     }
                 }
             }
@@ -202,9 +202,6 @@ namespace mongo {
             }
 
         protected:
-            // Returns true if an exact match is found.
-            virtual bool _locate(const KeyString& query, RecordId loc) = 0;
-
             // Called after _key has been filled in. Must not throw WriteConflictException.
             virtual void updateLocAndTypeBits() = 0;
 
@@ -361,11 +358,6 @@ namespace mongo {
                 iterator();
             }
 
-            virtual bool _locate(const KeyString& query, RecordId loc) {
-                // loc already encoded in _key
-                return seekCursor(query);
-            }
-
             virtual void updateLocAndTypeBits() {
                 _loc = KeyString::decodeRecordIdAtEnd(_key.getBuffer(), _key.getSize());
                 BufReader br(_valueSlice().data(), _valueSlice().size());
@@ -397,26 +389,6 @@ namespace mongo {
                 }
                 updatePosition();
                 return curr(parts);
-            }
-
-            virtual bool _locate(const KeyString& query, RecordId loc) {
-                if (!seekCursor(query)) {
-                    // If didn't seek to exact key, start at beginning of wherever we ended up.
-                    return false;
-                }
-                dassert(!_eof);
-
-                // If we get here we need to look at the actual RecordId for this key and make sure
-                // we are supposed to see it.
-                BufReader br(_valueSlice().data(), _valueSlice().size());
-                RecordId locInIndex = KeyString::decodeRecordId(&br);
-
-                if ((_forward && (locInIndex < loc)) || (!_forward && (locInIndex > loc))) {
-                    advanceCursor();
-                    return false;
-                }
-
-                return loc == locInIndex;
             }
 
             void updateLocAndTypeBits() {
