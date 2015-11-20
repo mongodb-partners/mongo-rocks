@@ -48,7 +48,7 @@ public:
     struct SnapshotHolder {
         uint64_t name;
         const rocksdb::Snapshot* snapshot;
-        RocksRecoveryUnit* ru;
+        rocksdb::DB* db;
         SnapshotHolder(OperationContext* opCtx, uint64_t name_);
         ~SnapshotHolder();
     };

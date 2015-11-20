@@ -102,14 +102,15 @@ namespace mongo {
 
     RocksSnapshotManager::SnapshotHolder::SnapshotHolder(OperationContext* opCtx, uint64_t name_) {
         name = name_;
-        ru = RocksRecoveryUnit::getRocksRecoveryUnit(opCtx);
-        snapshot = ru->getPreparedSnapshot();
+        auto rru = RocksRecoveryUnit::getRocksRecoveryUnit(opCtx);
+        snapshot = rru->getPreparedSnapshot();
+        db = rru->getDB();
     }
 
     RocksSnapshotManager::SnapshotHolder::~SnapshotHolder() {
         if (snapshot != nullptr) {
-            invariant(ru != nullptr);
-            ru->dbReleaseSnapshot(snapshot);
+            invariant(db != nullptr);
+            db->ReleaseSnapshot(snapshot);
         }
     }
 
