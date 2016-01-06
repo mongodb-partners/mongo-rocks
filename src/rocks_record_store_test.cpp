@@ -312,7 +312,7 @@ namespace mongo {
         RocksRecordStoreHarnessHelper harnessHelper;
         std::unique_ptr<RecordStore> rs;
         if (capped) {
-            rs = harnessHelper.newCappedRecordStore("local.oplog.foo", 100000, 10000);
+            rs = harnessHelper.newCappedRecordStore("local.oplog.foo", 100000, -1);
         } else {
             rs = harnessHelper.newNonCappedRecordStore("local.oplog.foo");
         }
@@ -459,7 +459,7 @@ namespace mongo {
         std::unique_ptr<RocksRecordStoreHarnessHelper> harnessHelper(
             new RocksRecordStoreHarnessHelper());
         std::unique_ptr<RecordStore> rs(
-            harnessHelper->newCappedRecordStore("local.oplog.foo", 100000, 10000));
+            harnessHelper->newCappedRecordStore("local.oplog.foo", 100000, -1));
         {
             const RocksRecordStore* rrs = dynamic_cast<RocksRecordStore*>(rs.get());
             ASSERT( rrs->isOplog() );
