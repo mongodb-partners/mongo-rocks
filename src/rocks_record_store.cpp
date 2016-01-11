@@ -141,6 +141,11 @@ namespace mongo {
         }
     }
 
+    void CappedVisibilityManager::setHighestSeen(const RecordId& record) {
+        stdx::lock_guard<stdx::mutex> lk(_lock);
+        _oplog_highestSeen = record;
+    }
+
     RecordId CappedVisibilityManager::oplogStartHack() const {
         stdx::lock_guard<stdx::mutex> lk(_lock);
         if (_uncommittedRecords.empty()) {
@@ -828,6 +833,16 @@ namespace mongo {
                                                      bool inclusive ) {
         // copied from WiredTigerRecordStore::temp_cappedTruncateAfter()
         WriteUnitOfWork wuow(txn);
+        RecordId lastKeptId = end;
+        int64_t recordsRemoved = 0;
+
+        if (inclusive) {
+            auto reverseCursor = getCursor(txn, false);
+            invariant(reverseCursor->seekExact(end));
+            auto prev = reverseCursor->next();
+            lastKeptId = prev ? prev->id : RecordId::min();
+        }
+
         auto cursor = getCursor(txn, true);
         for (auto record = cursor->seekExact(end); record; record = cursor->next()) {
             if (end < record->id || (inclusive && end == record->id)) {
@@ -836,8 +851,15 @@ namespace mongo {
                         _cappedCallback->aboutToDeleteCapped(txn, record->id, record->data));
                 }
                 deleteRecord(txn, record->id);
+                ++recordsRemoved;
             }
         }
+
+        if (recordsRemoved) {
+            // Forget that we've ever seen a higher timestamp than we now have.
+            _cappedVisibilityManager->setHighestSeen(lastKeptId);
+        }
+
         wuow.commit();
     }
 
