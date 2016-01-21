@@ -87,7 +87,8 @@ env.CppUnitTest(
            ],
    LIBDEPS=[
         'storage_rocks_mock',
-        '$BUILD_DIR/mongo/db/storage/kv/kv_engine_test_harness'
+        '$BUILD_DIR/mongo/db/storage/kv/kv_engine_test_harness',
+        '$BUILD_DIR/mongo/db/storage/storage_options'
         ]
    )
 
