@@ -67,6 +67,7 @@ namespace mongo {
     struct CollectionOptions;
     class RocksIndexBase;
     class RocksRecordStore;
+    class JournalListener;
 
     class RocksEngine final : public KVEngine {
         MONGO_DISALLOW_COPYING( RocksEngine );
@@ -134,6 +135,8 @@ namespace mongo {
          * Returns true if a background job is running for the namespace.
          */
         static bool initRsOplogBackgroundThread(StringData ns);
+
+        virtual void setJournalListener(JournalListener* jl) { }
 
         // rocks specific api
 
