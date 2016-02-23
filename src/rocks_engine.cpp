@@ -52,12 +52,15 @@
 #include <rocksdb/utilities/write_batch_with_index.h>
 #include <rocksdb/utilities/checkpoint.h>
 
+#include "mongo/db/client.h"
 #include "mongo/db/catalog/collection_options.h"
 #include "mongo/db/index/index_descriptor.h"
 #include "mongo/db/namespace_string.h"
 #include "mongo/db/operation_context.h"
 #include "mongo/db/server_parameters.h"
+#include "mongo/db/storage/journal_listener.h"
 #include "mongo/platform/endian.h"
+#include "mongo/util/background.h"
 #include "mongo/util/log.h"
 #include "mongo/util/processinfo.h"
 
@@ -71,6 +74,45 @@
 #define ROCKS_TRACE log()
 
 namespace mongo {
+
+    class RocksEngine::RocksJournalFlusher : public BackgroundJob {
+    public:
+        explicit RocksJournalFlusher(RocksDurabilityManager* durabilityManager)
+            : BackgroundJob(false /* deleteSelf */), _durabilityManager(durabilityManager) {}
+
+        virtual std::string name() const { return "RocksJournalFlusher"; }
+
+        virtual void run() {
+            Client::initThread(name().c_str());
+
+            LOG(1) << "starting " << name() << " thread";
+
+            while (!_shuttingDown.load()) {
+                try {
+                    _durabilityManager->waitUntilDurable(false);
+                } catch (const UserException& e) {
+                    invariant(e.getCode() == ErrorCodes::ShutdownInProgress);
+                }
+
+                int ms = storageGlobalParams.journalCommitIntervalMs;
+                if (!ms) {
+                    ms = 100;
+                }
+
+                sleepmillis(ms);
+            }
+            LOG(1) << "stopping " << name() << " thread";
+        }
+
+        void shutdown() {
+            _shuttingDown.store(true);
+            wait();
+        }
+
+    private:
+        RocksDurabilityManager* _durabilityManager;  // not owned
+        std::atomic<bool> _shuttingDown{false};      // NOLINT
+    };
 
     namespace {
         // we encode prefixes in big endian because we want to quickly jump to the max prefix
@@ -257,13 +299,21 @@ namespace mongo {
                 invariantRocksOK(s);
             }
         }
+
+        _durabilityManager.reset(new RocksDurabilityManager(_db.get(), _durable));
+
+        if (_durable) {
+            _journalFlusher = stdx::make_unique<RocksJournalFlusher>(_durabilityManager.get());
+            _journalFlusher->go();
+        }
     }
 
     RocksEngine::~RocksEngine() { cleanShutdown(); }
 
     RecoveryUnit* RocksEngine::newRecoveryUnit() {
         return new RocksRecoveryUnit(&_transactionEngine, &_snapshotManager, _db.get(),
-                                     _counterManager.get(), _compactionScheduler.get(), _durable);
+                                     _counterManager.get(), _compactionScheduler.get(),
+                                     _durabilityManager.get(), _durable);
     }
 
     Status RocksEngine::createRecordStore(OperationContext* opCtx, StringData ns, StringData ident,
@@ -405,11 +455,20 @@ namespace mongo {
     }
 
     void RocksEngine::cleanShutdown() {
+        if (_journalFlusher) {
+            _journalFlusher->shutdown();
+            _journalFlusher.reset();
+        }
+        _durabilityManager.reset();
         _snapshotManager.dropAllSnapshots();
         _counterManager->sync();
         _counterManager.reset();
         _compactionScheduler.reset();
         _db.reset();
+    }
+
+    void RocksEngine::setJournalListener(JournalListener* jl) {
+        _durabilityManager->setJournalListener(jl);
     }
 
     int64_t RocksEngine::getIdentSize(OperationContext* opCtx, StringData ident) {
@@ -430,8 +489,10 @@ namespace mongo {
     }
 
     int RocksEngine::flushAllFiles(bool sync) {
+        LOG(1) << "RocksEngine::flushAllFiles";
         _counterManager->sync();
-        return 0;
+        _durabilityManager->waitUntilDurable(true);
+        return 1;
     }
 
     Status RocksEngine::beginBackup(OperationContext* txn) {

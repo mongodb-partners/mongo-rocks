@@ -26,45 +26,31 @@
  *    it in the license file.
  */
 
-#include "mongo/platform/basic.h"
+#include "mongo/db/storage/journal_listener.h"
 
-#include <boost/filesystem/operations.hpp>
-#include <memory>
-
-#include <rocksdb/comparator.h>
 #include <rocksdb/db.h>
-#include <rocksdb/options.h>
-#include <rocksdb/slice.h>
 
-#include "mongo/db/storage/kv/kv_engine.h"
-#include "mongo/db/storage/kv/kv_engine_test_harness.h"
-#include "mongo/unittest/temp_dir.h"
-
-#include "rocks_engine.h"
+#include "rocks_durability_manager.h"
+#include "rocks_util.h"
 
 namespace mongo {
-    class RocksEngineHarnessHelper : public KVHarnessHelper {
-    public:
-        RocksEngineHarnessHelper() : _dbpath("mongo-rocks-engine-test") {
-            boost::filesystem::remove_all(_dbpath.path());
-            restartEngine();
+    RocksDurabilityManager::RocksDurabilityManager(rocksdb::DB* db, bool durable)
+        : _db(db), _durable(durable), _journalListener(&NoOpJournalListener::instance) {}
+
+    void RocksDurabilityManager::setJournalListener(JournalListener* jl) {
+        stdx::unique_lock<stdx::mutex> lk(_journalListenerMutex);
+        _journalListener = jl;
+    }
+
+    void RocksDurabilityManager::waitUntilDurable(bool forceFlush) {
+        stdx::unique_lock<stdx::mutex> lk(_journalListenerMutex);
+        JournalListener::Token token = _journalListener->getToken();
+        if (!_durable || forceFlush) {
+            invariantRocksOK(_db->Flush(rocksdb::FlushOptions()));
+        } else {
+            invariantRocksOK(_db->SyncWAL());
         }
+        _journalListener->onDurable(token);
+    }
 
-        virtual ~RocksEngineHarnessHelper() = default;
-
-        virtual KVEngine* getEngine() { return _engine.get(); }
-
-        virtual KVEngine* restartEngine() {
-            _engine.reset(nullptr);
-            _engine.reset(new RocksEngine(_dbpath.path(), false));
-            return _engine.get();
-        }
-
-    private:
-        unittest::TempDir _dbpath;
-
-        std::unique_ptr<RocksEngine> _engine;
-    };
-
-    KVHarnessHelper* KVHarnessHelper::create() { return new RocksEngineHarnessHelper(); }
-}
+} // namespace mongo

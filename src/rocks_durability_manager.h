@@ -28,43 +28,34 @@
 
 #include "mongo/platform/basic.h"
 
-#include <boost/filesystem/operations.hpp>
-#include <memory>
+#pragma once
 
-#include <rocksdb/comparator.h>
-#include <rocksdb/db.h>
-#include <rocksdb/options.h>
-#include <rocksdb/slice.h>
 
-#include "mongo/db/storage/kv/kv_engine.h"
-#include "mongo/db/storage/kv/kv_engine_test_harness.h"
-#include "mongo/unittest/temp_dir.h"
-
-#include "rocks_engine.h"
+namespace rocksdb {
+    class DB;
+}
 
 namespace mongo {
-    class RocksEngineHarnessHelper : public KVHarnessHelper {
+
+    class JournalListener;
+
+    class RocksDurabilityManager {
+        MONGO_DISALLOW_COPYING(RocksDurabilityManager);
+
     public:
-        RocksEngineHarnessHelper() : _dbpath("mongo-rocks-engine-test") {
-            boost::filesystem::remove_all(_dbpath.path());
-            restartEngine();
-        }
+        RocksDurabilityManager(rocksdb::DB* db, bool durable);
 
-        virtual ~RocksEngineHarnessHelper() = default;
+        void setJournalListener(JournalListener* jl);
 
-        virtual KVEngine* getEngine() { return _engine.get(); }
-
-        virtual KVEngine* restartEngine() {
-            _engine.reset(nullptr);
-            _engine.reset(new RocksEngine(_dbpath.path(), false));
-            return _engine.get();
-        }
+        void waitUntilDurable(bool forceFlush);
 
     private:
-        unittest::TempDir _dbpath;
-
-        std::unique_ptr<RocksEngine> _engine;
+        rocksdb::DB* _db;  // not owned
+        bool _durable;
+        // Notified when we commit to the journal.
+        JournalListener* _journalListener;
+        // Protects _journalListener.
+        stdx::mutex _journalListenerMutex;
     };
 
-    KVHarnessHelper* KVHarnessHelper::create() { return new RocksEngineHarnessHelper(); }
-}
+} // namespace mongo
