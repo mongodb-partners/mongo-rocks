@@ -63,6 +63,7 @@ namespace mongo {
             ASSERT(s.ok());
             _db.reset(db);
             _counterManager = stdx::make_unique<RocksCounterManager>(_db.get(), true);
+            _durabilityManager.reset(new RocksDurabilityManager(_db.get(), true));
         }
 
         std::unique_ptr<SortedDataInterface> newSortedDataInterface(bool unique) {
@@ -75,8 +76,8 @@ namespace mongo {
 
         std::unique_ptr<RecoveryUnit> newRecoveryUnit() {
             return stdx::make_unique<RocksRecoveryUnit>(&_transactionEngine, &_snapshotManager,
-                                                        _db.get(), _counterManager.get(), nullptr,
-                                                        true);
+                                                        _db.get(), _counterManager.get(),
+                                                        nullptr, _durabilityManager.get(), true);
         }
 
     private:
@@ -86,6 +87,7 @@ namespace mongo {
         std::unique_ptr<rocksdb::DB> _db;
         RocksTransactionEngine _transactionEngine;
         RocksSnapshotManager _snapshotManager;
+        std::unique_ptr<RocksDurabilityManager> _durabilityManager;
         std::unique_ptr<RocksCounterManager> _counterManager;
     };
 

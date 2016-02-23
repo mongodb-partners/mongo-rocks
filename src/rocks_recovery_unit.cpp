@@ -44,6 +44,7 @@
 #include "mongo/base/checked_cast.h"
 #include "mongo/db/concurrency/write_conflict_exception.h"
 #include "mongo/db/operation_context.h"
+#include "mongo/db/storage/journal_listener.h"
 #include "mongo/util/log.h"
 
 #include "rocks_transaction.h"
@@ -198,14 +199,14 @@ namespace mongo {
                                          RocksSnapshotManager* snapshotManager, rocksdb::DB* db,
                                          RocksCounterManager* counterManager,
                                          RocksCompactionScheduler* compactionScheduler,
+                                         RocksDurabilityManager* durabilityManager,
                                          bool durable)
         : _transactionEngine(transactionEngine),
           _snapshotManager(snapshotManager),
           _db(db),
           _counterManager(counterManager),
           _compactionScheduler(compactionScheduler),
-          _sync(false),
-          _synced(false),
+          _durabilityManager(durabilityManager),
           _durable(durable),
           _transaction(transactionEngine),
           _writeBatch(rocksdb::BytewiseComparator(), 0, true),
@@ -253,25 +254,11 @@ namespace mongo {
     }
 
     void RocksRecoveryUnit::goingToWaitUntilDurable() {
-        _sync = true;
-        _synced = false;
+      // noop, based on recent discussion with Geert
     }
 
     bool RocksRecoveryUnit::waitUntilDurable() {
-        if (!_durable) {
-            return false;
-        }
-
-        if (!_synced) {
-            // in case the prior write was not synced, we need to explicitly call SyncWAL().
-            auto s = _db->SyncWAL();
-            if (!s.ok()) {
-                return false;
-            }
-        }
-
-        _sync = false;
-
+        _durabilityManager->waitUntilDurable(false);
         return true;
     }
 
@@ -341,13 +328,9 @@ namespace mongo {
             // Order of operations here is important. It needs to be synchronized with
             // _transaction.recordSnapshotId() and _db->GetSnapshot() and
             rocksdb::WriteOptions writeOptions;
-            // If _durable == false, then the call to goingToWaitUntilDurable
-            // will have no effect
-            writeOptions.sync = _sync && _durable;
             writeOptions.disableWAL = !_durable;
             auto status = _db->Write(writeOptions, wb);
             invariantRocksOK(status);
-            _synced = writeOptions.sync;
             _transaction.commit();
         }
         _deltaCounters.clear();

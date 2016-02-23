@@ -50,6 +50,7 @@
 #include "rocks_counter_manager.h"
 #include "rocks_transaction.h"
 #include "rocks_snapshot_manager.h"
+#include "rocks_durability_manager.h"
 
 namespace rocksdb {
     class ColumnFamilyHandle;
@@ -135,6 +136,8 @@ namespace mongo {
          */
         static bool initRsOplogBackgroundThread(StringData ns);
 
+        virtual void setJournalListener(JournalListener* jl);
+
         // rocks specific api
 
         rocksdb::DB* getDB() { return _db.get(); }
@@ -197,6 +200,10 @@ namespace mongo {
 
         static const std::string kMetadataPrefix;
         static const std::string kDroppedPrefix;
+
+        std::unique_ptr<RocksDurabilityManager> _durabilityManager;
+        class RocksJournalFlusher;
+        std::unique_ptr<RocksJournalFlusher> _journalFlusher;  // Depends on _durabilityManager
     };
 
 }
