@@ -116,6 +116,8 @@ namespace mongo {
 
         virtual bool isDurable() const override { return _durable; }
 
+        virtual bool isEphemeral() const override { return false; }
+
         virtual int64_t getIdentSize(OperationContext* opCtx, StringData ident);
 
         virtual Status repairIdent(OperationContext* opCtx,
