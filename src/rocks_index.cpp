@@ -540,7 +540,7 @@ namespace mongo {
     }
 
     void RocksIndexBase::fullValidate(OperationContext* txn, bool full, long long* numKeysOut,
-                                      BSONObjBuilder* output) const {
+                                      ValidateResults* fullResults) const {
         if (numKeysOut) {
             std::unique_ptr<SortedDataInterface::Cursor> cursor(newCursor(txn, 1));
 
