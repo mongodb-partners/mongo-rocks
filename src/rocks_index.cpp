@@ -818,7 +818,7 @@ namespace mongo {
 
         _indexStorageSize.fetch_sub(static_cast<long long>(prefixedKey.size()),
                                     std::memory_order_relaxed);
-        ru->writeBatch()->Delete(prefixedKey);
+        ru->writeBatch()->SingleDelete(prefixedKey);
     }
 
     std::unique_ptr<SortedDataInterface::Cursor> RocksStandardIndex::newCursor(
