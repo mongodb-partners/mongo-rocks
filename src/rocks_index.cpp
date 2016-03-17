@@ -807,6 +807,18 @@ namespace mongo {
     void RocksStandardIndex::unindex(OperationContext* txn, const BSONObj& key, const RecordId& loc,
                                      bool dupsAllowed) {
         invariant(dupsAllowed);
+        // When DB parameter failIndexKeyTooLong is set to false,
+        // this method may be called for non-existing
+        // keys with the length exceeding the maximum allowed.
+        // Since such keys cannot be in the storage in any case,
+        // executing the following code results in:
+        // - corruption of index storage size value, and
+        // - an attempt to single-delete non-existing key which may
+        //   potentially lead to consecutive single-deletion of the key.
+        // Filter out long keys to prevent the problems described.
+        if (!checkKeySize(key).isOK()) {
+            return;
+        }
 
         KeyString encodedKey(key, _order, loc);
         std::string prefixedKey(_makePrefixedKey(_prefix, encodedKey));
