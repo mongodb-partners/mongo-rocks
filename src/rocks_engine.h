@@ -40,6 +40,7 @@
 #include <rocksdb/cache.h>
 #include <rocksdb/rate_limiter.h>
 #include <rocksdb/status.h>
+#include <rocksdb/statistics.h>
 
 #include "mongo/base/disallow_copying.h"
 #include "mongo/bson/ordering.h"
@@ -153,6 +154,10 @@ namespace mongo {
 
         Status backup(const std::string& path);
 
+        rocksdb::Statistics* getStatistics() const {
+          return _statistics.get();
+        }
+
     private:
         Status _createIdentPrefix(StringData ident);
         std::string _getIdentPrefix(StringData ident);
@@ -164,6 +169,8 @@ namespace mongo {
         std::shared_ptr<rocksdb::Cache> _block_cache;
         int _maxWriteMBPerSec;
         std::shared_ptr<rocksdb::RateLimiter> _rateLimiter;
+        // can be nullptr
+        std::shared_ptr<rocksdb::Statistics> _statistics;
 
         const bool _durable;
 
