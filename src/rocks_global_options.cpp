@@ -75,6 +75,13 @@ namespace mongo {
             .setDefault(moe::Value(false))
             .hidden();
 
+        rocksOptions
+            .addOptionChaining("storage.rocksdb.counters",
+                               "rocksdbCounters",
+                               moe::Bool,
+                               "If true, we will turn on RocksDB's advanced counters")
+            .setDefault(moe::Value(false));
+
         return options->addSection(rocksOptions);
     }
 
@@ -103,6 +110,11 @@ namespace mongo {
             rocksGlobalOptions.crashSafeCounters =
                 params["storage.rocksdb.crashSafeCounters"].as<bool>();
             log() << "Crash safe counters: " << rocksGlobalOptions.crashSafeCounters;
+        }
+        if (params.count("storage.rocksdb.counters")) {
+            rocksGlobalOptions.counters =
+              params["storage.rocksdb.counters"].as<bool>();
+            log() << "Counters: " << rocksGlobalOptions.counters;
         }
 
         return Status::OK();
