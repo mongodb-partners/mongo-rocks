@@ -772,7 +772,8 @@ namespace mongo {
     /// RocksStandardIndex
     RocksStandardIndex::RocksStandardIndex(rocksdb::DB* db, std::string prefix, std::string ident,
                                            Ordering order)
-        : RocksIndexBase(db, prefix, ident, order) {}
+        : RocksIndexBase(db, prefix, ident, order),
+          useSingleDelete(false) {}
 
     Status RocksStandardIndex::insert(OperationContext* txn, const BSONObj& key,
                                       const RecordId& loc, bool dupsAllowed) {
@@ -818,7 +819,11 @@ namespace mongo {
 
         _indexStorageSize.fetch_sub(static_cast<long long>(prefixedKey.size()),
                                     std::memory_order_relaxed);
-        ru->writeBatch()->Delete(prefixedKey);
+        if (useSingleDelete) {
+            ru->writeBatch()->SingleDelete(prefixedKey);
+        } else {
+            ru->writeBatch()->Delete(prefixedKey);
+        }
     }
 
     std::unique_ptr<SortedDataInterface::Cursor> RocksStandardIndex::newCursor(
