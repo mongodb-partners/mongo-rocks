@@ -376,8 +376,12 @@ namespace mongo {
             index = new RocksUniqueIndex(_db.get(), _getIdentPrefix(ident), ident.toString(),
                                          Ordering::make(desc->keyPattern()));
         } else {
-            index = new RocksStandardIndex(_db.get(), _getIdentPrefix(ident), ident.toString(),
-                                           Ordering::make(desc->keyPattern()));
+            auto si = new RocksStandardIndex(_db.get(), _getIdentPrefix(ident), ident.toString(),
+                                             Ordering::make(desc->keyPattern()));
+            if (rocksGlobalOptions.singleDeleteIndex) {
+                si->enableSingleDelete();
+            }
+            index = si;
         }
         {
             stdx::lock_guard<stdx::mutex> lk(_identObjectMapMutex);

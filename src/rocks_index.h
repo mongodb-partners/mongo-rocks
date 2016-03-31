@@ -125,6 +125,11 @@ namespace mongo {
 
         virtual SortedDataBuilderInterface* getBulkBuilder(OperationContext* txn,
                                                            bool dupsAllowed) override;
+
+        void enableSingleDelete() { useSingleDelete = true; }
+
+    private:
+        bool useSingleDelete;
     };
 
 } // namespace mongo
