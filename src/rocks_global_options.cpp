@@ -84,7 +84,8 @@ namespace mongo {
         rocksOptions
             .addOptionChaining("storage.rocksdb.singleDeleteIndex",
                                "rocksdbSingleDeleteIndex", moe::Bool,
-                               "If true, RocksDB will use SingleDelete method for unindex")
+                               "This is still experimental. "
+                               "Use this only if you know what you're doing")
             .setDefault(moe::Value(false));
 
         return options->addSection(rocksOptions);
