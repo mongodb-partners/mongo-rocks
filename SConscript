@@ -67,6 +67,8 @@ env.Library(
         ],
     LIBDEPS= [
         'storage_rocks_base',
+        # Temporary crutch since the ssl cleanup is hard coded in background.cpp
+        '$BUILD_DIR/mongo/util/net/network',
         ]
     )
 
