@@ -4,10 +4,12 @@
 
 Execute this series of commands to compile MongoDB with RocksDB storage engine:
     
+    # install compression libraries (zlib, bzip2, snappy):
+    sudo apt-get install zlib1g-dev; sudo apt-get install libbz2-dev; sudo apt-get install libsnappy-dev
     # get rocksdb
     git clone https://github.com/facebook/rocksdb.git
     # compile rocksdb
-    cd rocksdb; make static_lib; sudo make install; cd ..
+    cd rocksdb; make static_lib; sudo INSTALL_PATH=/usr make install; cd ..
     # get mongo
     git clone https://github.com/mongodb/mongo.git
     # get mongorocks
