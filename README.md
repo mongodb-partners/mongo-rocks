@@ -33,3 +33,7 @@ in non-standard locations, you may need to add `--cpppath` and `--libpath`
 options to the `scons` command line:
 
     scons --cpppath=/myrocksdb/include --libpath=/myrocksdb/lib
+    
+### Reach out
+
+If you have any issues with MongoRocks, feel free to reach out to our Google Group https://groups.google.com/forum/#!forum/mongo-rocks
