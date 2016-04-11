@@ -55,4 +55,11 @@ namespace mongo {
         }
         return Status::OK();
     }
+
+    MONGO_INITIALIZER_WITH_PREREQUISITES(RocksOptions_PrintOptions,
+                                         ("ServerLogRedirection"))
+    (InitializerContext* context) {
+        rocksGlobalOptions.printOptions();
+        return Status::OK();
+    }
 }
