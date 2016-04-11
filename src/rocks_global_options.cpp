@@ -103,4 +103,11 @@ namespace mongo {
         return Status::OK();
     }
 
+    void RocksGlobalOptions::printOptions() const {
+        log() << "[RocksDB] Block Cache Size GB: " << rocksGlobalOptions.cacheSizeGB;
+        log() << "[RocksDB] Compression: " << rocksGlobalOptions.compression;
+        log() << "[RocksDB] MaxWriteMBPerSec: " << rocksGlobalOptions.maxWriteMBPerSec;
+        log() << "[RocksDB] Engine custom option: " << rocksGlobalOptions.configString;
+        log() << "[RocksDB] Crash safe counters: " << rocksGlobalOptions.crashSafeCounters;
+    }
 }  // namespace mongo

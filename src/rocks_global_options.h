@@ -45,6 +45,7 @@ namespace mongo {
 
         Status add(moe::OptionSection* options);
         Status store(const moe::Environment& params, const std::vector<std::string>& args);
+        void printOptions() const;
 
         size_t cacheSizeGB;
         int maxWriteMBPerSec;
