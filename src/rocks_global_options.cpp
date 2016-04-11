@@ -82,30 +82,32 @@ namespace mongo {
                                      const std::vector<std::string>& args) {
         if (params.count("storage.rocksdb.cacheSizeGB")) {
             rocksGlobalOptions.cacheSizeGB = params["storage.rocksdb.cacheSizeGB"].as<int>();
-            log() << "Block Cache Size GB: " << rocksGlobalOptions.cacheSizeGB;
         }
         if (params.count("storage.rocksdb.compression")) {
             rocksGlobalOptions.compression =
                 params["storage.rocksdb.compression"].as<std::string>();
-            log() << "Compression: " << rocksGlobalOptions.compression;
         }
         if (params.count("storage.rocksdb.maxWriteMBPerSec")) {
             rocksGlobalOptions.maxWriteMBPerSec =
                 params["storage.rocksdb.maxWriteMBPerSec"].as<int>();
-            log() << "MaxWriteMBPerSec: " << rocksGlobalOptions.maxWriteMBPerSec;
         }
         if (params.count("storage.rocksdb.configString")) {
             rocksGlobalOptions.configString =
                 params["storage.rocksdb.configString"].as<std::string>();
-            log() << "Engine custom option: " << rocksGlobalOptions.configString;
         }
         if (params.count("storage.rocksdb.crashSafeCounters")) {
             rocksGlobalOptions.crashSafeCounters =
                 params["storage.rocksdb.crashSafeCounters"].as<bool>();
-            log() << "Crash safe counters: " << rocksGlobalOptions.crashSafeCounters;
         }
 
         return Status::OK();
     }
 
+    void RocksGlobalOptions::printOptions() const {
+        log() << "[RocksDB] Block Cache Size GB: " << rocksGlobalOptions.cacheSizeGB;
+        log() << "[RocksDB] Compression: " << rocksGlobalOptions.compression;
+        log() << "[RocksDB] MaxWriteMBPerSec: " << rocksGlobalOptions.maxWriteMBPerSec;
+        log() << "[RocksDB] Engine custom option: " << rocksGlobalOptions.configString;
+        log() << "[RocksDB] Crash safe counters: " << rocksGlobalOptions.crashSafeCounters;
+    }
 }  // namespace mongo
