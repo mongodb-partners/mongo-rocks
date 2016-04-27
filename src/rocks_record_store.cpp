@@ -687,21 +687,20 @@ namespace mongo {
     }
 
     Status RocksRecordStore::validate( OperationContext* txn,
-                                       bool full,
-                                       bool scanData,
+                                       ValidateCmdLevel level,
                                        ValidateAdaptor* adaptor,
                                        ValidateResults* results,
                                        BSONObjBuilder* output ) {
         long long nrecords = 0;
         long long dataSizeTotal = 0;
-        if (scanData) {
+        if (level == kValidateRecordStore || level == kValidateFull) {
             auto cursor = getCursor(txn, true);
             results->valid = true;
             while (auto record = cursor->next()) {
                 ++nrecords;
-                if (full) {
+                if (level == kValidateFull) {
                     size_t dataSize;
-                    Status status = adaptor->validate(record->data, &dataSize);
+                    Status status = adaptor->validate(record->id, record->data, &dataSize);
                     if (!status.isOK()) {
                         results->valid = false;
                         results->errors.push_back(str::stream() << record->id << " is corrupted");
@@ -710,7 +709,7 @@ namespace mongo {
                 }
             }
 
-            if (full && results->valid) {
+            if (level == kValidateFull && results->valid) {
                 long long storedNumRecords = numRecords(txn);
                 long long storedDataSize = dataSize(txn);
 
