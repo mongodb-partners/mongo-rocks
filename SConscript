@@ -32,8 +32,7 @@ env.Library(
         '$BUILD_DIR/third_party/shim_snappy',
         ],
     SYSLIBDEPS=["rocksdb",
-                "z",
-                "bz2"] #z and bz2 are dependencies for rocks
+                "z"] # z is for zlib compression
     )
 
 env.Library(
