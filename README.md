@@ -22,7 +22,7 @@ Execute this series of commands to compile MongoDB with RocksDB storage engine:
 
 Start `mongod` using the `--storageEngine=rocksdb` option.
     
-### More infromation
+### More information
 
 To use this module, it has to be linked from `mongo/src/mongo/db/modules`. The build system will automatically recognize it. In the `mongo` repository directory do the following:
 
