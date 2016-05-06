@@ -66,8 +66,5 @@ namespace mongo {
         std::unique_ptr<RocksEngine> _engine;
     };
 
-    // we don't own cs, so no need to delete it
-    KVHarnessHelper* KVHarnessHelper::create(ClockSource* cs) {
-        return new RocksEngineHarnessHelper();
-    }
+    KVHarnessHelper* KVHarnessHelper::create() { return new RocksEngineHarnessHelper(); }
 }
