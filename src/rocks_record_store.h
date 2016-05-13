@@ -124,9 +124,10 @@ namespace mongo {
                                                   int len,
                                                   bool enforceQuota );
 
-        virtual StatusWith<RecordId> insertRecord( OperationContext* txn,
-                                                  const DocWriter* doc,
-                                                  bool enforceQuota );
+        virtual Status insertRecordsWithDocWriter(OperationContext* txn,
+                                                  const DocWriter* const* docs,
+                                                  size_t nDocs,
+                                                  RecordId* idsOut);
 
         virtual Status updateRecord(OperationContext* txn, const RecordId& oldLocation,
                                     const char* data, int len, bool enforceQuota,
