@@ -30,6 +30,7 @@
 
 #pragma once
 
+#include "mongo/base/disallow_copying.h"
 
 namespace rocksdb {
     class DB;
