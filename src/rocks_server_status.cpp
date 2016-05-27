@@ -36,6 +36,7 @@
 #include "boost/scoped_ptr.hpp"
 
 #include <rocksdb/db.h>
+#include <rocksdb/statistics.h>
 
 #include "mongo/base/checked_cast.h"
 #include "mongo/bson/bsonobjbuilder.h"
