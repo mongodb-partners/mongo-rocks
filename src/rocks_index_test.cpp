@@ -102,12 +102,14 @@ namespace mongo {
         sorted(harnessHelper->newSortedDataInterface(true));
 
         {
-            const std::unique_ptr<OperationContext> opCtx(harnessHelper->newOperationContext());
+            const ServiceContext::UniqueOperationContext opCtx(
+                harnessHelper->newOperationContext());
             ASSERT(sorted->isEmpty(opCtx.get()));
         }
 
         {
-            const std::unique_ptr<OperationContext> opCtx(harnessHelper->newOperationContext());
+            const ServiceContext::UniqueOperationContext opCtx(
+                harnessHelper->newOperationContext());
             {
                 WriteUnitOfWork uow(opCtx.get());
 
@@ -119,8 +121,9 @@ namespace mongo {
         }
 
         {
-            const std::unique_ptr<OperationContext> t1(harnessHelper->newOperationContext());
-            const std::unique_ptr<OperationContext> t2(harnessHelper->newOperationContext());
+            const ServiceContext::UniqueOperationContext t1(harnessHelper->newOperationContext());
+            const auto client2 = harnessHelper->serviceContext()->makeClient("c2");
+            const auto t2 = harnessHelper->newOperationContext(client2.get());
 
             const std::unique_ptr<WriteUnitOfWork> w1(new WriteUnitOfWork(t1.get()));
             const std::unique_ptr<WriteUnitOfWork> w2(new WriteUnitOfWork(t2.get()));
@@ -135,8 +138,9 @@ namespace mongo {
         }
 
         {
-            const std::unique_ptr<OperationContext> t1(harnessHelper->newOperationContext());
-            const std::unique_ptr<OperationContext> t2(harnessHelper->newOperationContext());
+            const ServiceContext::UniqueOperationContext t1(harnessHelper->newOperationContext());
+            const auto client2 = harnessHelper->serviceContext()->makeClient("c2");
+            const auto t2 = harnessHelper->newOperationContext(client2.get());
 
             const std::unique_ptr<WriteUnitOfWork> w2(new WriteUnitOfWork(t2.get()));
             // ensure we start w2 transaction
