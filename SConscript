@@ -1,5 +1,13 @@
 Import("env")
 
+dynamic_syslibdeps = []
+conf = Configure(env)
+
+if conf.CheckLibWithHeader("lz4", ["lz4.h","lz4hc.h"], "C", "LZ4_versionNumber();", autoadd=False ):
+    dynamic_syslibdeps.append("lz4")
+
+conf.Finish()
+
 env.Library(
     target= 'storage_rocks_base',
     source= [
@@ -35,6 +43,7 @@ env.Library(
     SYSLIBDEPS=["rocksdb",
                 "z",
                 "bz2"] #z and bz2 are dependencies for rocks
+               + dynamic_syslibdeps
     )
 
 env.Library(
