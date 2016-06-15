@@ -50,8 +50,8 @@ namespace mongo {
         rocksOptions.addOptionChaining("storage.rocksdb.compression", "rocksdbCompression",
                                        moe::String,
                                        "block compression algorithm for collection data "
-                                       "[none|snappy|zlib|lz4|lz4hc]")
-            .format("(:?none)|(:?snappy)|(:?zlib)|(:?lz4)|(:?lz4hc)", "(none/snappy/zlib/lz4/lz4hc)")
+                                       "[none|snappy|zlib]")
+            .format("(:?none)|(:?snappy)|(:?zlib)", "(none/snappy/zlib)")
             .setDefault(moe::Value(std::string("snappy")));
         rocksOptions
             .addOptionChaining(
