@@ -376,7 +376,7 @@ namespace mongo {
                                        obj.objsize(), false ).getStatus());
             wuow.commit();
         }
-        ASSERT_EQ(rs->oplogStartHack(opCtx.get(), RecordId(0,1)), boost::none);
+        ASSERT_TRUE(rs->oplogStartHack(opCtx.get(), RecordId(0,1)) == boost::none);
     }
 
     TEST(RocksRecordStoreTest, CappedOrder) {
