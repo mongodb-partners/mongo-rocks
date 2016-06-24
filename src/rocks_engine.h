@@ -162,8 +162,9 @@ namespace mongo {
         }
 
     private:
-        Status _createIdentPrefix(StringData ident);
-        std::string _getIdentPrefix(StringData ident);
+        Status _createIdent(StringData ident, BSONObjBuilder* configBuilder);
+        BSONObj _getIdentConfig(StringData ident);
+        std::string _extractPrefix(const BSONObj& config);
 
         rocksdb::Options _options() const;
 
@@ -177,17 +178,17 @@ namespace mongo {
 
         const bool _durable;
 
-        // ident prefix map stores mapping from ident to a prefix (uint32_t)
-        mutable stdx::mutex _identPrefixMapMutex;
-        typedef StringMap<uint32_t> IdentPrefixMap;
-        IdentPrefixMap _identPrefixMap;
+        // ident map stores mapping from ident to a BSON config
+        mutable stdx::mutex _identMapMutex;
+        typedef StringMap<BSONObj> IdentMap;
+        IdentMap _identMap;
         std::string _oplogIdent;
 
-        // protected by _identPrefixMapMutex
+        // protected by _identMapMutex
         uint32_t _maxPrefix;
 
         // _identObjectMapMutex protects both _identIndexMap and _identCollectionMap. It should
-        // never be locked together with _identPrefixMapMutex
+        // never be locked together with _identMapMutex
         mutable stdx::mutex _identObjectMapMutex;
         // mapping from ident --> index object. we don't own the object
         StringMap<RocksIndexBase*> _identIndexMap;

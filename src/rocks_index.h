@@ -51,7 +51,8 @@ namespace mongo {
         MONGO_DISALLOW_COPYING(RocksIndexBase);
 
     public:
-        RocksIndexBase(rocksdb::DB* db, std::string prefix, std::string ident, Ordering order);
+        RocksIndexBase(rocksdb::DB* db, std::string prefix, std::string ident, Ordering order,
+                       const BSONObj& config);
 
         virtual SortedDataBuilderInterface* getBulkBuilder(OperationContext* txn,
                                                            bool dupsAllowed) = 0;
@@ -71,6 +72,8 @@ namespace mongo {
 
         virtual long long getSpaceUsedBytes( OperationContext* txn ) const;
 
+        static void generateConfig(BSONObjBuilder* configBuilder);
+
     protected:
         static std::string _makePrefixedKey(const std::string& prefix, const KeyString& encodedKey);
 
@@ -85,7 +88,7 @@ namespace mongo {
 
         // used to construct RocksCursors
         const Ordering _order;
-        const KeyString::Version _keyStringVersion;
+        KeyString::Version _keyStringVersion;
 
         class StandardBulkBuilder;
         class UniqueBulkBuilder;
@@ -94,7 +97,8 @@ namespace mongo {
 
     class RocksUniqueIndex : public RocksIndexBase {
     public:
-        RocksUniqueIndex(rocksdb::DB* db, std::string prefix, std::string ident, Ordering order);
+        RocksUniqueIndex(rocksdb::DB* db, std::string prefix, std::string ident, Ordering order,
+                         const BSONObj& config);
 
         virtual Status insert(OperationContext* txn, const BSONObj& key, const RecordId& loc,
                               bool dupsAllowed);
@@ -111,7 +115,8 @@ namespace mongo {
 
     class RocksStandardIndex : public RocksIndexBase {
     public:
-        RocksStandardIndex(rocksdb::DB* db, std::string prefix, std::string ident, Ordering order);
+        RocksStandardIndex(rocksdb::DB* db, std::string prefix, std::string ident, Ordering order,
+                           const BSONObj& config);
 
         virtual Status insert(OperationContext* txn, const BSONObj& key, const RecordId& loc,
                               bool dupsAllowed);

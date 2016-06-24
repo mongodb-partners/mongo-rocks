@@ -245,7 +245,7 @@ namespace mongo {
         // load ident to prefix map. also update _maxPrefix if there's any prefix bigger than
         // current _maxPrefix
         {
-            stdx::lock_guard<stdx::mutex> lk(_identPrefixMapMutex);
+            stdx::lock_guard<stdx::mutex> lk(_identMapMutex);
             for (iter->Seek(kMetadataPrefix);
                  iter->Valid() && iter->key().starts_with(kMetadataPrefix); iter->Next()) {
                 invariantRocksOK(iter->status());
@@ -260,9 +260,10 @@ namespace mongo {
                     log() << "Mongo metadata in RocksDB database is corrupted.";
                     invariant(false);
                 }
-
                 uint32_t identPrefix = static_cast<uint32_t>(element.numberInt());
-                _identPrefixMap[StringData(ident.data(), ident.size())] = identPrefix;
+
+                _identMap[StringData(ident.data(), ident.size())] =
+                    std::move(identConfig.getOwned());
 
                 _maxPrefix = std::max(_maxPrefix, identPrefix);
             }
@@ -323,13 +324,14 @@ namespace mongo {
 
     Status RocksEngine::createRecordStore(OperationContext* opCtx, StringData ns, StringData ident,
                                           const CollectionOptions& options) {
-        auto s = _createIdentPrefix(ident);
+        BSONObjBuilder configBuilder;
+        auto s = _createIdent(ident, &configBuilder);
         if (s.isOK() && NamespaceString::oplog(ns)) {
             _oplogIdent = ident.toString();
             // oplog needs two prefixes, so we also reserve the next one
             uint64_t oplogTrackerPrefix = 0;
             {
-                stdx::lock_guard<stdx::mutex> lk(_identPrefixMapMutex);
+                stdx::lock_guard<stdx::mutex> lk(_identMapMutex);
                 oplogTrackerPrefix = ++_maxPrefix;
             }
             // we also need to write out the new prefix to the database. this is just an
@@ -346,14 +348,18 @@ namespace mongo {
         if (NamespaceString::oplog(ns)) {
             _oplogIdent = ident.toString();
         }
+
+        auto config = _getIdentConfig(ident);
+        std::string prefix = _extractPrefix(config);
+
         RocksRecordStore* recordStore =
             options.capped
                 ? new RocksRecordStore(
-                      ns, ident, _db.get(), _counterManager.get(), _getIdentPrefix(ident), true,
+                      ns, ident, _db.get(), _counterManager.get(), prefix, true,
                       options.cappedSize ? options.cappedSize : 4096,  // default size
                       options.cappedMaxDocs ? options.cappedMaxDocs : -1)
                 : new RocksRecordStore(ns, ident, _db.get(), _counterManager.get(),
-                                       _getIdentPrefix(ident));
+                                       prefix);
 
         {
             stdx::lock_guard<stdx::mutex> lk(_identObjectMapMutex);
@@ -364,19 +370,26 @@ namespace mongo {
 
     Status RocksEngine::createSortedDataInterface(OperationContext* opCtx, StringData ident,
                                                   const IndexDescriptor* desc) {
-        return _createIdentPrefix(ident);
+        BSONObjBuilder configBuilder;
+        // let index add its own config things
+        RocksIndexBase::generateConfig(&configBuilder);
+        return _createIdent(ident, &configBuilder);
     }
 
     SortedDataInterface* RocksEngine::getSortedDataInterface(OperationContext* opCtx,
                                                              StringData ident,
                                                              const IndexDescriptor* desc) {
+
+        auto config = _getIdentConfig(ident);
+        std::string prefix = _extractPrefix(config);
+
         RocksIndexBase* index;
         if (desc->unique()) {
-            index = new RocksUniqueIndex(_db.get(), _getIdentPrefix(ident), ident.toString(),
-                                         Ordering::make(desc->keyPattern()));
+            index = new RocksUniqueIndex(_db.get(), prefix, ident.toString(),
+                                         Ordering::make(desc->keyPattern()), std::move(config));
         } else {
-            auto si = new RocksStandardIndex(_db.get(), _getIdentPrefix(ident), ident.toString(),
-                                             Ordering::make(desc->keyPattern()));
+            auto si = new RocksStandardIndex(_db.get(), prefix, ident.toString(),
+                                             Ordering::make(desc->keyPattern()), std::move(config));
             if (rocksGlobalOptions.singleDeleteIndex) {
                 si->enableSingleDelete();
             }
@@ -396,7 +409,7 @@ namespace mongo {
 
         // calculate which prefixes we need to drop
         std::vector<std::string> prefixesToDrop;
-        prefixesToDrop.push_back(_getIdentPrefix(ident));
+        prefixesToDrop.push_back(_extractPrefix(_getIdentConfig(ident)));
         if (_oplogIdent == ident.toString()) {
             // if we're dropping oplog, we also need to drop keys from RocksOplogKeyTracker (they
             // are stored at prefix+1)
@@ -419,8 +432,8 @@ namespace mongo {
 
         // remove from map
         {
-            stdx::lock_guard<stdx::mutex> lk(_identPrefixMapMutex);
-            _identPrefixMap.erase(ident);
+            stdx::lock_guard<stdx::mutex> lk(_identMapMutex);
+            _identMap.erase(ident);
         }
 
         // instruct compaction filter to start deleting
@@ -451,13 +464,13 @@ namespace mongo {
     }
 
     bool RocksEngine::hasIdent(OperationContext* opCtx, StringData ident) const {
-        stdx::lock_guard<stdx::mutex> lk(_identPrefixMapMutex);
-        return _identPrefixMap.find(ident) != _identPrefixMap.end();
+        stdx::lock_guard<stdx::mutex> lk(_identMapMutex);
+        return _identMap.find(ident) != _identMap.end();
     }
 
     std::vector<std::string> RocksEngine::getAllIdents(OperationContext* opCtx) const {
         std::vector<std::string> indents;
-        for (auto& entry : _identPrefixMap) {
+        for (auto& entry : _identMap) {
             indents.push_back(entry.first);
         }
         return indents;
@@ -533,22 +546,24 @@ namespace mongo {
     }
 
     // non public api
-    Status RocksEngine::_createIdentPrefix(StringData ident) {
+    Status RocksEngine::_createIdent(StringData ident, BSONObjBuilder* configBuilder) {
+        BSONObj config;
         uint32_t prefix = 0;
         {
-            stdx::lock_guard<stdx::mutex> lk(_identPrefixMapMutex);
-            if (_identPrefixMap.find(ident) != _identPrefixMap.end()) {
+            stdx::lock_guard<stdx::mutex> lk(_identMapMutex);
+            if (_identMap.find(ident) != _identMap.end()) {
                 // already exists
                 return Status::OK();
             }
 
             prefix = ++_maxPrefix;
-            _identPrefixMap[ident] = prefix;
+            configBuilder->append("prefix", static_cast<int32_t>(prefix));
+
+            config = std::move(configBuilder->obj());
+            _identMap[ident] = config.copy();
         }
 
         BSONObjBuilder builder;
-        builder.append("prefix", static_cast<int32_t>(prefix));
-        BSONObj config = builder.obj();
 
         auto s = _db->Put(rocksdb::WriteOptions(), kMetadataPrefix + ident.toString(),
                           rocksdb::Slice(config.objdata(), config.objsize()));
@@ -562,11 +577,15 @@ namespace mongo {
         return rocksToMongoStatus(s);
     }
 
-    std::string RocksEngine::_getIdentPrefix(StringData ident) {
-        stdx::lock_guard<stdx::mutex> lk(_identPrefixMapMutex);
-        auto prefixIter = _identPrefixMap.find(ident);
-        invariant(prefixIter != _identPrefixMap.end());
-        return encodePrefix(prefixIter->second);
+    BSONObj RocksEngine::_getIdentConfig(StringData ident) {
+        stdx::lock_guard<stdx::mutex> lk(_identMapMutex);
+        auto identIter = _identMap.find(ident);
+        invariant(identIter != _identMap.end());
+        return identIter->second.copy();
+    }
+
+    std::string RocksEngine::_extractPrefix(const BSONObj& config) {
+        return encodePrefix(config.getField("prefix").numberInt());
     }
 
     rocksdb::Options RocksEngine::_options() const {

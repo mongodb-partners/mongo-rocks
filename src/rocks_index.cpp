@@ -62,6 +62,10 @@ namespace mongo {
     using std::vector;
 
     namespace {
+        static const int kKeyStringV0Version = 0;
+        static const int kKeyStringV1Version = 1;
+        static const int kMinimumIndexVersion = kKeyStringV0Version;
+        static const int kMaximumIndexVersion = kKeyStringV1Version;
 
         /**
          * Strips the field names from a BSON object
@@ -535,18 +539,33 @@ namespace mongo {
     /// RocksIndexBase
 
     RocksIndexBase::RocksIndexBase(rocksdb::DB* db, std::string prefix, std::string ident,
-                                   Ordering order)
+                                   Ordering order, const BSONObj& config)
         : _db(db),
           _prefix(prefix),
           _ident(std::move(ident)),
-          _order(order),
-          _keyStringVersion(KeyString::Version::V0)  // TODO: migrate to V1
+          _order(order)
     {
         uint64_t storageSize;
         std::string nextPrefix = std::move(rocksGetNextPrefix(_prefix));
         rocksdb::Range wholeRange(_prefix, nextPrefix);
         _db->GetApproximateSizes(&wholeRange, 1, &storageSize);
         _indexStorageSize.store(static_cast<long long>(storageSize), std::memory_order_relaxed);
+
+        int indexFormatVersion = 0; // default
+        if (config.hasField("index_format_version")) {
+          indexFormatVersion = config.getField("index_format_version").numberInt();
+        }
+
+        if (indexFormatVersion < kMinimumIndexVersion ||
+            indexFormatVersion > kMaximumIndexVersion) {
+            Status indexVersionStatus(
+                ErrorCodes::UnsupportedFormat,
+                "Unrecognized index format -- you might want to upgrade MongoDB");
+            fassertFailedWithStatusNoTrace(28579, indexVersionStatus);
+        }
+
+        _keyStringVersion = indexFormatVersion >= kKeyStringV1Version ? KeyString::Version::V1
+                                                                      : KeyString::Version::V0;
     }
 
     void RocksIndexBase::fullValidate(OperationContext* txn, long long* numKeysOut,
@@ -583,6 +602,10 @@ namespace mongo {
             std::max(_indexStorageSize.load(std::memory_order_relaxed), static_cast<long long>(1)));
     }
 
+    void RocksIndexBase::generateConfig(BSONObjBuilder* configBuilder) {
+        configBuilder->append("index_format_version", static_cast<int32_t>(kMaximumIndexVersion));
+    }
+
     std::string RocksIndexBase::_makePrefixedKey(const std::string& prefix,
                                                  const KeyString& encodedKey) {
         std::string key(prefix);
@@ -593,8 +616,8 @@ namespace mongo {
     /// RocksUniqueIndex
 
     RocksUniqueIndex::RocksUniqueIndex(rocksdb::DB* db, std::string prefix, std::string ident,
-                                       Ordering order)
-        : RocksIndexBase(db, prefix, ident, order) {}
+                                       Ordering order, const BSONObj& config)
+        : RocksIndexBase(db, prefix, ident, order, config) {}
 
     Status RocksUniqueIndex::insert(OperationContext* txn, const BSONObj& key, const RecordId& loc,
                                     bool dupsAllowed) {
@@ -784,8 +807,8 @@ namespace mongo {
 
     /// RocksStandardIndex
     RocksStandardIndex::RocksStandardIndex(rocksdb::DB* db, std::string prefix, std::string ident,
-                                           Ordering order)
-        : RocksIndexBase(db, prefix, ident, order),
+                                           Ordering order, const BSONObj& config)
+        : RocksIndexBase(db, prefix, ident, order, config),
           useSingleDelete(false) {}
 
     Status RocksStandardIndex::insert(OperationContext* txn, const BSONObj& key,
