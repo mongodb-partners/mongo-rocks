@@ -74,7 +74,7 @@ namespace mongo {
     class RocksEngine final : public KVEngine {
         MONGO_DISALLOW_COPYING( RocksEngine );
     public:
-        RocksEngine(const std::string& path, bool durable);
+        RocksEngine(const std::string& path, bool durable, int formatVersion);
         virtual ~RocksEngine();
 
         virtual RecoveryUnit* newRecoveryUnit() override;
@@ -177,6 +177,7 @@ namespace mongo {
         std::shared_ptr<rocksdb::Statistics> _statistics;
 
         const bool _durable;
+        const int _formatVersion;
 
         // ident map stores mapping from ident to a BSON config
         mutable stdx::mutex _identMapMutex;

@@ -55,7 +55,11 @@ namespace mongo {
                 options.forRepair = params.repair;
                 // Mongo keeps some files in params.dbpath. To avoid collision, put out files under
                 // db/ directory
-                auto engine = new RocksEngine(params.dbpath + "/db", params.dur);
+                if (formatVersion == -1) {
+                    // it's a new database, set it to the newest rocksdb version kRocksFormatVersion
+                    formatVersion = kRocksFormatVersion;
+                }
+                auto engine = new RocksEngine(params.dbpath + "/db", params.dur, formatVersion);
                 // Intentionally leaked.
                 auto leaked __attribute__((unused)) = new RocksServerStatusSection(engine);
                 auto leaked2 __attribute__((unused)) = new RocksRateLimiterServerParameter(engine);
@@ -80,15 +84,27 @@ namespace mongo {
                                   "this database with older version of mongo, please reload the "
                                   "database using mongodump and mongorestore");
                 }
-                if (element.numberInt() != kRocksFormatVersion) {
+                if (element.numberInt() < kMinSupportedRocksFormatVersion) {
+                    // database is older than what we can understand
                     return Status(
                         ErrorCodes::UnsupportedFormat,
                         str::stream()
-                            << "Database created with format version " << element.numberInt()
-                            << " and this version only supports format version "
-                            << kRocksFormatVersion
+                            << "Database was created with old format version " << element.numberInt()
+                            << " and this version only supports format versions from "
+                            << kMinSupportedRocksFormatVersion << " to " << kRocksFormatVersion
+                            << ". Please reload the database using mongodump and mongorestore");
+                } else if (element.numberInt() > kRocksFormatVersion) {
+                    // database is newer than what we can understand
+                    return Status(
+                        ErrorCodes::UnsupportedFormat,
+                        str::stream()
+                            << "Database was created with newer format version " <<
+                            element.numberInt()
+                            << " and this version only supports format versions from "
+                            << kMinSupportedRocksFormatVersion << " to " << kRocksFormatVersion
                             << ". Please reload the database using mongodump and mongorestore");
                 }
+                formatVersion = element.numberInt();
                 return Status::OK();
             }
 
@@ -102,15 +118,18 @@ namespace mongo {
             // Current disk format. We bump this number when we change the disk format. MongoDB will
             // fail to start if the versions don't match. In that case a user needs to run mongodump
             // and mongorestore.
-            // * Version 1 was the format with many column families -- one column family for each
+            // * Version 0 was the format with many column families -- one column family for each
             // collection and index
-            // * Version 2 keeps all collections and indexes in a single column family
-            // * Version 3 (current) reserves two prefixes for oplog. one prefix keeps the oplog
+            // * Version 1 keeps all collections and indexes in a single column family
+            // * Version 2 reserves two prefixes for oplog. one prefix keeps the oplog
             // documents and another only keeps keys. That way, we can cleanup the oplog without
             // reading full documents
-            // oplog cleanup
-            const int kRocksFormatVersion = 2;
+            // * Version 3 (current) understands the Decimal128 index format. It also understands
+            // the version 2, so it's backwards compatible, but not forward compatible
+            const int kRocksFormatVersion = 3;
+            const int kMinSupportedRocksFormatVersion = 2;
             const std::string kRocksFormatVersionString = "rocksFormatVersion";
+            int mutable formatVersion = -1;
         };
     } // namespace
 

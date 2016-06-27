@@ -68,7 +68,7 @@ namespace mongo {
 
         std::unique_ptr<SortedDataInterface> newSortedDataInterface(bool unique) {
             BSONObjBuilder configBuilder;
-            RocksIndexBase::generateConfig(&configBuilder);
+            RocksIndexBase::generateConfig(&configBuilder, 3);
             if (unique) {
                 return stdx::make_unique<RocksUniqueIndex>(_db.get(), "prefix", "ident", _order,
                                                            configBuilder.obj());
