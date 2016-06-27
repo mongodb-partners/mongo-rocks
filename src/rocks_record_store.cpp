@@ -203,7 +203,7 @@ namespace mongo {
           _cappedDeleteCheckCount(0),
           _isOplog(NamespaceString::oplog(ns)),
           _oplogKeyTracker(_isOplog
-                               ? new RocksOplogKeyTracker(std::move(rocksGetNextPrefix(_prefix)))
+                               ? new RocksOplogKeyTracker(rocksGetNextPrefix(_prefix))
                                : nullptr),
           _cappedOldestKeyHint(0),
           _cappedVisibilityManager(
