@@ -532,7 +532,7 @@ namespace mongo {
         : _db(db), _prefix(prefix), _ident(std::move(ident)), _order(order) {
         {
             uint64_t storageSize;
-            std::string nextPrefix = std::move(rocksGetNextPrefix(_prefix));
+            std::string nextPrefix = rocksGetNextPrefix(_prefix);
             rocksdb::Range wholeRange(_prefix, nextPrefix);
             _db->GetApproximateSizes(&wholeRange, 1, &storageSize);
             _indexStorageSize.store(static_cast<long long>(storageSize), std::memory_order_relaxed);
