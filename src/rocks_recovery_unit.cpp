@@ -121,6 +121,11 @@ namespace mongo {
                 endOp();
             }
 
+            virtual void SeekForPrev(const rocksdb::Slice& target) {
+              // noop since we don't use it and it's only available in
+              // RocksDB 4.12 and higher
+            }
+
             virtual rocksdb::Slice key() const {
                 rocksdb::Slice strippedKey = _baseIterator->key();
                 strippedKey.remove_prefix(_prefix.size());
