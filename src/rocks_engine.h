@@ -84,7 +84,7 @@ namespace mongo {
                                          StringData ident,
                                          const CollectionOptions& options) override;
 
-        virtual RecordStore* getRecordStore(OperationContext* opCtx, StringData ns,
+        virtual std::unique_ptr<RecordStore> getRecordStore(OperationContext* opCtx, StringData ns,
                                             StringData ident,
                                             const CollectionOptions& options) override;
 
