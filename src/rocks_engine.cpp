@@ -41,34 +41,35 @@
 #include <rocksdb/cache.h>
 #include <rocksdb/compaction_filter.h>
 #include <rocksdb/comparator.h>
+#include <rocksdb/convenience.h>
 #include <rocksdb/db.h>
 #include <rocksdb/experimental.h>
-#include <rocksdb/slice.h>
+#include <rocksdb/filter_policy.h>
 #include <rocksdb/options.h>
 #include <rocksdb/rate_limiter.h>
+#include <rocksdb/slice.h>
 #include <rocksdb/table.h>
-#include <rocksdb/convenience.h>
-#include <rocksdb/filter_policy.h>
-#include <rocksdb/utilities/write_batch_with_index.h>
 #include <rocksdb/utilities/checkpoint.h>
+#include <rocksdb/utilities/write_batch_with_index.h>
 
-#include "mongo/db/client.h"
 #include "mongo/db/catalog/collection_options.h"
+#include "mongo/db/client.h"
 #include "mongo/db/index/index_descriptor.h"
 #include "mongo/db/namespace_string.h"
 #include "mongo/db/operation_context.h"
 #include "mongo/db/server_parameters.h"
 #include "mongo/db/storage/journal_listener.h"
 #include "mongo/platform/endian.h"
+#include "mongo/stdx/memory.h"
 #include "mongo/util/background.h"
 #include "mongo/util/log.h"
 #include "mongo/util/processinfo.h"
 
 #include "rocks_counter_manager.h"
 #include "rocks_global_options.h"
+#include "rocks_index.h"
 #include "rocks_record_store.h"
 #include "rocks_recovery_unit.h"
-#include "rocks_index.h"
 #include "rocks_util.h"
 
 #define ROCKS_TRACE log()
@@ -166,8 +167,8 @@ namespace mongo {
 
         class PrefixDeletingCompactionFilterFactory : public rocksdb::CompactionFilterFactory {
         public:
-            explicit
-            PrefixDeletingCompactionFilterFactory(const RocksEngine* engine) : _engine(engine) {}
+            explicit PrefixDeletingCompactionFilterFactory(const RocksEngine* engine)
+                : _engine(engine) {}
 
             virtual std::unique_ptr<rocksdb::CompactionFilter> CreateCompactionFilter(
                 const rocksdb::CompactionFilter::Context& context) override {
@@ -343,8 +344,9 @@ namespace mongo {
         return s;
     }
 
-    RecordStore* RocksEngine::getRecordStore(OperationContext* opCtx, StringData ns,
-                                             StringData ident, const CollectionOptions& options) {
+    std::unique_ptr<RecordStore> RocksEngine::getRecordStore(OperationContext* opCtx, StringData ns,
+                                                             StringData ident,
+                                                             const CollectionOptions& options) {
         if (NamespaceString::oplog(ns)) {
             _oplogIdent = ident.toString();
         }
@@ -352,18 +354,17 @@ namespace mongo {
         auto config = _getIdentConfig(ident);
         std::string prefix = _extractPrefix(config);
 
-        RocksRecordStore* recordStore =
-            options.capped
-                ? new RocksRecordStore(
-                      ns, ident, _db.get(), _counterManager.get(), prefix, true,
-                      options.cappedSize ? options.cappedSize : 4096,  // default size
-                      options.cappedMaxDocs ? options.cappedMaxDocs : -1)
-                : new RocksRecordStore(ns, ident, _db.get(), _counterManager.get(),
-                                       prefix);
+        std::unique_ptr<RocksRecordStore> recordStore =
+            options.capped ? stdx::make_unique<RocksRecordStore>(
+                                 ns, ident, _db.get(), _counterManager.get(), prefix, true,
+                                 options.cappedSize ? options.cappedSize : 4096,  // default size
+                                 options.cappedMaxDocs ? options.cappedMaxDocs : -1)
+                           : stdx::make_unique<RocksRecordStore>(ns, ident, _db.get(),
+                                                                 _counterManager.get(), prefix);
 
         {
             stdx::lock_guard<stdx::mutex> lk(_identObjectMapMutex);
-            _identCollectionMap[ident] = recordStore;
+            _identCollectionMap[ident] = recordStore.get();
         }
         return recordStore;
     }
@@ -379,7 +380,6 @@ namespace mongo {
     SortedDataInterface* RocksEngine::getSortedDataInterface(OperationContext* opCtx,
                                                              StringData ident,
                                                              const IndexDescriptor* desc) {
-
         auto config = _getIdentConfig(ident);
         std::string prefix = _extractPrefix(config);
 
@@ -595,7 +595,7 @@ namespace mongo {
         rocksdb::BlockBasedTableOptions table_options;
         table_options.block_cache = _block_cache;
         table_options.filter_policy.reset(rocksdb::NewBloomFilterPolicy(10, false));
-        table_options.block_size = 16 * 1024; // 16KB
+        table_options.block_size = 16 * 1024;  // 16KB
         table_options.format_version = 2;
         options.table_factory.reset(rocksdb::NewBlockBasedTableFactory(table_options));
 
@@ -604,7 +604,7 @@ namespace mongo {
         options.max_write_buffer_number = 4;
         options.max_background_compactions = 8;
         options.max_background_flushes = 2;
-        options.target_file_size_base = 64 * 1024 * 1024; // 64MB
+        options.target_file_size_base = 64 * 1024 * 1024;  // 64MB
         options.soft_rate_limit = 2.5;
         options.hard_rate_limit = 3;
         options.level_compaction_dynamic_level_bytes = true;
