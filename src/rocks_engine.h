@@ -31,16 +31,16 @@
 
 #include <list>
 #include <map>
-#include <string>
 #include <memory>
+#include <string>
 #include <unordered_set>
 
 #include <boost/optional.hpp>
 
 #include <rocksdb/cache.h>
 #include <rocksdb/rate_limiter.h>
-#include <rocksdb/status.h>
 #include <rocksdb/statistics.h>
+#include <rocksdb/status.h>
 
 #include "mongo/base/disallow_copying.h"
 #include "mongo/bson/ordering.h"
@@ -49,9 +49,9 @@
 
 #include "rocks_compaction_scheduler.h"
 #include "rocks_counter_manager.h"
-#include "rocks_transaction.h"
-#include "rocks_snapshot_manager.h"
 #include "rocks_durability_manager.h"
+#include "rocks_snapshot_manager.h"
+#include "rocks_transaction.h"
 
 namespace rocksdb {
     class ColumnFamilyHandle;
@@ -72,21 +72,20 @@ namespace mongo {
     class JournalListener;
 
     class RocksEngine final : public KVEngine {
-        MONGO_DISALLOW_COPYING( RocksEngine );
+        MONGO_DISALLOW_COPYING(RocksEngine);
+
     public:
         RocksEngine(const std::string& path, bool durable, int formatVersion);
         virtual ~RocksEngine();
 
         virtual RecoveryUnit* newRecoveryUnit() override;
 
-        virtual Status createRecordStore(OperationContext* opCtx,
-                                         StringData ns,
-                                         StringData ident,
+        virtual Status createRecordStore(OperationContext* opCtx, StringData ns, StringData ident,
                                          const CollectionOptions& options) override;
 
-        virtual RecordStore* getRecordStore(OperationContext* opCtx, StringData ns,
-                                            StringData ident,
-                                            const CollectionOptions& options) override;
+        virtual std::unique_ptr<RecordStore> getRecordStore(
+            OperationContext* opCtx, StringData ns, StringData ident,
+            const CollectionOptions& options) override;
 
         virtual Status createSortedDataInterface(OperationContext* opCtx, StringData ident,
                                                  const IndexDescriptor* desc) override;
@@ -99,15 +98,11 @@ namespace mongo {
 
         virtual bool hasIdent(OperationContext* opCtx, StringData ident) const override;
 
-        virtual std::vector<std::string> getAllIdents( OperationContext* opCtx ) const override;
+        virtual std::vector<std::string> getAllIdents(OperationContext* opCtx) const override;
 
-        virtual bool supportsDocLocking() const override {
-            return true;
-        }
+        virtual bool supportsDocLocking() const override { return true; }
 
-        virtual bool supportsDirectoryPerDB() const override {
-            return false;
-        }
+        virtual bool supportsDirectoryPerDB() const override { return false; }
 
         virtual int flushAllFiles(bool sync) override;
 
@@ -121,15 +116,14 @@ namespace mongo {
 
         virtual int64_t getIdentSize(OperationContext* opCtx, StringData ident);
 
-        virtual Status repairIdent(OperationContext* opCtx,
-                                    StringData ident) {
+        virtual Status repairIdent(OperationContext* opCtx, StringData ident) {
             return Status::OK();
         }
 
         virtual void cleanShutdown();
 
         virtual SnapshotManager* getSnapshotManager() const final {
-            return (SnapshotManager*) &_snapshotManager;
+            return (SnapshotManager*)&_snapshotManager;
         }
 
         /**
@@ -157,9 +151,7 @@ namespace mongo {
 
         Status backup(const std::string& path);
 
-        rocksdb::Statistics* getStatistics() const {
-          return _statistics.get();
-        }
+        rocksdb::Statistics* getStatistics() const { return _statistics.get(); }
 
     private:
         Status _createIdent(StringData ident, BSONObjBuilder* configBuilder);
@@ -217,5 +209,4 @@ namespace mongo {
         class RocksJournalFlusher;
         std::unique_ptr<RocksJournalFlusher> _journalFlusher;  // Depends on _durabilityManager
     };
-
 }
