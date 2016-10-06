@@ -60,6 +60,7 @@
 #include "mongo/db/server_parameters.h"
 #include "mongo/db/storage/journal_listener.h"
 #include "mongo/platform/endian.h"
+#include "mongo/stdx/memory.h"
 #include "mongo/util/background.h"
 #include "mongo/util/log.h"
 #include "mongo/util/processinfo.h"
@@ -343,7 +344,7 @@ namespace mongo {
         return s;
     }
 
-    RecordStore* RocksEngine::getRecordStore(OperationContext* opCtx, StringData ns,
+    std::unique_ptr<RecordStore> RocksEngine::getRecordStore(OperationContext* opCtx, StringData ns,
                                              StringData ident, const CollectionOptions& options) {
         if (NamespaceString::oplog(ns)) {
             _oplogIdent = ident.toString();
@@ -352,18 +353,18 @@ namespace mongo {
         auto config = _getIdentConfig(ident);
         std::string prefix = _extractPrefix(config);
 
-        RocksRecordStore* recordStore =
+        std::unique_ptr<RocksRecordStore> recordStore =
             options.capped
-                ? new RocksRecordStore(
+                ? stdx::make_unique<RocksRecordStore>(
                       ns, ident, _db.get(), _counterManager.get(), prefix, true,
                       options.cappedSize ? options.cappedSize : 4096,  // default size
                       options.cappedMaxDocs ? options.cappedMaxDocs : -1)
-                : new RocksRecordStore(ns, ident, _db.get(), _counterManager.get(),
+                : stdx::make_unique<RocksRecordStore>(ns, ident, _db.get(), _counterManager.get(),
                                        prefix);
 
         {
             stdx::lock_guard<stdx::mutex> lk(_identObjectMapMutex);
-            _identCollectionMap[ident] = recordStore;
+            _identCollectionMap[ident] = recordStore.get();
         }
         return recordStore;
     }
