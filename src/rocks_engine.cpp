@@ -616,6 +616,9 @@ namespace mongo {
         options.optimize_filters_for_hits = true;
         options.compaction_filter_factory.reset(new PrefixDeletingCompactionFilterFactory(this));
         options.enable_thread_tracking = true;
+        // Enable concurrent memtable
+        options.allow_concurrent_memtable_write = true;
+        options.enable_write_thread_adaptive_yield = true;
 
         options.compression_per_level.resize(3);
         options.compression_per_level[0] = rocksdb::kNoCompression;
