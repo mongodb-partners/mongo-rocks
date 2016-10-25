@@ -56,6 +56,7 @@ env.Library(
         ],
     LIBDEPS= [
         'storage_rocks_base',
+        '$BUILD_DIR/mongo/db/storage/engine_extension'
         ]
     )
 
