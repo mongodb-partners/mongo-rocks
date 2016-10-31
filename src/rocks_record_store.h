@@ -61,6 +61,7 @@ namespace mongo {
             : _cappedCallback(cappedCallback), _oplog_highestSeen(RecordId::min()) {}
         void dealtWithCappedRecord(const RecordId& record);
         void updateHighestSeen(const RecordId& record);
+        void setHighestSeen(const RecordId& record);
         void addUncommittedRecord(OperationContext* txn, const RecordId& record);
 
         // a bit hacky function, but does the job
