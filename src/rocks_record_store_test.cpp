@@ -62,6 +62,7 @@ namespace mongo {
             ASSERT(s.ok());
             _db.reset(db);
             _counterManager.reset(new RocksCounterManager(_db.get(), true));
+            _durabilityManager.reset(new RocksDurabilityManager(_db.get(), true));
         }
 
         virtual std::unique_ptr<RecordStore> newNonCappedRecordStore() {
@@ -87,7 +88,8 @@ namespace mongo {
 
         RecoveryUnit* newRecoveryUnit() final {
             return new RocksRecoveryUnit(&_transactionEngine, &_snapshotManager, _db.get(),
-                                         _counterManager.get(), nullptr, true);
+                                         _counterManager.get(), nullptr, _durabilityManager.get(),
+                                         true);
         }
 
         bool supportsDocLocking() final {
@@ -100,6 +102,7 @@ namespace mongo {
         std::unique_ptr<rocksdb::DB> _db;
         RocksTransactionEngine _transactionEngine;
         RocksSnapshotManager _snapshotManager;
+        std::unique_ptr<RocksDurabilityManager> _durabilityManager;
         std::unique_ptr<RocksCounterManager> _counterManager;
     };
 

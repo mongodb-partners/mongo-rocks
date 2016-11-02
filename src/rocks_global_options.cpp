@@ -46,7 +46,7 @@ namespace mongo {
         rocksOptions.addOptionChaining("storage.rocksdb.cacheSizeGB", "rocksdbCacheSizeGB",
                                        moe::Int,
                                        "maximum amount of memory to allocate for cache; "
-                                       "defaults to 1/2 of physical RAM").validRange(1, 10000);
+                                       "defaults to 30%% of physical RAM").validRange(1, 10000);
         rocksOptions.addOptionChaining("storage.rocksdb.compression", "rocksdbCompression",
                                        moe::String,
                                        "block compression algorithm for collection data "
