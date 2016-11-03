@@ -51,6 +51,7 @@
 #include "rocks_transaction.h"
 #include "rocks_counter_manager.h"
 #include "rocks_snapshot_manager.h"
+#include "rocks_durability_manager.h"
 
 namespace rocksdb {
     class DB;
@@ -82,7 +83,8 @@ namespace mongo {
         RocksRecoveryUnit(RocksTransactionEngine* transactionEngine,
                           RocksSnapshotManager* snapshotManager, rocksdb::DB* db,
                           RocksCounterManager* counterManager,
-                          RocksCompactionScheduler* compactionScheduler, bool durable);
+                          RocksCompactionScheduler* compactionScheduler,
+                          RocksDurabilityManager* durabilityManager, bool durable);
         virtual ~RocksRecoveryUnit();
 
         virtual void beginUnitOfWork(OperationContext* opCtx);
@@ -139,7 +141,7 @@ namespace mongo {
 
         RocksRecoveryUnit* newRocksRecoveryUnit() {
             return new RocksRecoveryUnit(_transactionEngine, _snapshotManager, _db, _counterManager,
-                                         _compactionScheduler, _durable);
+                                         _compactionScheduler, _durabilityManager, _durable);
         }
 
         struct Counter {
@@ -173,11 +175,8 @@ namespace mongo {
         rocksdb::DB* _db;                                // not owned
         RocksCounterManager* _counterManager;            // not owned
         RocksCompactionScheduler* _compactionScheduler;  // not owned
+        RocksDurabilityManager* _durabilityManager;      // not owned
 
-        // if true, next write will be synced
-        bool _sync;
-        // true means that our write was synced to disk
-        bool _synced;
         const bool _durable;
 
         RocksTransaction _transaction;
