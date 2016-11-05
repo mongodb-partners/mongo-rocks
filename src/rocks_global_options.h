@@ -41,7 +41,8 @@ namespace mongo {
             : cacheSizeGB(0),
               maxWriteMBPerSec(1024),
               compression("snappy"),
-              crashSafeCounters(false) {}
+              crashSafeCounters(false),
+              singleDeleteIndex(false) {}
 
         Status add(moe::OptionSection* options);
         Status store(const moe::Environment& params, const std::vector<std::string>& args);
@@ -53,6 +54,8 @@ namespace mongo {
         std::string configString;
 
         bool crashSafeCounters;
+        bool counters;
+        bool singleDeleteIndex;
     };
 
     extern RocksGlobalOptions rocksGlobalOptions;

@@ -75,6 +75,19 @@ namespace mongo {
             .setDefault(moe::Value(false))
             .hidden();
 
+        rocksOptions
+            .addOptionChaining("storage.rocksdb.counters",
+                               "rocksdbCounters",
+                               moe::Bool,
+                               "If true, we will turn on RocksDB's advanced counters")
+            .setDefault(moe::Value(false));
+        rocksOptions
+            .addOptionChaining("storage.rocksdb.singleDeleteIndex",
+                               "rocksdbSingleDeleteIndex", moe::Bool,
+                               "This is still experimental. "
+                               "Use this only if you know what you're doing")
+            .setDefault(moe::Value(false));
+
         return options->addSection(rocksOptions);
     }
 
@@ -103,6 +116,16 @@ namespace mongo {
             rocksGlobalOptions.crashSafeCounters =
                 params["storage.rocksdb.crashSafeCounters"].as<bool>();
             log() << "Crash safe counters: " << rocksGlobalOptions.crashSafeCounters;
+        }
+        if (params.count("storage.rocksdb.counters")) {
+            rocksGlobalOptions.counters =
+              params["storage.rocksdb.counters"].as<bool>();
+            log() << "Counters: " << rocksGlobalOptions.counters;
+        }
+        if (params.count("storage.rocksdb.singleDeleteIndex")) {
+            rocksGlobalOptions.singleDeleteIndex =
+              params["storage.rocksdb.singleDeleteIndex"].as<bool>();
+            log() << "Use SingleDelete in index: " << rocksGlobalOptions.singleDeleteIndex;
         }
 
         return Status::OK();

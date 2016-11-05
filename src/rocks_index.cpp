@@ -540,7 +540,7 @@ namespace mongo {
     }
 
     void RocksIndexBase::fullValidate(OperationContext* txn, bool full, long long* numKeysOut,
-                                      BSONObjBuilder* output) const {
+                                      ValidateResults* fullResults) const {
         if (numKeysOut) {
             std::unique_ptr<SortedDataInterface::Cursor> cursor(newCursor(txn, 1));
 
@@ -772,7 +772,8 @@ namespace mongo {
     /// RocksStandardIndex
     RocksStandardIndex::RocksStandardIndex(rocksdb::DB* db, std::string prefix, std::string ident,
                                            Ordering order)
-        : RocksIndexBase(db, prefix, ident, order) {}
+        : RocksIndexBase(db, prefix, ident, order),
+          useSingleDelete(false) {}
 
     Status RocksStandardIndex::insert(OperationContext* txn, const BSONObj& key,
                                       const RecordId& loc, bool dupsAllowed) {
@@ -807,6 +808,18 @@ namespace mongo {
     void RocksStandardIndex::unindex(OperationContext* txn, const BSONObj& key, const RecordId& loc,
                                      bool dupsAllowed) {
         invariant(dupsAllowed);
+        // When DB parameter failIndexKeyTooLong is set to false,
+        // this method may be called for non-existing
+        // keys with the length exceeding the maximum allowed.
+        // Since such keys cannot be in the storage in any case,
+        // executing the following code results in:
+        // - corruption of index storage size value, and
+        // - an attempt to single-delete non-existing key which may
+        //   potentially lead to consecutive single-deletion of the key.
+        // Filter out long keys to prevent the problems described.
+        if (!checkKeySize(key).isOK()) {
+            return;
+        }
 
         KeyString encodedKey(key, _order, loc);
         std::string prefixedKey(_makePrefixedKey(_prefix, encodedKey));
@@ -818,7 +831,11 @@ namespace mongo {
 
         _indexStorageSize.fetch_sub(static_cast<long long>(prefixedKey.size()),
                                     std::memory_order_relaxed);
-        ru->writeBatch()->Delete(prefixedKey);
+        if (useSingleDelete) {
+            ru->writeBatch()->SingleDelete(prefixedKey);
+        } else {
+            ru->writeBatch()->Delete(prefixedKey);
+        }
     }
 
     std::unique_ptr<SortedDataInterface::Cursor> RocksStandardIndex::newCursor(

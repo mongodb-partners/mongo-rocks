@@ -216,6 +216,10 @@ namespace mongo {
         _maxWriteMBPerSec = rocksGlobalOptions.maxWriteMBPerSec;
         _rateLimiter.reset(
             rocksdb::NewGenericRateLimiter(static_cast<int64_t>(_maxWriteMBPerSec) * 1024 * 1024));
+        if (rocksGlobalOptions.counters) {
+            _statistics = rocksdb::CreateDBStatistics();
+        }
+
         // open DB
         rocksdb::DB* db;
         auto s = rocksdb::DB::Open(_options(), path, &db);
@@ -371,8 +375,12 @@ namespace mongo {
             index = new RocksUniqueIndex(_db.get(), _getIdentPrefix(ident), ident.toString(),
                                          Ordering::make(desc->keyPattern()));
         } else {
-            index = new RocksStandardIndex(_db.get(), _getIdentPrefix(ident), ident.toString(),
-                                           Ordering::make(desc->keyPattern()));
+            auto si = new RocksStandardIndex(_db.get(), _getIdentPrefix(ident), ident.toString(),
+                                             Ordering::make(desc->keyPattern()));
+            if (rocksGlobalOptions.singleDeleteIndex) {
+                si->enableSingleDelete();
+            }
+            index = si;
         }
         {
             stdx::lock_guard<stdx::mutex> lk(_identObjectMapMutex);
@@ -607,6 +615,8 @@ namespace mongo {
             log() << "Unknown compression, will use default (snappy)";
             options.compression_per_level[2] = rocksdb::kSnappyCompression;
         }
+
+        options.statistics = _statistics;
 
         // create the DB if it's not already present
         options.create_if_missing = true;
