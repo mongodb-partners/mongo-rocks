@@ -43,7 +43,9 @@
 #include "mongo/db/storage/capped_callback.h"
 #include "mongo/db/storage/record_store.h"
 #include "mongo/platform/atomic_word.h"
+#include "mongo/stdx/condition_variable.h"
 #include "mongo/stdx/mutex.h"
+#include "mongo/stdx/thread.h"
 #include "mongo/util/timer.h"
 
 namespace rocksdb {
@@ -55,11 +57,17 @@ namespace rocksdb {
 namespace mongo {
 
     class RocksCounterManager;
+    class RocksDurabilityManager;
+    class RocksRecoveryUnit;
+    class RocksOplogKeyTracker;
+    class RocksRecordStore;
+
+    typedef std::list<RecordId> SortedRecordIds;
+
     class CappedVisibilityManager {
     public:
-        CappedVisibilityManager(CappedCallback* cappedCallback)
-            : _cappedCallback(cappedCallback), _oplog_highestSeen(RecordId::min()) {}
-        void dealtWithCappedRecord(const RecordId& record);
+        CappedVisibilityManager(RocksRecordStore* rs, RocksDurabilityManager* durabilityManager);
+        void dealtWithCappedRecord(SortedRecordIds::iterator it, bool didCommit);
         void updateHighestSeen(const RecordId& record);
         void setHighestSeen(const RecordId& record);
         void addUncommittedRecord(OperationContext* txn, const RecordId& record);
@@ -73,26 +81,34 @@ namespace mongo {
 
         RecordId lowestCappedHiddenRecord() const;
 
+        void waitForAllEarlierOplogWritesToBeVisible(OperationContext* txn) const;
+        void oplogJournalThreadLoop(RocksDurabilityManager* durabilityManager);
+        void joinOplogJournalThreadLoop();
+
     private:
         void _addUncommittedRecord_inlock(OperationContext* txn, const RecordId& record);
 
         // protects the state
-        mutable stdx::mutex _lock;
-        CappedCallback* _cappedCallback;
-        std::vector<RecordId> _uncommittedRecords;
+        mutable stdx::mutex _uncommittedRecordIdsMutex;
+        RocksRecordStore* const _rs;
+        SortedRecordIds _uncommittedRecords;
         RecordId _oplog_highestSeen;
-    };
+        bool _shuttingDown;
 
-    class RocksRecoveryUnit;
-    class RocksOplogKeyTracker;
+        // These use the _uncommittedRecordIdsMutex and are only used when _isOplog is true.
+        stdx::condition_variable _opsWaitingForJournalCV;
+        mutable stdx::condition_variable _opsBecameVisibleCV;
+        std::vector<SortedRecordIds::iterator> _opsWaitingForJournal;
+        stdx::thread _oplogJournalThread;
+    };
 
     class RocksRecordStore : public RecordStore {
     public:
         RocksRecordStore(StringData ns, StringData id, rocksdb::DB* db,
-                         RocksCounterManager* counterManager, std::string prefix,
+                         RocksCounterManager* counterManager,
+                         RocksDurabilityManager* durabilityManager, std::string prefix,
                          bool isCapped = false, int64_t cappedMaxSize = -1,
-                         int64_t cappedMaxDocs = -1,
-                         CappedCallback* cappedDeleteCallback = NULL);
+                         int64_t cappedMaxDocs = -1, CappedCallback* cappedDeleteCallback = NULL);
 
         virtual ~RocksRecordStore();
 
@@ -173,10 +189,13 @@ namespace mongo {
 
         virtual Status oplogDiskLocRegister(OperationContext* txn, const Timestamp& opTime);
 
+        void waitForAllEarlierOplogWritesToBeVisible(OperationContext* txn) const override;
+
         virtual void updateStatsAfterRepair(OperationContext* txn, long long numRecords,
                                             long long dataSize);
 
         void setCappedCallback(CappedCallback* cb) {
+          stdx::lock_guard<stdx::mutex> lk(_cappedCallbackMutex);
           _cappedCallback = cb;
         }
         bool cappedMaxDocs() const { invariant(_isCapped); return _cappedMaxDocs; }
@@ -189,7 +208,9 @@ namespace mongo {
 
         static rocksdb::Comparator* newRocksCollectionComparator();
 
+        class CappedInsertChange;
     private:
+        friend class CappedVisibilityManager;
         // we just need to expose _makePrefixedKey to RocksOplogKeyTracker
         friend class RocksOplogKeyTracker;
         // NOTE: Cursor might outlive the RecordStore. That's why we use all those
@@ -224,7 +245,7 @@ namespace mongo {
             bool _isCapped;
             bool _eof = false;
             bool _needFirstSeek = true;
-            bool _lastMoveWasRestore = false;
+            bool _skipNextAdvance = false;
             rocksdb::SequenceNumber _currentSequenceNumber;
             const RecordId _readUntilForOplog;
             RecordId _lastLoc;
@@ -258,6 +279,8 @@ namespace mongo {
         const int64_t _cappedMaxSizeSlack;  // when to start applying backpressure
         const int64_t _cappedMaxDocs;
         CappedCallback* _cappedCallback;
+        stdx::mutex _cappedCallbackMutex;  // guards _cappedCallback.
+
         mutable boost::timed_mutex _cappedDeleterMutex;  // see comment in ::cappedDeleteAsNeeded
         int _cappedDeleteCheckCount;      // see comment in ::cappedDeleteAsNeeded
 

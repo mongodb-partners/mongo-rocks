@@ -70,7 +70,7 @@ namespace mongo {
         }
         std::unique_ptr<RecordStore> newNonCappedRecordStore(const std::string& ns) {
             return stdx::make_unique<RocksRecordStore>(ns, "1", _db.get(), _counterManager.get(),
-                                                       "prefix");
+                                                       _durabilityManager.get(), "prefix");
         }
 
         std::unique_ptr<RecordStore> newCappedRecordStore(int64_t cappedMaxSize,
@@ -82,8 +82,8 @@ namespace mongo {
                                                           int64_t cappedMaxSize,
                                                           int64_t cappedMaxDocs) {
             return stdx::make_unique<RocksRecordStore>(ns, "1", _db.get(), _counterManager.get(),
-                                                       "prefix", true, cappedMaxSize,
-                                                       cappedMaxDocs);
+                                                       _durabilityManager.get(), "prefix", true,
+                                                       cappedMaxSize, cappedMaxDocs);
         }
 
         RecoveryUnit* newRecoveryUnit() final {
@@ -525,6 +525,8 @@ namespace mongo {
             w1.commit();
         }
 
+        rs->waitForAllEarlierOplogWritesToBeVisible(harnessHelper->newOperationContext().get());
+
         {  // now all 3 docs should be visible
             std::unique_ptr<OperationContext> opCtx(harnessHelper->newOperationContext());
             auto cursor = rs->getCursor(opCtx.get());
@@ -579,6 +581,8 @@ namespace mongo {
 
             w1.commit();
         }
+
+        rs->waitForAllEarlierOplogWritesToBeVisible(harnessHelper->newOperationContext().get());
 
         { // now all 3 docs should be visible
             std::unique_ptr<OperationContext> opCtx( harnessHelper->newOperationContext() );
