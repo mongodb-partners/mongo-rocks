@@ -356,17 +356,17 @@ namespace mongo {
         std::unique_ptr<RocksRecordStore> recordStore =
             options.capped
                 ? stdx::make_unique<RocksRecordStore>(
-                      ns, ident, _db.get(), _counterManager.get(), prefix, true,
-                      options.cappedSize ? options.cappedSize : 4096,  // default size
+                      ns, ident, _db.get(), _counterManager.get(), _durabilityManager.get(), prefix,
+                      true, options.cappedSize ? options.cappedSize : 4096,  // default size
                       options.cappedMaxDocs ? options.cappedMaxDocs : -1)
                 : stdx::make_unique<RocksRecordStore>(ns, ident, _db.get(), _counterManager.get(),
-                                       prefix);
+                                                      _durabilityManager.get(), prefix);
 
         {
             stdx::lock_guard<stdx::mutex> lk(_identObjectMapMutex);
             _identCollectionMap[ident] = recordStore.get();
         }
-        return recordStore;
+        return std::move(recordStore);
     }
 
     Status RocksEngine::createSortedDataInterface(OperationContext* opCtx, StringData ident,
