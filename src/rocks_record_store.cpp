@@ -751,7 +751,7 @@ namespace mongo {
             auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(txn);
             // If we already have a snapshot we don't know what it can see, unless we know no
             // one else could be writing (because we hold an exclusive lock).
-            if (!ru->hasSnapshot() && !txn->lockState()->isNoop() &&
+            if (ru->hasSnapshot() && !txn->lockState()->isNoop() &&
                 !txn->lockState()->isCollectionLockedForMode(_ns, MODE_X)) {
                 throw WriteConflictException();
             }
