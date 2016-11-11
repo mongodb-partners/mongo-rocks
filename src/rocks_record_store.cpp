@@ -595,12 +595,9 @@ namespace mongo {
         return insertRecord( txn, buf.get(), len, enforceQuota );
     }
 
-    StatusWith<RecordId> RocksRecordStore::updateRecord( OperationContext* txn,
-                                                        const RecordId& loc,
-                                                        const char* data,
-                                                        int len,
-                                                        bool enforceQuota,
-                                                        UpdateNotifier* notifier ) {
+    Status RocksRecordStore::updateRecord(OperationContext* txn, const RecordId& loc,
+                                          const char* data, int len, bool enforceQuota,
+                                          UpdateNotifier* notifier) {
         std::string key(_makePrefixedKey(_prefix, loc));
 
         RocksRecoveryUnit* ru = RocksRecoveryUnit::getRocksRecoveryUnit( txn );
@@ -623,7 +620,7 @@ namespace mongo {
 
         cappedDeleteAsNeeded(txn, loc);
 
-        return StatusWith<RecordId>( loc );
+        return Status::OK();
     }
 
     bool RocksRecordStore::updateWithDamagesSupported() const {
