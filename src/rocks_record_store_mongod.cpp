@@ -42,7 +42,7 @@
 #include "mongo/db/db_raii.h"
 #include "mongo/db/service_context.h"
 #include "mongo/db/namespace_string.h"
-#include "mongo/db/operation_context_impl.h"
+#include "mongo/db/operation_context.h"
 #include "mongo/util/background.h"
 #include "mongo/util/exit.h"
 #include "mongo/util/log.h"
@@ -78,31 +78,31 @@ namespace mongo {
                     return 0;
                 }
 
-                OperationContextImpl txn;
+                const auto txn = cc().makeOperationContext();
 
                 try {
-                    ScopedTransaction transaction(&txn, MODE_IX);
+                    ScopedTransaction transaction(txn.get(), MODE_IX);
 
-                    AutoGetDb autoDb(&txn, _ns.db(), MODE_IX);
+                    AutoGetDb autoDb(txn.get(), _ns.db(), MODE_IX);
                     Database* db = autoDb.getDb();
                     if (!db) {
                         LOG(2) << "no local database yet";
                         return 0;
                     }
 
-                    Lock::CollectionLock collectionLock(txn.lockState(), _ns.ns(), MODE_IX);
+                    Lock::CollectionLock collectionLock(txn->lockState(), _ns.ns(), MODE_IX);
                     Collection* collection = db->getCollection(_ns);
                     if (!collection) {
                         LOG(2) << "no collection " << _ns;
                         return 0;
                     }
 
-                    OldClientContext ctx(&txn, _ns.ns(), false);
+                    OldClientContext ctx(txn.get(), _ns.ns(), false);
                     RocksRecordStore* rs =
                         checked_cast<RocksRecordStore*>(collection->getRecordStore());
-                    WriteUnitOfWork wuow(&txn);
+                    WriteUnitOfWork wuow(txn.get());
                     stdx::lock_guard<boost::timed_mutex> lock(rs->cappedDeleterMutex());
-                    int64_t removed = rs->cappedDeleteAsNeeded_inlock(&txn, RecordId::max());
+                    int64_t removed = rs->cappedDeleteAsNeeded_inlock(txn.get(), RecordId::max());
                     wuow.commit();
                     return removed;
                 }

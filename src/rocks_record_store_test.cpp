@@ -144,8 +144,8 @@ namespace mongo {
             rs->dataFor( t1.get(), loc1 );
             rs->dataFor( t2.get(), loc1 );
 
-            ASSERT_OK( rs->updateRecord( t1.get(), loc1, "b", 2, false, NULL ).getStatus() );
-            ASSERT_OK( rs->updateRecord( t1.get(), loc2, "B", 2, false, NULL ).getStatus() );
+            ASSERT_OK( rs->updateRecord( t1.get(), loc1, "b", 2, false, NULL ) );
+            ASSERT_OK( rs->updateRecord( t1.get(), loc2, "B", 2, false, NULL ) );
 
             // this should throw
             ASSERT_THROWS(rs->updateRecord(t2.get(), loc1, "c", 2, false, NULL),
@@ -189,7 +189,7 @@ namespace mongo {
 
             {
                 WriteUnitOfWork w( t1.get() );
-                ASSERT_OK( rs->updateRecord( t1.get(), loc1, "b", 2, false, NULL ).getStatus() );
+                ASSERT_OK( rs->updateRecord( t1.get(), loc1, "b", 2, false, NULL ) );
                 w.commit();
             }
 
