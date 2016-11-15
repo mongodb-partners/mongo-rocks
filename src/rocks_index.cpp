@@ -101,11 +101,15 @@ namespace mongo {
         class RocksCursorBase : public SortedDataInterface::Cursor {
         public:
             RocksCursorBase(OperationContext* txn, rocksdb::DB* db, std::string prefix,
-                            bool forward, Ordering order)
+                            bool forward, Ordering order, KeyString::Version keyStringVersion)
                 : _db(db),
                   _prefix(prefix),
                   _forward(forward),
                   _order(order),
+                  _keyStringVersion(keyStringVersion),
+                  _key(keyStringVersion),
+                  _typeBits(keyStringVersion),
+                  _query(keyStringVersion),
                   _txn(txn) {
                 _currentSequenceNumber = RocksRecoveryUnit::getRocksRecoveryUnit(txn)->snapshot()
                     ->GetSequenceNumber();
@@ -134,7 +138,7 @@ namespace mongo {
                 // end after the key if inclusive and before if exclusive.
                 const auto discriminator = _forward == inclusive ? KeyString::kExclusiveAfter
                                                                  : KeyString::kExclusiveBefore;
-                _endPosition = stdx::make_unique<KeyString>();
+                _endPosition = stdx::make_unique<KeyString>(_keyStringVersion);
                 _endPosition->resetToKey(stripFieldNames(key), _order, discriminator);
             }
 
@@ -335,6 +339,7 @@ namespace mongo {
             RecordId _savedRecordId;
             rocksdb::SequenceNumber _currentSequenceNumber;
 
+            KeyString::Version _keyStringVersion;
             KeyString _key;
             KeyString::TypeBits _typeBits;
             RecordId _loc;
@@ -353,8 +358,8 @@ namespace mongo {
         class RocksStandardCursor final : public RocksCursorBase {
         public:
             RocksStandardCursor(OperationContext* txn, rocksdb::DB* db, std::string prefix,
-                                bool forward, Ordering order)
-                : RocksCursorBase(txn, db, prefix, forward, order) {
+                                bool forward, Ordering order, KeyString::Version keyStringVersion)
+                : RocksCursorBase(txn, db, prefix, forward, order, keyStringVersion) {
                 iterator();
             }
 
@@ -368,8 +373,8 @@ namespace mongo {
         class RocksUniqueCursor final : public RocksCursorBase {
         public:
             RocksUniqueCursor(OperationContext* txn, rocksdb::DB* db, std::string prefix,
-                              bool forward, Ordering order)
-                : RocksCursorBase(txn, db, prefix, forward, order) {}
+                              bool forward, Ordering order, KeyString::Version keyStringVersion)
+                : RocksCursorBase(txn, db, prefix, forward, order, keyStringVersion) {}
 
             boost::optional<IndexKeyEntry> seekExact(const BSONObj& key,
                                                      RequestedInfo parts) override {
@@ -442,14 +447,15 @@ namespace mongo {
      */
     class RocksIndexBase::UniqueBulkBuilder : public SortedDataBuilderInterface {
     public:
-        UniqueBulkBuilder(std::string prefix,
-                          Ordering ordering,
-                          OperationContext* txn,
+        UniqueBulkBuilder(std::string prefix, Ordering ordering,
+                          KeyString::Version keyStringVersion, OperationContext* txn,
                           bool dupsAllowed)
             : _prefix(std::move(prefix)),
               _ordering(ordering),
+              _keyStringVersion(keyStringVersion),
               _txn(txn),
-              _dupsAllowed(dupsAllowed) {}
+              _dupsAllowed(dupsAllowed),
+              _keyString(keyStringVersion) {}
 
         Status addKey(const BSONObj& newKey, const RecordId& loc) {
             Status s = checkKeySize(newKey);
@@ -497,7 +503,7 @@ namespace mongo {
         void doInsert() {
             invariant(!_records.empty());
 
-            KeyString value;
+            KeyString value(_keyStringVersion);
             for (size_t i = 0; i < _records.size(); i++) {
                 value.appendRecordId(_records[i].first);
                 // When there is only one record, we can omit AllZeros TypeBits. Otherwise they need
@@ -518,6 +524,7 @@ namespace mongo {
 
         std::string _prefix;
         Ordering _ordering;
+        const KeyString::Version _keyStringVersion;
         OperationContext* _txn;
         const bool _dupsAllowed;
         BSONObj _key;
@@ -529,14 +536,17 @@ namespace mongo {
 
     RocksIndexBase::RocksIndexBase(rocksdb::DB* db, std::string prefix, std::string ident,
                                    Ordering order)
-        : _db(db), _prefix(prefix), _ident(std::move(ident)), _order(order) {
-        {
-            uint64_t storageSize;
-            std::string nextPrefix = std::move(rocksGetNextPrefix(_prefix));
-            rocksdb::Range wholeRange(_prefix, nextPrefix);
-            _db->GetApproximateSizes(&wholeRange, 1, &storageSize);
-            _indexStorageSize.store(static_cast<long long>(storageSize), std::memory_order_relaxed);
-        }
+        : _db(db),
+          _prefix(prefix),
+          _ident(std::move(ident)),
+          _order(order),
+          _keyStringVersion(KeyString::Version::V0)  // TODO: migrate to V1
+    {
+        uint64_t storageSize;
+        std::string nextPrefix = std::move(rocksGetNextPrefix(_prefix));
+        rocksdb::Range wholeRange(_prefix, nextPrefix);
+        _db->GetApproximateSizes(&wholeRange, 1, &storageSize);
+        _indexStorageSize.store(static_cast<long long>(storageSize), std::memory_order_relaxed);
     }
 
     void RocksIndexBase::fullValidate(OperationContext* txn, bool full, long long* numKeysOut,
@@ -593,7 +603,7 @@ namespace mongo {
             return s;
         }
 
-        KeyString encodedKey(key, _order);
+        KeyString encodedKey(_keyStringVersion, key, _order);
         std::string prefixedKey(_makePrefixedKey(_prefix, encodedKey));
 
         auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(txn);
@@ -610,7 +620,7 @@ namespace mongo {
             return rocksToMongoStatus(getStatus);
         } else if (getStatus.IsNotFound()) {
             // nothing here. just insert the value
-            KeyString value(loc);
+            KeyString value(_keyStringVersion, loc);
             if (!encodedKey.getTypeBits().isAllZeros()) {
                 value.appendTypeBits(encodedKey.getTypeBits());
             }
@@ -625,7 +635,7 @@ namespace mongo {
         // down to a single value, it will be cleaned up.
 
         bool insertedLoc = false;
-        KeyString valueVector;
+        KeyString valueVector(_keyStringVersion);
         BufReader br(currentValue.data(), currentValue.size());
         while (br.remaining()) {
             RecordId locInIndex = KeyString::decodeRecordId(&br);
@@ -641,7 +651,7 @@ namespace mongo {
 
             // Copy from old to new value
             valueVector.appendRecordId(locInIndex);
-            valueVector.appendTypeBits(KeyString::TypeBits::fromBuffer(&br));
+            valueVector.appendTypeBits(KeyString::TypeBits::fromBuffer(_keyStringVersion, &br));
         }
 
         if (!dupsAllowed) {
@@ -661,7 +671,7 @@ namespace mongo {
 
     void RocksUniqueIndex::unindex(OperationContext* txn, const BSONObj& key, const RecordId& loc,
                                    bool dupsAllowed) {
-        KeyString encodedKey(key, _order);
+        KeyString encodedKey(_keyStringVersion, key, _order);
         std::string prefixedKey(_makePrefixedKey(_prefix, encodedKey));
 
         auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(txn);
@@ -693,7 +703,7 @@ namespace mongo {
         BufReader br(currentValue.data(), currentValue.size());
         while (br.remaining()) {
             RecordId locInIndex = KeyString::decodeRecordId(&br);
-            KeyString::TypeBits typeBits = KeyString::TypeBits::fromBuffer(&br);
+            KeyString::TypeBits typeBits = KeyString::TypeBits::fromBuffer(_keyStringVersion, &br);
 
             if (loc == locInIndex) {
                 if (records.empty() && !br.remaining()) {
@@ -716,7 +726,7 @@ namespace mongo {
         }
 
         // Put other locs for this key back in the index.
-        KeyString newValue;
+        KeyString newValue(_keyStringVersion);
         invariant(!records.empty());
         for (size_t i = 0; i < records.size(); i++) {
             newValue.appendRecordId(records[i].first);
@@ -733,12 +743,13 @@ namespace mongo {
 
     std::unique_ptr<SortedDataInterface::Cursor> RocksUniqueIndex::newCursor(OperationContext* txn,
                                                                              bool forward) const {
-        return stdx::make_unique<RocksUniqueCursor>(txn, _db, _prefix, forward, _order);
+        return stdx::make_unique<RocksUniqueCursor>(txn, _db, _prefix, forward, _order,
+                                                    _keyStringVersion);
     }
 
     Status RocksUniqueIndex::dupKeyCheck(OperationContext* txn, const BSONObj& key,
                                          const RecordId& loc) {
-        KeyString encodedKey(key, _order);
+        KeyString encodedKey(_keyStringVersion, key, _order);
         std::string prefixedKey(_makePrefixedKey(_prefix, encodedKey));
 
         auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(txn);
@@ -759,14 +770,16 @@ namespace mongo {
                 return Status::OK();
             }
 
-            KeyString::TypeBits::fromBuffer(&br);  // Just calling this to advance reader.
+            KeyString::TypeBits::fromBuffer(_keyStringVersion,
+                                            &br);  // Just calling this to advance reader.
         }
         return Status(ErrorCodes::DuplicateKey, dupKeyError(key));
     }
 
     SortedDataBuilderInterface* RocksUniqueIndex::getBulkBuilder(OperationContext* txn,
                                                                  bool dupsAllowed) {
-        return new RocksIndexBase::UniqueBulkBuilder(_prefix, _order, txn, dupsAllowed);
+        return new RocksIndexBase::UniqueBulkBuilder(_prefix, _order, _keyStringVersion, txn,
+                                                     dupsAllowed);
     }
 
     /// RocksStandardIndex
@@ -783,7 +796,7 @@ namespace mongo {
             return s;
         }
 
-        KeyString encodedKey(key, _order, loc);
+        KeyString encodedKey(_keyStringVersion, key, _order, loc);
         std::string prefixedKey(_makePrefixedKey(_prefix, encodedKey));
         auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(txn);
         if (!ru->transaction()->registerWrite(prefixedKey)) {
@@ -821,7 +834,7 @@ namespace mongo {
             return;
         }
 
-        KeyString encodedKey(key, _order, loc);
+        KeyString encodedKey(_keyStringVersion, key, _order, loc);
         std::string prefixedKey(_makePrefixedKey(_prefix, encodedKey));
 
         auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(txn);
@@ -841,7 +854,8 @@ namespace mongo {
     std::unique_ptr<SortedDataInterface::Cursor> RocksStandardIndex::newCursor(
             OperationContext* txn,
             bool forward) const {
-        return stdx::make_unique<RocksStandardCursor>(txn, _db, _prefix, forward, _order);
+        return stdx::make_unique<RocksStandardCursor>(txn, _db, _prefix, forward, _order,
+                                                      _keyStringVersion);
     }
 
     SortedDataBuilderInterface* RocksStandardIndex::getBulkBuilder(OperationContext* txn,

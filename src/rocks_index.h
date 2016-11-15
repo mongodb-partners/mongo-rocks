@@ -85,6 +85,7 @@ namespace mongo {
 
         // used to construct RocksCursors
         const Ordering _order;
+        const KeyString::Version _keyStringVersion;
 
         class StandardBulkBuilder;
         class UniqueBulkBuilder;
