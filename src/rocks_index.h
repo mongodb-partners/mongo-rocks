@@ -56,7 +56,7 @@ namespace mongo {
         virtual SortedDataBuilderInterface* getBulkBuilder(OperationContext* txn,
                                                            bool dupsAllowed) = 0;
 
-        virtual void fullValidate(OperationContext* txn, bool full, long long* numKeysOut,
+        virtual void fullValidate(OperationContext* txn, long long* numKeysOut,
                                   ValidateResults* fullResults) const;
 
         virtual bool appendCustomStats(OperationContext* txn, BSONObjBuilder* output,
