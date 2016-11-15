@@ -584,15 +584,37 @@ namespace mongo {
         return StatusWith<RecordId>( loc );
     }
 
-    StatusWith<RecordId> RocksRecordStore::insertRecord( OperationContext* txn,
-                                                        const DocWriter* doc,
-                                                        bool enforceQuota ) {
-        const int len = doc->documentSize();
+    Status RocksRecordStore::insertRecordsWithDocWriter(OperationContext* txn,
+                                                        const DocWriter* const* docs, size_t nDocs,
+                                                        RecordId* idsOut) {
+        std::unique_ptr<Record[]> records(new Record[nDocs]);
 
-        std::unique_ptr<char[]> buf(new char[len]);
-        doc->writeDocument( buf.get() );
+        size_t totalSize = 0;
+        for (size_t i = 0; i < nDocs; i++) {
+            const size_t docSize = docs[i]->documentSize();
+            records[i].data = RecordData(nullptr, docSize);  // We fill in the real ptr in next loop.
+            totalSize += docSize;
+        }
 
-        return insertRecord( txn, buf.get(), len, enforceQuota );
+        std::unique_ptr<char[]> buffer(new char[totalSize]);
+        char* pos = buffer.get();
+        for (size_t i = 0; i < nDocs; i++) {
+            docs[i]->writeDocument(pos);
+            const size_t size = records[i].data.size();
+            records[i].data = RecordData(pos, size);
+            pos += size;
+        }
+        invariant(pos == (buffer.get() + totalSize));
+
+        for (size_t i = 0; i < nDocs; ++i) {
+            auto s = insertRecord(txn, records[i].data.data(), records[i].data.size(), true);
+            if (!s.isOK())
+                return s.getStatus();
+            if (idsOut)
+                idsOut[i] = s.getValue();
+        }
+
+        return Status::OK();
     }
 
     Status RocksRecordStore::updateRecord(OperationContext* txn, const RecordId& loc,
@@ -687,21 +709,20 @@ namespace mongo {
     }
 
     Status RocksRecordStore::validate( OperationContext* txn,
-                                       bool full,
-                                       bool scanData,
+                                       ValidateCmdLevel level,
                                        ValidateAdaptor* adaptor,
                                        ValidateResults* results,
                                        BSONObjBuilder* output ) {
         long long nrecords = 0;
         long long dataSizeTotal = 0;
-        if (scanData) {
+        if (level == kValidateRecordStore || level == kValidateFull) {
             auto cursor = getCursor(txn, true);
             results->valid = true;
             while (auto record = cursor->next()) {
                 ++nrecords;
-                if (full) {
+                if (level == kValidateFull) {
                     size_t dataSize;
-                    Status status = adaptor->validate(record->data, &dataSize);
+                    Status status = adaptor->validate(record->id, record->data, &dataSize);
                     if (!status.isOK()) {
                         results->valid = false;
                         results->errors.push_back(str::stream() << record->id << " is corrupted");
@@ -710,7 +731,7 @@ namespace mongo {
                 }
             }
 
-            if (full && results->valid) {
+            if (level == kValidateFull && results->valid) {
                 long long storedNumRecords = numRecords(txn);
                 long long storedDataSize = dataSize(txn);
 

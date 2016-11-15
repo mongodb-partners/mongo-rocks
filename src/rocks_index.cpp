@@ -549,7 +549,7 @@ namespace mongo {
         _indexStorageSize.store(static_cast<long long>(storageSize), std::memory_order_relaxed);
     }
 
-    void RocksIndexBase::fullValidate(OperationContext* txn, bool full, long long* numKeysOut,
+    void RocksIndexBase::fullValidate(OperationContext* txn, long long* numKeysOut,
                                       ValidateResults* fullResults) const {
         if (numKeysOut) {
             std::unique_ptr<SortedDataInterface::Cursor> cursor(newCursor(txn, 1));
