@@ -91,7 +91,6 @@ namespace mongo {
         virtual void commitUnitOfWork();
         virtual void abortUnitOfWork();
 
-        virtual void goingToWaitUntilDurable();
         virtual bool waitUntilDurable();
 
         virtual void abandonSnapshot();
