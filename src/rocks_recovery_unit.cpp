@@ -253,10 +253,6 @@ namespace mongo {
         _abort();
     }
 
-    void RocksRecoveryUnit::goingToWaitUntilDurable() {
-      // noop, based on recent discussion with Geert
-    }
-
     bool RocksRecoveryUnit::waitUntilDurable() {
         _durabilityManager->waitUntilDurable(false);
         return true;
