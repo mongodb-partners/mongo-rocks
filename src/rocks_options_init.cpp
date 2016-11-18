@@ -29,6 +29,7 @@
 
 #include <iostream>
 
+#include "mongo/util/exit_code.h"
 #include "mongo/util/options_parser/startup_option_init.h"
 #include "mongo/util/options_parser/startup_options.h"
 

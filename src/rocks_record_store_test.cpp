@@ -118,7 +118,7 @@ namespace mongo {
         RecordId loc2;
 
         {
-            std::unique_ptr<OperationContext> opCtx( harnessHelper->newOperationContext() );
+            ServiceContext::UniqueOperationContext opCtx( harnessHelper->newOperationContext() );
             {
                 WriteUnitOfWork uow( opCtx.get() );
 
@@ -135,8 +135,9 @@ namespace mongo {
         }
 
         {
-            std::unique_ptr<OperationContext> t1( harnessHelper->newOperationContext() );
-            std::unique_ptr<OperationContext> t2( harnessHelper->newOperationContext() );
+            ServiceContext::UniqueOperationContext t1( harnessHelper->newOperationContext() );
+            auto client2 = harnessHelper->serviceContext()->makeClient("c2");
+            auto t2 = harnessHelper->newOperationContext(client2.get());
 
             std::unique_ptr<WriteUnitOfWork> w1( new WriteUnitOfWork( t1.get() ) );
             std::unique_ptr<WriteUnitOfWork> w2( new WriteUnitOfWork( t2.get() ) );
@@ -163,7 +164,7 @@ namespace mongo {
         RecordId loc2;
 
         {
-            std::unique_ptr<OperationContext> opCtx( harnessHelper->newOperationContext() );
+            ServiceContext::UniqueOperationContext opCtx( harnessHelper->newOperationContext() );
             {
                 WriteUnitOfWork uow( opCtx.get() );
 
@@ -180,8 +181,9 @@ namespace mongo {
         }
 
         {
-            std::unique_ptr<OperationContext> t1( harnessHelper->newOperationContext() );
-            std::unique_ptr<OperationContext> t2( harnessHelper->newOperationContext() );
+            ServiceContext::UniqueOperationContext t1( harnessHelper->newOperationContext() );
+            auto client2 = harnessHelper->serviceContext()->makeClient("c2");
+            auto t2 = harnessHelper->newOperationContext(client2.get());
 
             // ensure we start transactions
             rs->dataFor( t1.get(), loc2 );
@@ -203,7 +205,7 @@ namespace mongo {
         }
     }
 
-    StatusWith<RecordId> insertBSON(std::unique_ptr<OperationContext>& opCtx,
+    StatusWith<RecordId> insertBSON(ServiceContext::UniqueOperationContext& opCtx,
                                    std::unique_ptr<RecordStore>& rs,
                                    const Timestamp& opTime) {
         BSONObj obj = BSON( "ts" << opTime );
@@ -226,7 +228,7 @@ namespace mongo {
         RocksRecordStoreHarnessHelper harnessHelper;
         std::unique_ptr<RecordStore> rs(harnessHelper.newNonCappedRecordStore("local.oplog.foo"));
         {
-            std::unique_ptr<OperationContext> opCtx(harnessHelper.newOperationContext());
+            ServiceContext::UniqueOperationContext opCtx(harnessHelper.newOperationContext());
 
             // always illegal
             ASSERT_EQ(insertBSON(opCtx, rs, Timestamp(2,-1)).getStatus(),
@@ -260,7 +262,7 @@ namespace mongo {
         }
 
         {
-            std::unique_ptr<OperationContext> opCtx(harnessHelper.newOperationContext());
+            ServiceContext::UniqueOperationContext opCtx(harnessHelper.newOperationContext());
             // find start
             ASSERT_EQ(rs->oplogStartHack(opCtx.get(), RecordId(0,1)), RecordId()); // nothing <=
             ASSERT_EQ(rs->oplogStartHack(opCtx.get(), RecordId(2,1)), RecordId(1,2)); // between
@@ -269,44 +271,44 @@ namespace mongo {
         }
 
         {
-            std::unique_ptr<OperationContext> opCtx(harnessHelper.newOperationContext());
+            ServiceContext::UniqueOperationContext opCtx(harnessHelper.newOperationContext());
             rs->temp_cappedTruncateAfter(opCtx.get(), RecordId(2,2),  false); // no-op
         }
 
         {
-            std::unique_ptr<OperationContext> opCtx(harnessHelper.newOperationContext());
+            ServiceContext::UniqueOperationContext opCtx(harnessHelper.newOperationContext());
             ASSERT_EQ(rs->oplogStartHack(opCtx.get(), RecordId(2,3)), RecordId(2,2));
         }
 
         {
-            std::unique_ptr<OperationContext> opCtx(harnessHelper.newOperationContext());
+            ServiceContext::UniqueOperationContext opCtx(harnessHelper.newOperationContext());
             rs->temp_cappedTruncateAfter(opCtx.get(), RecordId(1,2),  false); // deletes 2,2
         }
 
         {
-            std::unique_ptr<OperationContext> opCtx(harnessHelper.newOperationContext());
+            ServiceContext::UniqueOperationContext opCtx(harnessHelper.newOperationContext());
             ASSERT_EQ(rs->oplogStartHack(opCtx.get(), RecordId(2,3)), RecordId(1,2));
         }
 
         {
-            std::unique_ptr<OperationContext> opCtx(harnessHelper.newOperationContext());
+            ServiceContext::UniqueOperationContext opCtx(harnessHelper.newOperationContext());
             rs->temp_cappedTruncateAfter(opCtx.get(), RecordId(1,2),  true); // deletes 1,2
         }
 
         {
-            std::unique_ptr<OperationContext> opCtx(harnessHelper.newOperationContext());
+            ServiceContext::UniqueOperationContext opCtx(harnessHelper.newOperationContext());
             ASSERT_EQ(rs->oplogStartHack(opCtx.get(), RecordId(2,3)), RecordId(1,1));
         }
 
         {
-            std::unique_ptr<OperationContext> opCtx(harnessHelper.newOperationContext());
+            ServiceContext::UniqueOperationContext opCtx(harnessHelper.newOperationContext());
             WriteUnitOfWork wuow(opCtx.get());
             ASSERT_OK(rs->truncate(opCtx.get())); // deletes 1,1 and leaves collection empty
             wuow.commit();
         }
 
         {
-            std::unique_ptr<OperationContext> opCtx(harnessHelper.newOperationContext());
+            ServiceContext::UniqueOperationContext opCtx(harnessHelper.newOperationContext());
             ASSERT_EQ(rs->oplogStartHack(opCtx.get(), RecordId(2,3)), RecordId());
         }
     }
@@ -319,7 +321,7 @@ namespace mongo {
         } else {
             rs = harnessHelper.newNonCappedRecordStore("local.oplog.foo");
         }
-        std::unique_ptr<OperationContext> opCtx(harnessHelper.newOperationContext());
+        ServiceContext::UniqueOperationContext opCtx(harnessHelper.newOperationContext());
         ASSERT_EQ(insertBSON(opCtx, rs, Timestamp(1,1)).getValue(),
                   RecordId(1,1));
 
@@ -365,7 +367,7 @@ namespace mongo {
         std::unique_ptr<RecordStore> rs(
                 harnessHelper.newNonCappedRecordStore("local.NOT_oplog.foo"));
 
-        std::unique_ptr<OperationContext> opCtx(harnessHelper.newOperationContext());
+        ServiceContext::UniqueOperationContext opCtx(harnessHelper.newOperationContext());
 
         BSONObj obj = BSON( "ts" << Timestamp(2,-1) );
         {
@@ -385,7 +387,7 @@ namespace mongo {
         RecordId loc1;
 
         { // first insert a document
-            std::unique_ptr<OperationContext> opCtx( harnessHelper->newOperationContext() );
+            ServiceContext::UniqueOperationContext opCtx( harnessHelper->newOperationContext() );
             {
                 WriteUnitOfWork uow( opCtx.get() );
                 StatusWith<RecordId> res = rs->insertRecord( opCtx.get(), "a", 2, false );
@@ -396,7 +398,7 @@ namespace mongo {
         }
 
         {
-            std::unique_ptr<OperationContext> opCtx( harnessHelper->newOperationContext() );
+            ServiceContext::UniqueOperationContext opCtx( harnessHelper->newOperationContext() );
             auto cursor = rs->getCursor(opCtx.get());
             auto record = cursor->seekExact(loc1);
             ASSERT( record );
@@ -407,13 +409,14 @@ namespace mongo {
         {
             // now we insert 2 docs, but commit the 2nd one fiirst
             // we make sure we can't find the 2nd until the first is commited
-            std::unique_ptr<OperationContext> t1( harnessHelper->newOperationContext() );
+            ServiceContext::UniqueOperationContext t1( harnessHelper->newOperationContext() );
             std::unique_ptr<WriteUnitOfWork> w1( new WriteUnitOfWork( t1.get() ) );
             rs->insertRecord( t1.get(), "b", 2, false );
             // do not commit yet
 
             { // create 2nd doc
-                std::unique_ptr<OperationContext> t2( harnessHelper->newOperationContext() );
+                auto client2 = harnessHelper->serviceContext()->makeClient("c2");
+                auto t2 = harnessHelper->newOperationContext(client2.get());
                 {
                     WriteUnitOfWork w2( t2.get() );
                     rs->insertRecord( t2.get(), "c", 2, false );
@@ -422,7 +425,8 @@ namespace mongo {
             }
 
             { // state should be the same
-                std::unique_ptr<OperationContext> opCtx( harnessHelper->newOperationContext() );
+                auto client2 = harnessHelper->serviceContext()->makeClient("c2");
+                auto opCtx = harnessHelper->newOperationContext(client2.get());
                 auto cursor = rs->getCursor(opCtx.get());
                 auto record = cursor->seekExact(loc1);
                 ASSERT( record );
@@ -434,7 +438,7 @@ namespace mongo {
         }
 
         { // now all 3 docs should be visible
-            std::unique_ptr<OperationContext> opCtx( harnessHelper->newOperationContext() );
+            ServiceContext::UniqueOperationContext opCtx( harnessHelper->newOperationContext() );
             auto cursor = rs->getCursor(opCtx.get());
             auto record = cursor->seekExact(loc1);
             ASSERT( record );
@@ -471,7 +475,7 @@ namespace mongo {
         RecordId loc1;
 
         { // first insert a document
-            std::unique_ptr<OperationContext> opCtx( harnessHelper->newOperationContext() );
+            ServiceContext::UniqueOperationContext opCtx( harnessHelper->newOperationContext() );
             {
                 WriteUnitOfWork uow( opCtx.get() );
                 loc1 = _oplogOrderInsertOplog( opCtx.get(), rs, 1 );
@@ -480,7 +484,7 @@ namespace mongo {
         }
 
         {
-            std::unique_ptr<OperationContext> opCtx( harnessHelper->newOperationContext() );
+            ServiceContext::UniqueOperationContext opCtx( harnessHelper->newOperationContext() );
             auto cursor = rs->getCursor(opCtx.get());
             auto record = cursor->seekExact(loc1);
             ASSERT( record );
@@ -491,19 +495,22 @@ namespace mongo {
         {
             // now we insert 2 docs, but commit the 2nd one first.
             // we make sure we can't find the 2nd until the first is committed.
-            std::unique_ptr<OperationContext> earlyReader(harnessHelper->newOperationContext());
+            ServiceContext::UniqueOperationContext earlyReader(
+                harnessHelper->newOperationContext());
             auto earlyCursor = rs->getCursor(earlyReader.get());
             ASSERT_EQ(earlyCursor->seekExact(loc1)->id, loc1);
             earlyCursor->save();
             earlyReader->recoveryUnit()->abandonSnapshot();
 
-            std::unique_ptr<OperationContext> t1( harnessHelper->newOperationContext() );
+            auto client1 = harnessHelper->serviceContext()->makeClient("c1");
+            auto t1 = harnessHelper->newOperationContext(client1.get());
             WriteUnitOfWork w1(t1.get());
             _oplogOrderInsertOplog(t1.get(), rs, 20);
             // do not commit yet
 
             {  // create 2nd doc
-                std::unique_ptr<OperationContext> t2(harnessHelper->newOperationContext());
+                auto client2 = harnessHelper->serviceContext()->makeClient("c2");
+                auto t2 = harnessHelper->newOperationContext(client2.get());
                 {
                     WriteUnitOfWork w2(t2.get());
                     _oplogOrderInsertOplog(t2.get(), rs, 30);
@@ -515,7 +522,8 @@ namespace mongo {
                 earlyCursor->restore();
                 ASSERT(!earlyCursor->next());
 
-                std::unique_ptr<OperationContext> opCtx(harnessHelper->newOperationContext());
+                auto client2 = harnessHelper->serviceContext()->makeClient("c2");
+                auto opCtx = harnessHelper->newOperationContext(client2.get());
                 auto cursor = rs->getCursor(opCtx.get());
                 auto record = cursor->seekExact(loc1);
                 ASSERT_EQ(loc1, record->id);
@@ -526,7 +534,7 @@ namespace mongo {
         }
 
         {  // now all 3 docs should be visible
-            std::unique_ptr<OperationContext> opCtx(harnessHelper->newOperationContext());
+            ServiceContext::UniqueOperationContext opCtx(harnessHelper->newOperationContext());
             auto cursor = rs->getCursor(opCtx.get());
             auto record = cursor->seekExact(loc1);
             ASSERT_EQ(loc1, record->id);
@@ -538,26 +546,28 @@ namespace mongo {
         // Rollback the last two oplog entries, then insert entries with older optimes and ensure that
         // the visibility rules aren't violated. See SERVER-21645
         {
-            std::unique_ptr<OperationContext> txn(harnessHelper->newOperationContext());
+            ServiceContext::UniqueOperationContext txn(harnessHelper->newOperationContext());
             rs->temp_cappedTruncateAfter(txn.get(), loc1, /*inclusive*/ false);
         }
 
         {
             // Now we insert 2 docs with timestamps earlier than before, but commit the 2nd one first.
             // We make sure we can't find the 2nd until the first is commited.
-            std::unique_ptr<OperationContext> earlyReader(harnessHelper->newOperationContext());
+            ServiceContext::UniqueOperationContext earlyReader(harnessHelper->newOperationContext());
             auto earlyCursor = rs->getCursor(earlyReader.get());
             ASSERT_EQ(earlyCursor->seekExact(loc1)->id, loc1);
             earlyCursor->save();
             earlyReader->recoveryUnit()->abandonSnapshot();
 
-            std::unique_ptr<OperationContext> t1(harnessHelper->newOperationContext());
+            auto client1 = harnessHelper->serviceContext()->makeClient("c1");
+            auto t1 = harnessHelper->newOperationContext(client1.get());
             WriteUnitOfWork w1(t1.get());
             _oplogOrderInsertOplog( t1.get(), rs, 2 );
             // do not commit yet
 
             { // create 2nd doc
-                std::unique_ptr<OperationContext> t2( harnessHelper->newOperationContext() );
+                auto client2 = harnessHelper->serviceContext()->makeClient("c2");
+                auto t2 = harnessHelper->newOperationContext(client2.get());
                 {
                     WriteUnitOfWork w2( t2.get() );
                     _oplogOrderInsertOplog( t2.get(), rs, 3 );
@@ -569,7 +579,8 @@ namespace mongo {
                 ASSERT(earlyCursor->restore());
                 ASSERT(!earlyCursor->next());
 
-                std::unique_ptr<OperationContext> opCtx( harnessHelper->newOperationContext() );
+                auto client2 = harnessHelper->serviceContext()->makeClient("c2");
+                auto opCtx = harnessHelper->newOperationContext(client2.get());
                 auto cursor = rs->getCursor(opCtx.get());
                 auto record = cursor->seekExact(loc1);
                 ASSERT( record );
@@ -581,7 +592,7 @@ namespace mongo {
         }
 
         { // now all 3 docs should be visible
-            std::unique_ptr<OperationContext> opCtx( harnessHelper->newOperationContext() );
+            ServiceContext::UniqueOperationContext opCtx( harnessHelper->newOperationContext() );
             auto cursor = rs->getCursor(opCtx.get());
             auto record = cursor->seekExact(loc1);
             ASSERT( record );
