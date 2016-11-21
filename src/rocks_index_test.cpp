@@ -67,10 +67,14 @@ namespace mongo {
         }
 
         std::unique_ptr<SortedDataInterface> newSortedDataInterface(bool unique) {
+            BSONObjBuilder configBuilder;
+            RocksIndexBase::generateConfig(&configBuilder);
             if (unique) {
-                return stdx::make_unique<RocksUniqueIndex>(_db.get(), "prefix", "ident", _order);
+                return stdx::make_unique<RocksUniqueIndex>(_db.get(), "prefix", "ident", _order,
+                                                           configBuilder.obj());
             } else {
-                return stdx::make_unique<RocksStandardIndex>(_db.get(), "prefix", "ident", _order);
+                return stdx::make_unique<RocksStandardIndex>(_db.get(), "prefix", "ident", _order,
+                                                             configBuilder.obj());
             }
         }
 
