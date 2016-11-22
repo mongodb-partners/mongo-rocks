@@ -115,12 +115,10 @@ namespace mongo {
         if (params.count("storage.rocksdb.counters")) {
             rocksGlobalOptions.counters =
               params["storage.rocksdb.counters"].as<bool>();
-            log() << "Counters: " << rocksGlobalOptions.counters;
         }
         if (params.count("storage.rocksdb.singleDeleteIndex")) {
             rocksGlobalOptions.singleDeleteIndex =
               params["storage.rocksdb.singleDeleteIndex"].as<bool>();
-            log() << "Use SingleDelete in index: " << rocksGlobalOptions.singleDeleteIndex;
         }
 
         return Status::OK();
@@ -132,5 +130,7 @@ namespace mongo {
         log() << "[RocksDB] MaxWriteMBPerSec: " << rocksGlobalOptions.maxWriteMBPerSec;
         log() << "[RocksDB] Engine custom option: " << rocksGlobalOptions.configString;
         log() << "[RocksDB] Crash safe counters: " << rocksGlobalOptions.crashSafeCounters;
+        log() << "[RocksDB] Counters: " << rocksGlobalOptions.counters;
+        log() << "[RocksDB] Use SingleDelete in index: " << rocksGlobalOptions.singleDeleteIndex;
     }
 }  // namespace mongo
