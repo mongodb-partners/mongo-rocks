@@ -56,7 +56,7 @@ namespace mongo {
 
         virtual KVEngine* restartEngine() {
             _engine.reset(nullptr);
-            _engine.reset(new RocksEngine(_dbpath.path(), false));
+            _engine.reset(new RocksEngine(_dbpath.path(), false, 3));
             return _engine.get();
         }
 

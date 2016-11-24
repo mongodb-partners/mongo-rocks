@@ -62,7 +62,7 @@ namespace mongo {
                                     std::unique_ptr<rocksdb::Slice> upperBound)
                 : _rocksdbSkippedDeletionsInitial(0),
                   _prefix(std::move(prefix)),
-                  _nextPrefix(std::move(rocksGetNextPrefix(_prefix))),
+                  _nextPrefix(rocksGetNextPrefix(_prefix)),
                   _prefixSlice(_prefix.data(), _prefix.size()),
                   _prefixSliceEpsilon(_prefix.data(), _prefix.size() + 1),
                   _baseIterator(baseIterator),

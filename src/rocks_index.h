@@ -72,7 +72,7 @@ namespace mongo {
 
         virtual long long getSpaceUsedBytes( OperationContext* txn ) const;
 
-        static void generateConfig(BSONObjBuilder* configBuilder);
+        static void generateConfig(BSONObjBuilder* configBuilder, int formatVersion);
 
     protected:
         static std::string _makePrefixedKey(const std::string& prefix, const KeyString& encodedKey);
