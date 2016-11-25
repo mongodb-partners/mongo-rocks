@@ -38,6 +38,7 @@
 #include "mongo/stdx/mutex.h"
 
 #include "mongo/base/string_data.h"
+#include "mongo/base/simple_string_data_comparator.h"
 
 namespace mongo {
     class RocksTransaction;
@@ -94,8 +95,7 @@ namespace mongo {
         KeysSortedBySnapshotList _keysSortedBySnapshot;
         // map of key -> pair{seq_id, pointer to corresponding _keysSortedBySnapshot}
         // key is a StringData and it points to the actual string in _keysSortedBySnapshot
-        std::unordered_map<StringData, std::pair<uint64_t, KeysSortedBySnapshotListIter>,
-                           StringData::Hasher> _keyInfo;
+        StringDataUnorderedMap<std::pair<uint64_t, KeysSortedBySnapshotListIter>> _keyInfo;
         std::unordered_map<std::string, uint64_t> _uncommittedTransactionId;
 
         // this list is sorted

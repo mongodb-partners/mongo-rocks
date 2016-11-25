@@ -40,8 +40,11 @@
 #include "mongo/util/assert_util.h"
 
 namespace mongo {
-    RocksTransactionEngine::RocksTransactionEngine() : _latestSnapshotId(1),
-                                                       _nextTransactionId(1) {}
+    RocksTransactionEngine::RocksTransactionEngine()
+        : _latestSnapshotId(1),
+          _nextTransactionId(1),
+          _keyInfo(SimpleStringDataComparator::kInstance.makeStringDataUnorderedMap<
+                   std::pair<uint64_t, KeysSortedBySnapshotListIter>>()) {}
 
     size_t RocksTransactionEngine::numKeysTracked() {
         stdx::lock_guard<stdx::mutex> lk(_lock);
