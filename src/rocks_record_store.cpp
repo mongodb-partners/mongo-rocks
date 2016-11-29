@@ -255,8 +255,12 @@ namespace mongo {
         // load metadata
         _numRecords.store(_counterManager->loadCounter(_numRecordsKey));
         _dataSize.store(_counterManager->loadCounter(_dataSizeKey));
-        invariant(_dataSize.load() >= 0);
-        invariant(_numRecords.load() >= 0);
+        if (_dataSize.load() < 0) {
+          _dataSize.store(0);
+        }
+        if (_numRecords.load() < 0) {
+          _numRecords.store(0);
+        }
 
         _hasBackgroundThread = RocksEngine::initRsOplogBackgroundThread(ns);
     }
