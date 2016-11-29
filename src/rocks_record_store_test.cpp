@@ -70,7 +70,7 @@ namespace mongo {
         }
         std::unique_ptr<RecordStore> newNonCappedRecordStore(const std::string& ns) {
             return stdx::make_unique<RocksRecordStore>(ns, "1", _db.get(), _counterManager.get(),
-                                                       "prefix");
+                                                       _durabilityManager.get(), "prefix");
         }
 
         std::unique_ptr<RecordStore> newCappedRecordStore(int64_t cappedMaxSize,
@@ -82,8 +82,8 @@ namespace mongo {
                                                           int64_t cappedMaxSize,
                                                           int64_t cappedMaxDocs) {
             return stdx::make_unique<RocksRecordStore>(ns, "1", _db.get(), _counterManager.get(),
-                                                       "prefix", true, cappedMaxSize,
-                                                       cappedMaxDocs);
+                                                       _durabilityManager.get(), "prefix", true,
+                                                       cappedMaxSize, cappedMaxDocs);
         }
 
         RecoveryUnit* newRecoveryUnit() final {
@@ -489,10 +489,72 @@ namespace mongo {
         }
 
         {
-            // now we insert 2 docs, but commit the 2nd one fiirst
-            // we make sure we can't find the 2nd until the first is commited
+            // now we insert 2 docs, but commit the 2nd one first.
+            // we make sure we can't find the 2nd until the first is committed.
+            std::unique_ptr<OperationContext> earlyReader(harnessHelper->newOperationContext());
+            auto earlyCursor = rs->getCursor(earlyReader.get());
+            ASSERT_EQ(earlyCursor->seekExact(loc1)->id, loc1);
+            earlyCursor->save();
+            earlyReader->recoveryUnit()->abandonSnapshot();
+
             std::unique_ptr<OperationContext> t1( harnessHelper->newOperationContext() );
-            std::unique_ptr<WriteUnitOfWork> w1( new WriteUnitOfWork( t1.get() ) );
+            WriteUnitOfWork w1(t1.get());
+            _oplogOrderInsertOplog(t1.get(), rs, 20);
+            // do not commit yet
+
+            {  // create 2nd doc
+                std::unique_ptr<OperationContext> t2(harnessHelper->newOperationContext());
+                {
+                    WriteUnitOfWork w2(t2.get());
+                    _oplogOrderInsertOplog(t2.get(), rs, 30);
+                    w2.commit();
+                }
+            }
+
+            {  // Other operations should not be able to see 2nd doc until w1 commits.
+                earlyCursor->restore();
+                ASSERT(!earlyCursor->next());
+
+                std::unique_ptr<OperationContext> opCtx(harnessHelper->newOperationContext());
+                auto cursor = rs->getCursor(opCtx.get());
+                auto record = cursor->seekExact(loc1);
+                ASSERT_EQ(loc1, record->id);
+                ASSERT(!cursor->next());
+            }
+
+            w1.commit();
+        }
+
+        rs->waitForAllEarlierOplogWritesToBeVisible(harnessHelper->newOperationContext().get());
+
+        {  // now all 3 docs should be visible
+            std::unique_ptr<OperationContext> opCtx(harnessHelper->newOperationContext());
+            auto cursor = rs->getCursor(opCtx.get());
+            auto record = cursor->seekExact(loc1);
+            ASSERT_EQ(loc1, record->id);
+            ASSERT(cursor->next());
+            ASSERT(cursor->next());
+            ASSERT(!cursor->next());
+        }
+
+        // Rollback the last two oplog entries, then insert entries with older optimes and ensure that
+        // the visibility rules aren't violated. See SERVER-21645
+        {
+            std::unique_ptr<OperationContext> txn(harnessHelper->newOperationContext());
+            rs->temp_cappedTruncateAfter(txn.get(), loc1, /*inclusive*/ false);
+        }
+
+        {
+            // Now we insert 2 docs with timestamps earlier than before, but commit the 2nd one first.
+            // We make sure we can't find the 2nd until the first is commited.
+            std::unique_ptr<OperationContext> earlyReader(harnessHelper->newOperationContext());
+            auto earlyCursor = rs->getCursor(earlyReader.get());
+            ASSERT_EQ(earlyCursor->seekExact(loc1)->id, loc1);
+            earlyCursor->save();
+            earlyReader->recoveryUnit()->abandonSnapshot();
+
+            std::unique_ptr<OperationContext> t1(harnessHelper->newOperationContext());
+            WriteUnitOfWork w1(t1.get());
             _oplogOrderInsertOplog( t1.get(), rs, 2 );
             // do not commit yet
 
@@ -505,7 +567,10 @@ namespace mongo {
                 }
             }
 
-            { // state should be the same
+            {  // Other operations should not be able to see 2nd doc until w1 commits.
+                ASSERT(earlyCursor->restore());
+                ASSERT(!earlyCursor->next());
+
                 std::unique_ptr<OperationContext> opCtx( harnessHelper->newOperationContext() );
                 auto cursor = rs->getCursor(opCtx.get());
                 auto record = cursor->seekExact(loc1);
@@ -514,8 +579,10 @@ namespace mongo {
                 ASSERT(!cursor->next());
             }
 
-            w1->commit();
+            w1.commit();
         }
+
+        rs->waitForAllEarlierOplogWritesToBeVisible(harnessHelper->newOperationContext().get());
 
         { // now all 3 docs should be visible
             std::unique_ptr<OperationContext> opCtx( harnessHelper->newOperationContext() );

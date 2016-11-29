@@ -51,6 +51,7 @@
 #include "mongo/db/concurrency/write_conflict_exception.h"
 #include "mongo/db/namespace_string.h"
 #include "mongo/db/operation_context.h"
+#include "mongo/db/client.h"
 #include "mongo/db/storage/oplog_hack.h"
 #include "mongo/platform/endian.h"
 #include "mongo/stdx/memory.h"
@@ -60,72 +61,150 @@
 #include "mongo/util/mongoutils/str.h"
 
 #include "rocks_counter_manager.h"
+#include "rocks_durability_manager.h"
 #include "rocks_engine.h"
 #include "rocks_recovery_unit.h"
 #include "rocks_util.h"
 
 namespace mongo {
 
-    using std::string;
+    class RocksRecordStore::CappedInsertChange : public RecoveryUnit::Change {
+    public:
+        CappedInsertChange(CappedVisibilityManager* cappedVisibilityManager, RocksRecordStore* rs,
+                           SortedRecordIds::iterator it)
+            : _cappedVisibilityManager(cappedVisibilityManager), _rs(rs), _it(it) {}
 
-    namespace {
+        virtual void commit() { _cappedVisibilityManager->dealtWithCappedRecord(_it, true); }
 
-        class CappedInsertChange : public RecoveryUnit::Change {
-        public:
-            CappedInsertChange(CappedVisibilityManager* cappedVisibilityManager,
-                               CappedCallback* cappedCallback, const RecordId& record)
-                : _cappedVisibilityManager(cappedVisibilityManager),
-                  _cappedCallback(cappedCallback),
-                  _record(record) {}
-
-            virtual void commit() { _cappedVisibilityManager->dealtWithCappedRecord(_record); }
-
-            virtual void rollback() {
-                _cappedVisibilityManager->dealtWithCappedRecord(_record);
-                if (_cappedCallback) {
-                    _cappedCallback->notifyCappedWaitersIfNeeded();
-                }
+        virtual void rollback() {
+            _cappedVisibilityManager->dealtWithCappedRecord(_it, false);
+            stdx::lock_guard<stdx::mutex> lk(_rs->_cappedCallbackMutex);
+            if (_rs->_cappedCallback) {
+                _rs->_cappedCallback->notifyCappedWaitersIfNeeded();
             }
+        }
 
-        private:
-            CappedVisibilityManager* _cappedVisibilityManager;
-            CappedCallback* _cappedCallback;
-            RecordId _record;
-        };
-    }  // namespace
+    private:
+        CappedVisibilityManager* _cappedVisibilityManager;
+        RocksRecordStore* const _rs;
+        const SortedRecordIds::iterator _it;
+    };
+
+    CappedVisibilityManager::CappedVisibilityManager(RocksRecordStore* rs,
+                                                     RocksDurabilityManager* durabilityManger)
+        : _rs(rs), _oplog_highestSeen(RecordId::min()), _shuttingDown(false) {
+        if (_rs->_isOplog) {
+            _oplogJournalThread = stdx::thread(&CappedVisibilityManager::oplogJournalThreadLoop,
+                                               this, durabilityManger);
+        }
+    }
 
     void CappedVisibilityManager::addUncommittedRecord(OperationContext* txn,
                                                        const RecordId& record) {
-        stdx::lock_guard<stdx::mutex> lk(_lock);
+        stdx::lock_guard<stdx::mutex> lk(_uncommittedRecordIdsMutex);
         _addUncommittedRecord_inlock(txn, record);
     }
 
     void CappedVisibilityManager::_addUncommittedRecord_inlock(OperationContext* txn,
                                                                const RecordId& record) {
         dassert(_uncommittedRecords.empty() || _uncommittedRecords.back() < record);
-        _uncommittedRecords.push_back(record);
-        txn->recoveryUnit()->registerChange(new CappedInsertChange(this, _cappedCallback, record));
+        SortedRecordIds::iterator it =
+            _uncommittedRecords.insert(_uncommittedRecords.end(), record);
+        txn->recoveryUnit()->registerChange(
+            new RocksRecordStore::CappedInsertChange(this, _rs, it));
         _oplog_highestSeen = record;
     }
 
     RecordId CappedVisibilityManager::getNextAndAddUncommittedRecord(
         OperationContext* txn, std::function<RecordId()> nextId) {
-        stdx::lock_guard<stdx::mutex> lk(_lock);
+        stdx::lock_guard<stdx::mutex> lk(_uncommittedRecordIdsMutex);
         RecordId record = nextId();
         _addUncommittedRecord_inlock(txn, record);
         return record;
     }
 
-    void CappedVisibilityManager::dealtWithCappedRecord(const RecordId& record) {
-        stdx::lock_guard<stdx::mutex> lk(_lock);
-        std::vector<RecordId>::iterator it =
-            std::find(_uncommittedRecords.begin(), _uncommittedRecords.end(), record);
-        invariant(it != _uncommittedRecords.end());
-        _uncommittedRecords.erase(it);
+    void CappedVisibilityManager::oplogJournalThreadLoop(
+        RocksDurabilityManager* durabilityManager) try {
+        Client::initThread("RocksOplogJournalThread");
+        while (true) {
+            stdx::unique_lock<stdx::mutex> lk(_uncommittedRecordIdsMutex);
+            _opsWaitingForJournalCV.wait(
+                lk, [&] { return _shuttingDown || !_opsWaitingForJournal.empty(); });
+
+            if (_shuttingDown) {
+                return;
+            }
+
+            decltype(_opsWaitingForJournal) opsAboutToBeJournaled = {};
+            _opsWaitingForJournal.swap(opsAboutToBeJournaled);
+
+            lk.unlock();
+            durabilityManager->waitUntilDurable(/*forceFlush=*/false);
+            lk.lock();
+
+            for (auto&& op : opsAboutToBeJournaled) {
+                _uncommittedRecords.erase(op);
+            }
+
+            _opsBecameVisibleCV.notify_all();
+            lk.unlock();
+
+            stdx::lock_guard<stdx::mutex> cappedCallbackLock(_rs->_cappedCallbackMutex);
+            if (_rs->_cappedCallback) {
+                _rs->_cappedCallback->notifyCappedWaitersIfNeeded();
+            }
+        }
+    } catch (...) {
+        std::terminate();
+    }
+
+    void CappedVisibilityManager::joinOplogJournalThreadLoop() {
+        {
+            stdx::lock_guard<stdx::mutex> lk(_uncommittedRecordIdsMutex);
+            _shuttingDown = true;
+        }
+        if (_oplogJournalThread.joinable()) {
+            _opsWaitingForJournalCV.notify_one();
+            _oplogJournalThread.join();
+        }
+    }
+
+    void CappedVisibilityManager::waitForAllEarlierOplogWritesToBeVisible(
+        OperationContext* txn) const {
+        invariant(txn->lockState()->isNoop() || !txn->lockState()->inAWriteUnitOfWork());
+
+        stdx::unique_lock<stdx::mutex> lk(_uncommittedRecordIdsMutex);
+        const auto waitingFor = _oplog_highestSeen;
+        while (!_uncommittedRecords.empty() && _uncommittedRecords.front() <= waitingFor) {
+            // We can't use a simple wait() here because we need to wake up periodically to check for
+            // interrupt and OperationContext::waitForConditionOrInterrupt doesn't exist on this branch.
+            txn->checkForInterrupt();
+            _opsBecameVisibleCV.wait_for(lk, Microseconds(Seconds(10)));
+        }
+    }
+
+    void CappedVisibilityManager::dealtWithCappedRecord(SortedRecordIds::iterator it, bool didCommit) {
+        if (didCommit && _rs->_isOplog && *it != _oplog_highestSeen) {
+            // Defer removal from _uncommittedRecordIds until it is durable. We don't need to wait
+            // for durability of ops that didn't commit because they won't become durable.
+            // As an optimization, we only defer visibility until durable if new ops were created
+            // while we were pending. This makes single-threaded w>1 workloads faster and is safe
+            // because durability follows commit order for commits that are fully sequenced (B
+            // doesn't call commit until after A's commit call returns).
+            const bool wasEmpty = _opsWaitingForJournal.empty();
+            _opsWaitingForJournal.push_back(it);
+            if (wasEmpty) {
+                _opsWaitingForJournalCV.notify_one();
+            }
+        } else {
+            stdx::lock_guard<stdx::mutex> lk(_uncommittedRecordIdsMutex);
+            _uncommittedRecords.erase(it);
+            _opsBecameVisibleCV.notify_all();
+        }
     }
 
     bool CappedVisibilityManager::isCappedHidden(const RecordId& record) const {
-        stdx::lock_guard<stdx::mutex> lk(_lock);
+        stdx::lock_guard<stdx::mutex> lk(_uncommittedRecordIdsMutex);
         if (_uncommittedRecords.empty()) {
             return false;
         }
@@ -134,15 +213,20 @@ namespace mongo {
 
     void CappedVisibilityManager::updateHighestSeen(const RecordId& record) {
         if (record > _oplog_highestSeen) {
-            stdx::lock_guard<stdx::mutex> lk(_lock);
+            stdx::lock_guard<stdx::mutex> lk(_uncommittedRecordIdsMutex);
             if (record > _oplog_highestSeen) {
                 _oplog_highestSeen = record;
             }
         }
     }
 
+    void CappedVisibilityManager::setHighestSeen(const RecordId& record) {
+        stdx::lock_guard<stdx::mutex> lk(_uncommittedRecordIdsMutex);
+        _oplog_highestSeen = record;
+    }
+
     RecordId CappedVisibilityManager::oplogStartHack() const {
-        stdx::lock_guard<stdx::mutex> lk(_lock);
+        stdx::lock_guard<stdx::mutex> lk(_uncommittedRecordIdsMutex);
         if (_uncommittedRecords.empty()) {
             return _oplog_highestSeen;
         } else {
@@ -151,7 +235,7 @@ namespace mongo {
     }
 
     RecordId CappedVisibilityManager::lowestCappedHiddenRecord() const {
-        stdx::lock_guard<stdx::mutex> lk(_lock);
+        stdx::lock_guard<stdx::mutex> lk(_uncommittedRecordIdsMutex);
         return _uncommittedRecords.empty() ? RecordId() : _uncommittedRecords.front();
     }
 
@@ -188,9 +272,10 @@ namespace mongo {
     };
 
     RocksRecordStore::RocksRecordStore(StringData ns, StringData id, rocksdb::DB* db,
-                                       RocksCounterManager* counterManager, std::string prefix,
-                                       bool isCapped, int64_t cappedMaxSize, int64_t cappedMaxDocs,
-                                       CappedCallback* cappedCallback)
+                                       RocksCounterManager* counterManager,
+                                       RocksDurabilityManager* durabilityManager,
+                                       std::string prefix, bool isCapped, int64_t cappedMaxSize,
+                                       int64_t cappedMaxDocs, CappedCallback* cappedCallback)
         : RecordStore(ns),
           _db(db),
           _counterManager(counterManager),
@@ -202,12 +287,12 @@ namespace mongo {
           _cappedCallback(cappedCallback),
           _cappedDeleteCheckCount(0),
           _isOplog(NamespaceString::oplog(ns)),
-          _oplogKeyTracker(_isOplog
-                               ? new RocksOplogKeyTracker(rocksGetNextPrefix(_prefix))
-                               : nullptr),
+          _oplogKeyTracker(_isOplog ? new RocksOplogKeyTracker(rocksGetNextPrefix(_prefix))
+                                    : nullptr),
           _cappedOldestKeyHint(0),
-          _cappedVisibilityManager(
-              (_isCapped || _isOplog) ? new CappedVisibilityManager(_cappedCallback) : nullptr),
+          _cappedVisibilityManager((_isCapped || _isOplog)
+                                       ? new CappedVisibilityManager(this, durabilityManager)
+                                       : nullptr),
           _ident(id.toString()),
           _dataSizeKey(std::string("\0\0\0\0", 4) + "datasize-" + id.toString()),
           _numRecordsKey(std::string("\0\0\0\0", 4) + "numrecords-" + id.toString()),
@@ -266,6 +351,10 @@ namespace mongo {
             _shuttingDown = true;
         }
         delete _oplogKeyTracker;
+
+        if (_cappedVisibilityManager) {
+          _cappedVisibilityManager->joinOplogJournalThreadLoop();
+        }
     }
 
     int64_t RocksRecordStore::storageSize(OperationContext* txn, BSONObjBuilder* extraInfo,
@@ -469,10 +558,13 @@ namespace mongo {
                     sizeSaved += oldValue.size();
                 }
 
-                if (_cappedCallback) {
-                    uassertStatusOK(_cappedCallback->aboutToDeleteCapped(
-                        txn, newestOld,
-                        RecordData(static_cast<const char*>(oldValue.data()), oldValue.size())));
+                {
+                    stdx::lock_guard<stdx::mutex> lk(_cappedCallbackMutex);
+                    if (_cappedCallback) {
+                        uassertStatusOK(_cappedCallback->aboutToDeleteCapped(
+                            txn, newestOld, RecordData(static_cast<const char*>(oldValue.data()),
+                                                       oldValue.size())));
+                    }
                 }
 
                 ru->writeBatch()->Delete(key);
@@ -640,27 +732,17 @@ namespace mongo {
 
     std::unique_ptr<SeekableRecordCursor> RocksRecordStore::getCursor(OperationContext* txn,
                                                                       bool forward) const {
-        RecordId startIterator;
-
-        if (_isOplog) {
-            if (forward) {
-                auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(txn);
-                if (!ru->hasSnapshot() || ru->getOplogReadTill().isNull()) {
-                    // we don't have snapshot, we can update our view
-                    ru->setOplogReadTill(_cappedVisibilityManager->oplogStartHack());
-                }
-
-                startIterator = _cappedOldestKeyHint;
-            } else {  // backward iterator + beginning not set
-                startIterator = _cappedVisibilityManager->oplogStartHack();
+        if (_isOplog && forward) {
+            auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(txn);
+            // If we already have a snapshot we don't know what it can see, unless we know no
+            // one else could be writing (because we hold an exclusive lock).
+            if (ru->hasSnapshot() && !txn->lockState()->isNoop() &&
+                !txn->lockState()->isCollectionLockedForMode(_ns, MODE_X)) {
+                throw WriteConflictException();
             }
-        } else if (_isCapped && forward) {
-            // seek to first in capped collection. we know that there are no records smaller than
-            // _cappedOldestKeyHint that are alive
-            startIterator = _cappedOldestKeyHint;
+            ru->setOplogReadTill(_cappedVisibilityManager->oplogStartHack());
         }
 
-        // TODO use startIterator.
         return stdx::make_unique<Cursor>(txn, _db, _prefix, _cappedVisibilityManager, forward,
                                          _isCapped);
     }
@@ -739,7 +821,6 @@ namespace mongo {
     void RocksRecordStore::appendCustomStats( OperationContext* txn,
                                               BSONObjBuilder* result,
                                               double scale ) const {
-        string statsString;
         result->appendBool("capped", _isCapped);
         if (_isCapped) {
             result->appendIntOrLL("max", _cappedMaxDocs);
@@ -755,6 +836,10 @@ namespace mongo {
         }
 
         return record.getStatus();
+    }
+
+    void RocksRecordStore::waitForAllEarlierOplogWritesToBeVisible(OperationContext* txn) const {
+      _cappedVisibilityManager->waitForAllEarlierOplogWritesToBeVisible(txn);
     }
 
     void RocksRecordStore::updateStatsAfterRepair(OperationContext* txn, long long numRecords,
@@ -828,16 +913,37 @@ namespace mongo {
                                                      bool inclusive ) {
         // copied from WiredTigerRecordStore::temp_cappedTruncateAfter()
         WriteUnitOfWork wuow(txn);
-        auto cursor = getCursor(txn, true);
-        for (auto record = cursor->seekExact(end); record; record = cursor->next()) {
-            if (end < record->id || (inclusive && end == record->id)) {
-                if (_cappedCallback) {
-                    uassertStatusOK(
-                        _cappedCallback->aboutToDeleteCapped(txn, record->id, record->data));
+        RecordId lastKeptId = end;
+        int64_t recordsRemoved = 0;
+
+        if (inclusive) {
+            auto reverseCursor = getCursor(txn, false);
+            invariant(reverseCursor->seekExact(end));
+            auto prev = reverseCursor->next();
+            lastKeptId = prev ? prev->id : RecordId::min();
+        }
+
+        {
+            auto cursor = getCursor(txn, true);
+            stdx::lock_guard<stdx::mutex> lk(_cappedCallbackMutex);
+
+            for (auto record = cursor->seekExact(end); record; record = cursor->next()) {
+                if (end < record->id || (inclusive && end == record->id)) {
+                    if (_cappedCallback) {
+                        uassertStatusOK(
+                            _cappedCallback->aboutToDeleteCapped(txn, record->id, record->data));
+                    }
+                    deleteRecord(txn, record->id);
+                    ++recordsRemoved;
                 }
-                deleteRecord(txn, record->id);
             }
         }
+
+        if (recordsRemoved) {
+            // Forget that we've ever seen a higher timestamp than we now have.
+            _cappedVisibilityManager->setHighestSeen(lastKeptId);
+        }
+
         wuow.commit();
     }
 
@@ -923,12 +1029,15 @@ namespace mongo {
 
     // requires !_eof
     void RocksRecordStore::Cursor::positionIterator() {
+        _skipNextAdvance = false;
         int64_t locStorage;
         _iterator->Seek(RocksRecordStore::_makeKey(_lastLoc, &locStorage));
         invariantRocksOK(_iterator->status());
 
         if (_forward) {
-            _lastMoveWasRestore =
+            // If _skipNextAdvance is true we landed after where we were. Return our new location on
+            // the next call to next().
+            _skipNextAdvance =
                 !_iterator->Valid() || _lastLoc != _makeRecordId(_iterator->key());
         }
         else {
@@ -937,14 +1046,14 @@ namespace mongo {
                 // Nothing left on or after.
                 _iterator->SeekToLast();
                 invariantRocksOK(_iterator->status());
-                _lastMoveWasRestore = true;
+                _skipNextAdvance = true;
             }
             else {
-                _lastMoveWasRestore = _lastLoc != _makeRecordId(_iterator->key());
-                if (_lastMoveWasRestore) {
-                    // Landed after.
+                if (_lastLoc != _makeRecordId(_iterator->key())) {
+                    // Landed after. This is true: iterator->key() > _lastLoc
                     // Since iterator is valid and Seek() landed after key,
                     // iterator will still be valid after we call Prev().
+                    _skipNextAdvance = true;
                     _iterator->Prev();
                 }
             }
@@ -974,58 +1083,30 @@ namespace mongo {
         auto iter = iterator();
         // ignore _eof
 
-        if (_lastMoveWasRestore) {
-            _lastMoveWasRestore = false;
-            return curr();
-        }
-
-        bool mustAdvance = true;
-        if (_needFirstSeek && !_forward && _cappedVisibilityManager != nullptr ) {
-            const RecordId reverseCappedInitialSeekPoint =
-                _readUntilForOplog.isNull() ? _cappedVisibilityManager->lowestCappedHiddenRecord()
-                                            : _readUntilForOplog;
-
-            if (!reverseCappedInitialSeekPoint.isNull()) {
-                int64_t keyStorage;
-                auto encodedKey = _makeKey(reverseCappedInitialSeekPoint, &keyStorage);
-                iter->Seek(encodedKey);
-                if (iter->Valid()) {
-                    // we don't want to SeekToLast(), we just need to do a Prev()
-                    _needFirstSeek = false;
-                    // we must do a Prev() if a iterator key is hidden. this happens in two cases:
-                    // * we seeked past our seek target. in that case we're sure that the target is
-                    // hidden
-                    // * we seeked exactly at our seek target, but the target is hidden
-                    mustAdvance =
-                        (iter->key() != encodedKey) ||
-                        _cappedVisibilityManager->isCappedHidden(reverseCappedInitialSeekPoint);
+        if (!_skipNextAdvance) {
+            if (_needFirstSeek) {
+                _needFirstSeek = false;
+                if (_forward) {
+                    iter->SeekToFirst();
                 } else {
-                    invariantRocksOK(iter->status());
+                    iter->SeekToLast();
+                }
+            } else {
+                if (_forward) {
+                    iter->Next();
+                } else {
+                    iter->Prev();
                 }
             }
         }
-
-        if (_needFirstSeek) {
-            _needFirstSeek = false;
-            if (_forward) {
-                iter->SeekToFirst();
-            } else {
-                iter->SeekToLast();
-            }
-        } else if (mustAdvance) {
-            if (_forward) {
-                iter->Next();
-            } else {
-                iter->Prev();
-            }
-        }
+        _skipNextAdvance = false;
 
         return curr();
     }
 
     boost::optional<Record> RocksRecordStore::Cursor::seekExact(const RecordId& id) {
         _needFirstSeek = false;
-        _lastMoveWasRestore = false;
+        _skipNextAdvance = false;
         _iterator.reset();
 
         rocksdb::Status status = RocksRecoveryUnit::getRocksRecoveryUnit(_txn)
@@ -1056,11 +1137,14 @@ namespace mongo {
             _currentSequenceNumber = ru->snapshot()->GetSequenceNumber();
         }
 
+        _skipNextAdvance = false;
+
         if (_eof) return true;
         if (_needFirstSeek) return true;
 
         positionIterator();
-        return _cappedVisibilityManager ? !_lastMoveWasRestore : true;
+        // Return false if the collection is capped and we reached an EOF. Otherwise return true.
+        return _cappedVisibilityManager && _eof ? false : true;
     }
 
     void RocksRecordStore::Cursor::detachFromOperationContext() {
@@ -1082,7 +1166,7 @@ namespace mongo {
         _eof = false;
         _lastLoc = _makeRecordId(_iterator->key());
 
-        if (_cappedVisibilityManager) {  // isCapped?
+        if (_cappedVisibilityManager && _forward) {  // isCapped and forward?
             if (_readUntilForOplog.isNull()) {
                 // this is the normal capped case
                 if (_cappedVisibilityManager->isCappedHidden(_lastLoc)) {
