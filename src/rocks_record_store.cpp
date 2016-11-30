@@ -184,6 +184,7 @@ namespace mongo {
     }
 
     void CappedVisibilityManager::dealtWithCappedRecord(SortedRecordIds::iterator it, bool didCommit) {
+        stdx::lock_guard<stdx::mutex> lk(_uncommittedRecordIdsMutex);
         if (didCommit && _rs->_isOplog && *it != _oplog_highestSeen) {
             // Defer removal from _uncommittedRecordIds until it is durable. We don't need to wait
             // for durability of ops that didn't commit because they won't become durable.
@@ -197,7 +198,6 @@ namespace mongo {
                 _opsWaitingForJournalCV.notify_one();
             }
         } else {
-            stdx::lock_guard<stdx::mutex> lk(_uncommittedRecordIdsMutex);
             _uncommittedRecords.erase(it);
             _opsBecameVisibleCV.notify_all();
         }
