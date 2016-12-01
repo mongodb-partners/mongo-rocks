@@ -164,7 +164,7 @@ namespace mongo {
                     auto itr = op_properties.find(prop.first);
                     if (itr != op_properties.end()) {
                         size_t speed =
-                            (itr->second * 1000 * 1000) / static_cast<size_t>(ts.op_elapsed_micros);
+                            (itr->second * 1000 * 1000) / static_cast<size_t>(ts.op_elapsed_micros + 1);
                         threadObjBuilder.append(
                             prop.second, PrettyPrintBytes(static_cast<size_t>(speed)) + "/s");
                     }
