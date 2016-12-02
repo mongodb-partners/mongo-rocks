@@ -100,7 +100,7 @@ namespace mongo {
         if (params.count("storage.rocksdb.compression")) {
             rocksGlobalOptions.compression =
                 params["storage.rocksdb.compression"].as<std::string>();
-            log() << "Compression: " << rocksGlobalOptions.compression;
+            log() << "Compression: " << redact(rocksGlobalOptions.compression);
         }
         if (params.count("storage.rocksdb.maxWriteMBPerSec")) {
             rocksGlobalOptions.maxWriteMBPerSec =
@@ -110,7 +110,7 @@ namespace mongo {
         if (params.count("storage.rocksdb.configString")) {
             rocksGlobalOptions.configString =
                 params["storage.rocksdb.configString"].as<std::string>();
-            log() << "Engine custom option: " << rocksGlobalOptions.configString;
+            log() << "Engine custom option: " << redact(rocksGlobalOptions.configString);
         }
         if (params.count("storage.rocksdb.crashSafeCounters")) {
             rocksGlobalOptions.crashSafeCounters =

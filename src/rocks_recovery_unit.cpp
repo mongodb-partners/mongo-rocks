@@ -343,7 +343,7 @@ namespace mongo {
             for (Changes::const_reverse_iterator it = _changes.rbegin(), end = _changes.rend();
                     it != end; ++it) {
                 Change* change = *it;
-                LOG(2) << "CUSTOM ROLLBACK " << demangleName(typeid(*change));
+                LOG(2) << "CUSTOM ROLLBACK " << redact(demangleName(typeid(*change)));
                 change->rollback();
             }
             _changes.clear();
