@@ -661,7 +661,7 @@ namespace mongo {
             auto s = rocksdb::GetOptionsFromString(base_options, rocksGlobalOptions.configString,
                                                    &options);
             if (!s.ok()) {
-                log() << "Invalid rocksdbConfigString \"" << rocksGlobalOptions.configString
+                log() << "Invalid rocksdbConfigString \"" << redact(rocksGlobalOptions.configString)
                       << "\"";
                 invariantRocksOK(s);
             }
