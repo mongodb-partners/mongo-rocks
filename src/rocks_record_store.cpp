@@ -795,7 +795,10 @@ namespace mongo {
         if (level == kValidateRecordStore || level == kValidateFull) {
             auto cursor = getCursor(txn, true);
             results->valid = true;
+            const int interruptInterval = 4096;
             while (auto record = cursor->next()) {
+                if (!(nrecords % interruptInterval))
+                    txn->checkForInterrupt();
                 ++nrecords;
                 if (level == kValidateFull) {
                     size_t dataSize;
