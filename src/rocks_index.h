@@ -35,6 +35,7 @@
 #include <rocksdb/db.h>
 
 #include "mongo/bson/ordering.h"
+#include "mongo/db/index/index_descriptor.h"
 #include "mongo/db/storage/key_string.h"
 
 #pragma once
@@ -72,7 +73,8 @@ namespace mongo {
 
         virtual long long getSpaceUsedBytes( OperationContext* txn ) const;
 
-        static void generateConfig(BSONObjBuilder* configBuilder, int formatVersion);
+        static void generateConfig(BSONObjBuilder* configBuilder, int formatVersion,
+                                   IndexDescriptor::IndexVersion descVersion);
 
     protected:
         static std::string _makePrefixedKey(const std::string& prefix, const KeyString& encodedKey);

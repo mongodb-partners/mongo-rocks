@@ -373,7 +373,7 @@ namespace mongo {
                                                   const IndexDescriptor* desc) {
         BSONObjBuilder configBuilder;
         // let index add its own config things
-        RocksIndexBase::generateConfig(&configBuilder, _formatVersion);
+        RocksIndexBase::generateConfig(&configBuilder, _formatVersion, desc->version());
         return _createIdent(ident, &configBuilder);
     }
 
