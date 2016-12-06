@@ -602,8 +602,9 @@ namespace mongo {
             std::max(_indexStorageSize.load(std::memory_order_relaxed), static_cast<long long>(1)));
     }
 
-    void RocksIndexBase::generateConfig(BSONObjBuilder* configBuilder, int formatVersion) {
-        if (formatVersion >= 3) {
+    void RocksIndexBase::generateConfig(BSONObjBuilder* configBuilder, int formatVersion,
+                                        IndexDescriptor::IndexVersion descVersion) {
+        if (formatVersion >= 3 && descVersion >= IndexDescriptor::IndexVersion::kV2) {
           configBuilder->append("index_format_version", static_cast<int32_t>(kMaximumIndexVersion));
         } else {
           // keep it backwards compatible
