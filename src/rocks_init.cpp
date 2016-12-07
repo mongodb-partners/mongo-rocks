@@ -59,7 +59,8 @@ namespace mongo {
                     // it's a new database, set it to the newest rocksdb version kRocksFormatVersion
                     formatVersion = kRocksFormatVersion;
                 }
-                auto engine = new RocksEngine(params.dbpath + "/db", params.dur, formatVersion);
+                auto engine = new RocksEngine(params.dbpath + "/db", params.dur, formatVersion,
+                                              params.readOnly);
                 // Intentionally leaked.
                 auto leaked __attribute__((unused)) = new RocksServerStatusSection(engine);
                 auto leaked2 __attribute__((unused)) = new RocksRateLimiterServerParameter(engine);
@@ -112,6 +113,10 @@ namespace mongo {
                 BSONObjBuilder builder;
                 builder.append(kRocksFormatVersionString, kRocksFormatVersion);
                 return builder.obj();
+            }
+
+            bool supportsReadOnly() const final {
+                return true;
             }
 
         private:
