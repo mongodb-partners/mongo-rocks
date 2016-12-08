@@ -26,7 +26,9 @@
  *    it in the license file.
  */
 
+#include "mongo/base/init.h"
 #include "mongo/platform/basic.h"
+#include "mongo/stdx/memory.h"
 
 #include <boost/filesystem/operations.hpp>
 #include <memory>
@@ -43,6 +45,7 @@
 #include "rocks_engine.h"
 
 namespace mongo {
+namespace {
     class RocksEngineHarnessHelper : public KVHarnessHelper {
     public:
         RocksEngineHarnessHelper() : _dbpath("mongo-rocks-engine-test") {
@@ -66,5 +69,13 @@ namespace mongo {
         std::unique_ptr<RocksEngine> _engine;
     };
 
-    KVHarnessHelper* KVHarnessHelper::create() { return new RocksEngineHarnessHelper(); }
+    std::unique_ptr<KVHarnessHelper> makeHelper() {
+        return stdx::make_unique<RocksEngineHarnessHelper>();
+    }
+
+    MONGO_INITIALIZER(RegisterKVHarnessFactory)(InitializerContext*) {
+        KVHarnessHelper::registerFactory(makeHelper);
+        return Status::OK();
+    }
+}
 }
