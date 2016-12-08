@@ -196,7 +196,8 @@ namespace mongo {
     const std::string RocksEngine::kMetadataPrefix("\0\0\0\0metadata-", 12);
     const std::string RocksEngine::kDroppedPrefix("\0\0\0\0droppedprefix-", 18);
 
-    RocksEngine::RocksEngine(const std::string& path, bool durable, int formatVersion)
+    RocksEngine::RocksEngine(const std::string& path, bool durable, int formatVersion,
+                             bool readOnly)
         : _path(path), _durable(durable), _formatVersion(formatVersion), _maxPrefix(0) {
         {  // create block cache
             uint64_t cacheSizeGB = rocksGlobalOptions.cacheSizeGB;
@@ -223,7 +224,12 @@ namespace mongo {
 
         // open DB
         rocksdb::DB* db;
-        auto s = rocksdb::DB::Open(_options(), path, &db);
+        rocksdb::Status s;
+        if (readOnly) {
+            s = rocksdb::DB::OpenForReadOnly(_options(), path, &db);
+        } else {
+            s = rocksdb::DB::Open(_options(), path, &db);
+        }
         invariantRocksOK(s);
         _db.reset(db);
 

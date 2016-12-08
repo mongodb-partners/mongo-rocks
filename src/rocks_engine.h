@@ -74,7 +74,7 @@ namespace mongo {
     class RocksEngine final : public KVEngine {
         MONGO_DISALLOW_COPYING( RocksEngine );
     public:
-        RocksEngine(const std::string& path, bool durable, int formatVersion);
+        RocksEngine(const std::string& path, bool durable, int formatVersion, bool readOnly);
         virtual ~RocksEngine();
 
         virtual RecoveryUnit* newRecoveryUnit() override;
