@@ -60,6 +60,18 @@ env.Library(
     LIBDEPS_DEPENDENTS=['$BUILD_DIR/mongo/db/serveronly']
     )
 
+# Startup output redirection, done separately to not break unittests
+env.Library(
+    target= 'rocks_opts_init_redirect',
+    source= [
+        'src/rocks_options_redirect.cpp',
+        ],
+    LIBDEPS= [
+        '$BUILD_DIR/mongo/db/serveronly',
+        ],
+    LIBDEPS_DEPENDENTS=['$BUILD_DIR/mongo/db/mongod_options']
+    )
+
 env.Library(
     target= 'storage_rocks_mock',
     source= [
