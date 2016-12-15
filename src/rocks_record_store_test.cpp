@@ -37,6 +37,7 @@
 #include <rocksdb/options.h>
 #include <rocksdb/slice.h>
 
+#include "mongo/base/init.h"
 #include "mongo/db/concurrency/write_conflict_exception.h"
 #include "mongo/db/storage/record_store_test_harness.h"
 #include "mongo/unittest/unittest.h"
@@ -51,7 +52,7 @@ namespace mongo {
 
     using std::string;
 
-    class RocksRecordStoreHarnessHelper final : public HarnessHelper {
+    class RocksRecordStoreHarnessHelper final : public RecordStoreHarnessHelper {
     public:
         RocksRecordStoreHarnessHelper() : _tempDir(_testNamespace) {
             boost::filesystem::remove_all(_tempDir.path());
@@ -86,10 +87,10 @@ namespace mongo {
                                                        cappedMaxSize, cappedMaxDocs);
         }
 
-        RecoveryUnit* newRecoveryUnit() final {
-            return new RocksRecoveryUnit(&_transactionEngine, &_snapshotManager, _db.get(),
-                                         _counterManager.get(), nullptr, _durabilityManager.get(),
-                                         true);
+        std::unique_ptr<RecoveryUnit> newRecoveryUnit() final {
+            return stdx::make_unique<RocksRecoveryUnit>(&_transactionEngine, &_snapshotManager,
+                                                        _db.get(), _counterManager.get(), nullptr,
+                                                        _durabilityManager.get(), true);
         }
 
         bool supportsDocLocking() final {
@@ -106,12 +107,17 @@ namespace mongo {
         std::unique_ptr<RocksCounterManager> _counterManager;
     };
 
-    std::unique_ptr<HarnessHelper> newHarnessHelper() {
+    std::unique_ptr<HarnessHelper> makeHarnessHelper() {
         return stdx::make_unique<RocksRecordStoreHarnessHelper>();
     }
 
+    MONGO_INITIALIZER(RegisterHarnessFactory)(InitializerContext* const) {
+        mongo::registerHarnessHelperFactory(makeHarnessHelper);
+        return Status::OK();
+    }
+
     TEST(RocksRecordStoreTest, Isolation1 ) {
-        std::unique_ptr<HarnessHelper> harnessHelper(newHarnessHelper());
+        auto harnessHelper = stdx::make_unique<RocksRecordStoreHarnessHelper>();
         std::unique_ptr<RecordStore> rs(harnessHelper->newNonCappedRecordStore());
 
         RecordId loc1;
@@ -157,7 +163,7 @@ namespace mongo {
     }
 
     TEST(RocksRecordStoreTest, Isolation2 ) {
-        std::unique_ptr<HarnessHelper> harnessHelper( newHarnessHelper() );
+        auto harnessHelper = stdx::make_unique<RocksRecordStoreHarnessHelper>();
         std::unique_ptr<RecordStore> rs( harnessHelper->newNonCappedRecordStore() );
 
         RecordId loc1;
