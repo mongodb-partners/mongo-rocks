@@ -115,6 +115,8 @@ namespace mongo {
 
         virtual void endBackup(OperationContext* txn) override;
 
+        virtual Status hotBackup(const std::string& path);
+
         virtual bool isDurable() const override { return _durable; }
 
         virtual bool isEphemeral() const override { return false; }
