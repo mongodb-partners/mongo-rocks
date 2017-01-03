@@ -1,5 +1,7 @@
 Import("env")
 
+env = env.Clone()
+
 dynamic_syslibdeps = []
 conf = Configure(env)
 
@@ -7,6 +9,8 @@ if conf.CheckLibWithHeader("lz4", ["lz4.h","lz4hc.h"], "C", "LZ4_versionNumber()
     dynamic_syslibdeps.append("lz4")
 
 conf.Finish()
+
+env.InjectMongoIncludePaths()
 
 env.Library(
     target= 'storage_rocks_base',
