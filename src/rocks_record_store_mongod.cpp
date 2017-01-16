@@ -107,7 +107,7 @@ namespace mongo {
                     return removed;
                 }
                 catch (const std::exception& e) {
-                    severe() << "error in RocksRecordStoreThread: " << e.what();
+                    severe() << "error in RocksRecordStoreThread: " << redact(e.what());
                     fassertFailedNoTrace(!"error in RocksRecordStoreThread");
                 }
                 catch (...) {

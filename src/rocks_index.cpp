@@ -411,7 +411,7 @@ namespace mongo {
 
                 if (!br.atEof()) {
                     severe() << "Unique index cursor seeing multiple records for key "
-                             << curr(kWantKey)->key;
+                             << redact(curr(kWantKey)->key);
                     fassertFailed(28609);
                 }
             }
@@ -763,7 +763,7 @@ namespace mongo {
         }
 
         if (!foundLoc) {
-            warning().stream() << loc << " not found in the index for key " << key;
+            warning().stream() << loc << " not found in the index for key " << redact(key);
             return; // nothing to do
         }
 
