@@ -118,7 +118,7 @@ namespace mongo {
             virtual void run() {
                 Client::initThread(_name.c_str());
 
-                while (!inShutdown()) {
+                while (!globalInShutdownDeprecated()) {
                     int64_t removed = _deleteExcessDocuments();
                     LOG(2) << "RocksRecordStoreThread deleted " << removed;
                     if (removed == 0) {
