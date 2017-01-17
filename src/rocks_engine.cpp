@@ -270,7 +270,7 @@ namespace mongo {
                 uint32_t identPrefix = static_cast<uint32_t>(element.numberInt());
 
                 _identMap[StringData(ident.data(), ident.size())] =
-                    std::move(identConfig.getOwned());
+                    identConfig.getOwned();
 
                 _maxPrefix = std::max(_maxPrefix, identPrefix);
             }
@@ -571,7 +571,7 @@ namespace mongo {
             prefix = ++_maxPrefix;
             configBuilder->append("prefix", static_cast<int32_t>(prefix));
 
-            config = std::move(configBuilder->obj());
+            config = configBuilder->obj();
             _identMap[ident] = config.copy();
         }
 
