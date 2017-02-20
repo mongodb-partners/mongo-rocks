@@ -36,9 +36,12 @@
 #include "mongo/util/log.h"
 #include "mongo/util/mongoutils/str.h"
 
+#include <rocksdb/status.h>
 #include <rocksdb/cache.h>
 #include <rocksdb/experimental.h>
 #include <rocksdb/db.h>
+#include <rocksdb/convenience.h>
+#include <rocksdb/options.h>
 
 namespace mongo {
 
@@ -150,6 +153,57 @@ namespace mongo {
         size_t newSizeInBytes = static_cast<size_t>(newNum * bytesInGB);
         _engine->getBlockCache()->SetCapacity(newSizeInBytes);
 
+        return Status::OK();
+    }    
+    
+    RocksOptionsParameter::RocksOptionsParameter(RocksEngine* engine)
+        : ServerParameter(ServerParameterSet::getGlobal(), "rocksdbOptions", false,
+                          true),
+          _engine(engine) {}
+
+    void RocksOptionsParameter::append(OperationContext* txn, BSONObjBuilder& b,
+                                         const std::string& name) {
+        std::string columnOptions;
+        std::string dbOptions;
+        std::string fullOptionsStr;
+        rocksdb::Options fullOptions = _engine->getDB()->GetOptions();
+        rocksdb::Status s = GetStringFromColumnFamilyOptions(&columnOptions, fullOptions);
+        if (!s.ok()) { // If we failed, append the error for the user to see.
+            b.append(name, s.ToString()); 
+            return;
+        }
+        
+        fullOptionsStr.append(columnOptions);
+        
+        s = GetStringFromDBOptions(&dbOptions, fullOptions);
+        if (!s.ok()) { // If we failed, append the error for the user to see.
+            b.append(name, s.ToString()); 
+            return;
+        }
+        
+        fullOptionsStr.append(dbOptions);
+
+        b.append(name, fullOptionsStr);
+    }
+
+    Status RocksOptionsParameter::set(const BSONElement& newValueElement) {        
+        return setFromString(newValueElement.String());
+    }
+
+    Status RocksOptionsParameter::setFromString(const std::string& str) {
+        log() << "RocksDB: Attempting to apply settings: " << str;
+        
+        std::unordered_map<std::string, std::string> optionsMap;
+        rocksdb::Status s = rocksdb::StringToMap(str, &optionsMap);
+        if (!s.ok()) {
+            return Status(ErrorCodes::BadValue, s.ToString());
+        }
+        
+        s = _engine->getDB()->SetOptions(optionsMap);
+        if (!s.ok()) {
+            return Status(ErrorCodes::BadValue, s.ToString());
+        }
+        
         return Status::OK();
     }
 }
