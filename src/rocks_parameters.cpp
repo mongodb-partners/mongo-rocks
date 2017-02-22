@@ -187,6 +187,10 @@ namespace mongo {
     }
 
     Status RocksOptionsParameter::set(const BSONElement& newValueElement) {        
+        // In case the BSON element is not a string, the conversion will fail, 
+        // raising an exception catched by the outer layer.
+        // Which will generate an error message that looks like this:
+        // wrong type for field (rocksdbOptions) 3 != 2        
         return setFromString(newValueElement.String());
     }
 
