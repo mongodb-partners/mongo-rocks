@@ -573,7 +573,7 @@ namespace mongo {
 
             if (!iter->status().ok()) {
                 log() << "RocksDB iterator failure when trying to delete capped, ignoring: "
-                      << iter->status().ToString();
+                      << redact(iter->status().ToString());
             }
 
             if (docsRemoved > 0) {
@@ -816,7 +816,7 @@ namespace mongo {
                 long long storedDataSize = dataSize(txn);
 
                 if (nrecords != storedNumRecords || dataSizeTotal != storedDataSize) {
-                    warning() << _ident << ": Existing record and data size counters ("
+                    warning() << redact(_ident) << ": Existing record and data size counters ("
                               << storedNumRecords << " records " << storedDataSize << " bytes) "
                               << "are inconsistent with full validation results (" << nrecords
                               << " records " << dataSizeTotal << " bytes). "
