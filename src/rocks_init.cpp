@@ -67,6 +67,7 @@ namespace mongo {
                 auto leaked3 __attribute__((unused)) = new RocksBackupServerParameter(engine);
                 auto leaked4 __attribute__((unused)) = new RocksCompactServerParameter(engine);
                 auto leaked5 __attribute__((unused)) = new RocksCacheSizeParameter(engine);
+                auto leaked6 __attribute__((unused)) = new RocksOptionsParameter(engine);
 
                 return new KVStorageEngine(engine, options);
             }
