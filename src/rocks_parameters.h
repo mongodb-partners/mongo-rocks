@@ -99,4 +99,21 @@ namespace mongo {
         Status _set(int newNum);
         RocksEngine* _engine;
     };
+    
+    
+    // We use mongo's setParameter() API to dynamically change the RocksDB options using the SetOptions API
+    // To dynamically change an option, call:
+    // db.adminCommand({setParameter:1, "rocksdbOptions": "someoption=1; someoption2=3"})
+    class RocksOptionsParameter : public ServerParameter {
+        MONGO_DISALLOW_COPYING(RocksOptionsParameter);
+
+    public:
+        RocksOptionsParameter(RocksEngine* engine);
+        virtual void append(OperationContext* txn, BSONObjBuilder& b, const std::string& name);
+        virtual Status set(const BSONElement& newValueElement);
+        virtual Status setFromString(const std::string& str);
+
+    private:
+        RocksEngine* _engine;
+    };
 }
