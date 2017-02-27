@@ -206,6 +206,8 @@ namespace mongo {
 
         return bob.obj();
     }
+    
+    RocksEngine::appendGlobalStats(bob);
 
 }  // namespace mongo
 

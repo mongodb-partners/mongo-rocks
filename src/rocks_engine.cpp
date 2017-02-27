@@ -189,6 +189,14 @@ namespace mongo {
         private:
             const RocksEngine* _engine;
         };
+        
+        TicketHolder openWriteTransaction(128);
+        RocksTicketServerParameter openWriteTransactionParam(&openWriteTransaction,
+                                                        "rocksdbConcurrentWriteTransactions");
+
+        TicketHolder openReadTransaction(128);
+        RocksTicketServerParameter openReadTransactionParam(&openReadTransaction,
+                                                       "rocksdbConcurrentReadTransactions");
 
     }  // anonymous namespace
 
@@ -316,6 +324,25 @@ namespace mongo {
 
     RocksEngine::~RocksEngine() { cleanShutdown(); }
 
+    void RocksEngine::appendGlobalStats(BSONObjBuilder& b) {
+        BSONObjBuilder bb(b.subobjStart("concurrentTransactions"));
+        {
+            BSONObjBuilder bbb(bb.subobjStart("write"));
+            bbb.append("out", openWriteTransaction.used());
+            bbb.append("available", openWriteTransaction.available());
+            bbb.append("totalTickets", openWriteTransaction.outof());
+            bbb.done();
+        }
+        {
+            BSONObjBuilder bbb(bb.subobjStart("read"));
+            bbb.append("out", openReadTransaction.used());
+            bbb.append("available", openReadTransaction.available());
+            bbb.append("totalTickets", openReadTransaction.outof());
+            bbb.done();
+        }
+        bb.done();
+    }
+    
     RecoveryUnit* RocksEngine::newRecoveryUnit() {
         return new RocksRecoveryUnit(&_transactionEngine, &_snapshotManager, _db.get(),
                                      _counterManager.get(), _compactionScheduler.get(),
