@@ -67,6 +67,7 @@
 
 #include "rocks_counter_manager.h"
 #include "rocks_global_options.h"
+#include "rocks_parameters.h"
 #include "rocks_record_store.h"
 #include "rocks_recovery_unit.h"
 #include "rocks_index.h"

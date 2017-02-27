@@ -52,7 +52,6 @@
 #include "rocks_transaction.h"
 #include "rocks_snapshot_manager.h"
 #include "rocks_durability_manager.h"
-#include "rocks_parameters.h"
 
 namespace rocksdb {
     class ColumnFamilyHandle;
