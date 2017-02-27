@@ -320,6 +320,8 @@ namespace mongo {
             _journalFlusher = stdx::make_unique<RocksJournalFlusher>(_durabilityManager.get());
             _journalFlusher->go();
         }
+        
+        Locker::setGlobalThrottling(&openReadTransaction, &openWriteTransaction);
     }
 
     RocksEngine::~RocksEngine() { cleanShutdown(); }
