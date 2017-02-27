@@ -120,7 +120,7 @@ namespace mongo {
     // ServerParameter to limit concurrency, to prevent thousands of threads running
     // concurrent searches and thus blocking the entire DB.
     class RocksTicketServerParameter : public ServerParameter {
-        MONGO_DISALLOW_COPYING(TicketServerParameter);
+        MONGO_DISALLOW_COPYING(RocksTicketServerParameter);
 
     public:
         RocksTicketServerParameter(TicketHolder* holder, const std::string& name);
