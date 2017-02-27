@@ -28,6 +28,7 @@
 
 #include "mongo/base/disallow_copying.h"
 #include "mongo/db/server_parameters.h"
+#include "mongo/util/concurrency/ticketholder.h"
 
 #include "rocks_engine.h"
 

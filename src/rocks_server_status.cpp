@@ -203,11 +203,11 @@ namespace mongo {
 
           bob.append("counters", countersObjBuilder.obj());
         }
+        
+        RocksEngine::appendGlobalStats(bob);
 
         return bob.obj();
     }
-    
-    RocksEngine::appendGlobalStats(bob);
 
 }  // namespace mongo
 
