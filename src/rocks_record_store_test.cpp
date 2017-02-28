@@ -278,7 +278,7 @@ namespace mongo {
 
         {
             ServiceContext::UniqueOperationContext opCtx(harnessHelper.newOperationContext());
-            rs->temp_cappedTruncateAfter(opCtx.get(), RecordId(2,2),  false); // no-op
+            rs->cappedTruncateAfter(opCtx.get(), RecordId(2,2),  false); // no-op
         }
 
         {
@@ -288,7 +288,7 @@ namespace mongo {
 
         {
             ServiceContext::UniqueOperationContext opCtx(harnessHelper.newOperationContext());
-            rs->temp_cappedTruncateAfter(opCtx.get(), RecordId(1,2),  false); // deletes 2,2
+            rs->cappedTruncateAfter(opCtx.get(), RecordId(1,2),  false); // deletes 2,2
         }
 
         {
@@ -298,7 +298,7 @@ namespace mongo {
 
         {
             ServiceContext::UniqueOperationContext opCtx(harnessHelper.newOperationContext());
-            rs->temp_cappedTruncateAfter(opCtx.get(), RecordId(1,2),  true); // deletes 1,2
+            rs->cappedTruncateAfter(opCtx.get(), RecordId(1,2),  true); // deletes 1,2
         }
 
         {
@@ -555,7 +555,7 @@ namespace mongo {
         // the visibility rules aren't violated. See SERVER-21645
         {
             ServiceContext::UniqueOperationContext txn(harnessHelper->newOperationContext());
-            rs->temp_cappedTruncateAfter(txn.get(), loc1, /*inclusive*/ false);
+            rs->cappedTruncateAfter(txn.get(), loc1, /*inclusive*/ false);
         }
 
         {

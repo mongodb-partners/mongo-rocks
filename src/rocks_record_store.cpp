@@ -925,10 +925,9 @@ namespace mongo {
         return _makeRecordId(iter->key());
     }
 
-    void RocksRecordStore::temp_cappedTruncateAfter( OperationContext* txn,
-                                                     RecordId end,
-                                                     bool inclusive ) {
-        // copied from WiredTigerRecordStore::temp_cappedTruncateAfter()
+    void RocksRecordStore::cappedTruncateAfter(OperationContext* txn, RecordId end,
+                                               bool inclusive) {
+        // copied from WiredTigerRecordStore::cappedTruncateAfter()
         WriteUnitOfWork wuow(txn);
         RecordId lastKeptId = end;
         int64_t recordsRemoved = 0;
