@@ -71,7 +71,8 @@ namespace mongo {
             RocksIndexBase::generateConfig(&configBuilder, 3, IndexDescriptor::IndexVersion::kV2);
             if (unique) {
                 return stdx::make_unique<RocksUniqueIndex>(_db.get(), "prefix", "ident", _order,
-                                                           configBuilder.obj());
+                                                           configBuilder.obj(), "test.rocks",
+                                                           "testIndex");
             } else {
                 return stdx::make_unique<RocksStandardIndex>(_db.get(), "prefix", "ident", _order,
                                                              configBuilder.obj());

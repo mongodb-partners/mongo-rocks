@@ -80,10 +80,13 @@ namespace mongo {
             return b.obj();
         }
 
-        string dupKeyError(const BSONObj& key) {
+        string dupKeyError(const BSONObj& key, const std::string& collectionNamespace,
+                           const std::string& indexName) {
             stringstream ss;
-            ss << "E11000 duplicate key error ";
-            ss << "dup key: " << key.toString();
+            ss << "E11000 duplicate key error";
+            ss << " collection: " << collectionNamespace;
+            ss << " index: " << indexName;
+            ss << " dup key: " << key.toString();
             return ss.str();
         }
 
@@ -452,11 +455,14 @@ namespace mongo {
     class RocksIndexBase::UniqueBulkBuilder : public SortedDataBuilderInterface {
     public:
         UniqueBulkBuilder(std::string prefix, Ordering ordering,
-                          KeyString::Version keyStringVersion, OperationContext* txn,
+                          KeyString::Version keyStringVersion, std::string collectionNamespace,
+                          std::string indexName, OperationContext* txn,
                           bool dupsAllowed)
             : _prefix(std::move(prefix)),
               _ordering(ordering),
               _keyStringVersion(keyStringVersion),
+              _collectionNamespace(std::move(collectionNamespace)),
+              _indexName(std::move(indexName)),
               _txn(txn),
               _dupsAllowed(dupsAllowed),
               _keyString(keyStringVersion) {}
@@ -479,7 +485,7 @@ namespace mongo {
             else {
                 // Dup found!
                 if (!_dupsAllowed) {
-                    return Status(ErrorCodes::DuplicateKey, dupKeyError(newKey));
+                    return Status(ErrorCodes::DuplicateKey, dupKeyError(newKey, _collectionNamespace, _indexName));
                 }
 
                 // If we get here, we are in the weird mode where dups are allowed on a unique
@@ -529,6 +535,8 @@ namespace mongo {
         std::string _prefix;
         Ordering _ordering;
         const KeyString::Version _keyStringVersion;
+        std::string _collectionNamespace;
+        std::string _indexName;
         OperationContext* _txn;
         const bool _dupsAllowed;
         BSONObj _key;
@@ -622,8 +630,11 @@ namespace mongo {
     /// RocksUniqueIndex
 
     RocksUniqueIndex::RocksUniqueIndex(rocksdb::DB* db, std::string prefix, std::string ident,
-                                       Ordering order, const BSONObj& config)
-        : RocksIndexBase(db, prefix, ident, order, config) {}
+                                       Ordering order, const BSONObj& config, std::string collectionNamespace,
+                                       std::string indexName)
+        : RocksIndexBase(db, prefix, ident, order, config),
+          _collectionNamespace(std::move(collectionNamespace)),
+          _indexName(std::move(indexName)) {}
 
     Status RocksUniqueIndex::insert(OperationContext* txn, const BSONObj& key, const RecordId& loc,
                                     bool dupsAllowed) {
@@ -684,7 +695,7 @@ namespace mongo {
         }
 
         if (!dupsAllowed) {
-            return Status(ErrorCodes::DuplicateKey, dupKeyError(key));
+            return Status(ErrorCodes::DuplicateKey, dupKeyError(key, _collectionNamespace, _indexName));
         }
 
         if (!insertedLoc) {
@@ -815,12 +826,13 @@ namespace mongo {
             KeyString::TypeBits::fromBuffer(_keyStringVersion,
                                             &br);  // Just calling this to advance reader.
         }
-        return Status(ErrorCodes::DuplicateKey, dupKeyError(key));
+        return Status(ErrorCodes::DuplicateKey, dupKeyError(key, _collectionNamespace, _indexName));
     }
 
     SortedDataBuilderInterface* RocksUniqueIndex::getBulkBuilder(OperationContext* txn,
                                                                  bool dupsAllowed) {
-        return new RocksIndexBase::UniqueBulkBuilder(_prefix, _order, _keyStringVersion, txn,
+        return new RocksIndexBase::UniqueBulkBuilder(_prefix, _order, _keyStringVersion,
+                                                     _collectionNamespace, _indexName, txn,
                                                      dupsAllowed);
     }
 
