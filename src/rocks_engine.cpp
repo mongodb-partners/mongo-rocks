@@ -67,6 +67,7 @@
 
 #include "rocks_counter_manager.h"
 #include "rocks_global_options.h"
+#include "rocks_parameters.h"
 #include "rocks_record_store.h"
 #include "rocks_recovery_unit.h"
 #include "rocks_index.h"
@@ -189,6 +190,14 @@ namespace mongo {
         private:
             const RocksEngine* _engine;
         };
+        
+        TicketHolder openWriteTransaction(128);
+        RocksTicketServerParameter openWriteTransactionParam(&openWriteTransaction,
+                                                        "rocksdbConcurrentWriteTransactions");
+
+        TicketHolder openReadTransaction(128);
+        RocksTicketServerParameter openReadTransactionParam(&openReadTransaction,
+                                                       "rocksdbConcurrentReadTransactions");
 
     }  // anonymous namespace
 
@@ -319,10 +328,31 @@ namespace mongo {
             _journalFlusher = stdx::make_unique<RocksJournalFlusher>(_durabilityManager.get());
             _journalFlusher->go();
         }
+        
+        Locker::setGlobalThrottling(&openReadTransaction, &openWriteTransaction);
     }
 
     RocksEngine::~RocksEngine() { cleanShutdown(); }
 
+    void RocksEngine::appendGlobalStats(BSONObjBuilder& b) {
+        BSONObjBuilder bb(b.subobjStart("concurrentTransactions"));
+        {
+            BSONObjBuilder bbb(bb.subobjStart("write"));
+            bbb.append("out", openWriteTransaction.used());
+            bbb.append("available", openWriteTransaction.available());
+            bbb.append("totalTickets", openWriteTransaction.outof());
+            bbb.done();
+        }
+        {
+            BSONObjBuilder bbb(bb.subobjStart("read"));
+            bbb.append("out", openReadTransaction.used());
+            bbb.append("available", openReadTransaction.available());
+            bbb.append("totalTickets", openReadTransaction.outof());
+            bbb.done();
+        }
+        bb.done();
+    }
+    
     RecoveryUnit* RocksEngine::newRecoveryUnit() {
         return new RocksRecoveryUnit(&_transactionEngine, &_snapshotManager, _db.get(),
                                      _counterManager.get(), _compactionScheduler.get(),
