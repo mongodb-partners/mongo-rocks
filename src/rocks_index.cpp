@@ -76,10 +76,13 @@ namespace mongo {
             return b.obj();
         }
 
-        string dupKeyError(const BSONObj& key) {
+        string dupKeyError(const BSONObj& key, const std::string& collectionNamespace,
+                           const std::string& indexName) {
             stringstream ss;
-            ss << "E11000 duplicate key error ";
-            ss << "dup key: " << key.toString();
+            ss << "E11000 duplicate key error";
+            ss << " collection: " << collectionNamespace;
+            ss << " index: " << indexName;
+            ss << " dup key: " << key.toString();
             return ss.str();
         }
 
@@ -444,10 +447,14 @@ namespace mongo {
     public:
         UniqueBulkBuilder(std::string prefix,
                           Ordering ordering,
+                          std::string collectionNamespace,
+                          std::string indexName,
                           OperationContext* txn,
                           bool dupsAllowed)
             : _prefix(std::move(prefix)),
               _ordering(ordering),
+              _collectionNamespace(std::move(collectionNamespace)),
+              _indexName(std::move(indexName)),
               _txn(txn),
               _dupsAllowed(dupsAllowed) {}
 
@@ -469,7 +476,7 @@ namespace mongo {
             else {
                 // Dup found!
                 if (!_dupsAllowed) {
-                    return Status(ErrorCodes::DuplicateKey, dupKeyError(newKey));
+                    return Status(ErrorCodes::DuplicateKey, dupKeyError(newKey, _collectionNamespace, _indexName));
                 }
 
                 // If we get here, we are in the weird mode where dups are allowed on a unique
@@ -518,6 +525,8 @@ namespace mongo {
 
         std::string _prefix;
         Ordering _ordering;
+        std::string _collectionNamespace;
+        std::string _indexName;
         OperationContext* _txn;
         const bool _dupsAllowed;
         BSONObj _key;
@@ -583,8 +592,12 @@ namespace mongo {
     /// RocksUniqueIndex
 
     RocksUniqueIndex::RocksUniqueIndex(rocksdb::DB* db, std::string prefix, std::string ident,
-                                       Ordering order, bool partial)
-        : RocksIndexBase(db, prefix, ident, order), _partial(partial) {}
+                                       Ordering order, std::string collectionNamespace,
+                                       std::string indexName, bool partial)
+        : RocksIndexBase(db, prefix, ident, order),
+          _collectionNamespace(std::move(collectionNamespace)),
+          _indexName(std::move(indexName)),
+          _partial(partial) {}
 
     Status RocksUniqueIndex::insert(OperationContext* txn, const BSONObj& key, const RecordId& loc,
                                     bool dupsAllowed) {
@@ -645,7 +658,7 @@ namespace mongo {
         }
 
         if (!dupsAllowed) {
-            return Status(ErrorCodes::DuplicateKey, dupKeyError(key));
+            return Status(ErrorCodes::DuplicateKey, dupKeyError(key, _collectionNamespace, _indexName));
         }
 
         if (!insertedLoc) {
@@ -793,12 +806,13 @@ namespace mongo {
 
             KeyString::TypeBits::fromBuffer(&br);  // Just calling this to advance reader.
         }
-        return Status(ErrorCodes::DuplicateKey, dupKeyError(key));
+        return Status(ErrorCodes::DuplicateKey, dupKeyError(key, _collectionNamespace, _indexName));
     }
 
     SortedDataBuilderInterface* RocksUniqueIndex::getBulkBuilder(OperationContext* txn,
                                                                  bool dupsAllowed) {
-        return new RocksIndexBase::UniqueBulkBuilder(_prefix, _order, txn, dupsAllowed);
+        return new RocksIndexBase::UniqueBulkBuilder(_prefix, _order, _collectionNamespace,
+                                                     _indexName, txn, dupsAllowed);
     }
 
     /// RocksStandardIndex

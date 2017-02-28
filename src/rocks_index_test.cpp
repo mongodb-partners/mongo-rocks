@@ -68,7 +68,8 @@ namespace mongo {
 
         std::unique_ptr<SortedDataInterface> newSortedDataInterface(bool unique) {
             if (unique) {
-                return stdx::make_unique<RocksUniqueIndex>(_db.get(), "prefix", "ident", _order);
+                return stdx::make_unique<RocksUniqueIndex>(_db.get(), "prefix", "ident", _order,
+                                                           "test.rocks", "testIndex");
             } else {
                 return stdx::make_unique<RocksStandardIndex>(_db.get(), "prefix", "ident", _order);
             }
