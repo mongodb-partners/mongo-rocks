@@ -33,6 +33,7 @@
 #include "rocks_util.h"
 
 #include "mongo/logger/parse_log_component_settings.h"
+#include "mongo/util/concurrency/ticketholder.h"
 #include "mongo/util/log.h"
 #include "mongo/util/mongoutils/str.h"
 
@@ -209,5 +210,34 @@ namespace mongo {
         }
         
         return Status::OK();
+    }
+
+    RocksTicketServerParameter::RocksTicketServerParameter(TicketHolder* holder, const std::string& name)
+        : ServerParameter(ServerParameterSet::getGlobal(), name, true, true), _holder(holder) {}
+
+    void RocksTicketServerParameter::append(OperationContext* txn, BSONObjBuilder& b, const std::string& name) {
+        b.append(name, _holder->outof());
+    }
+
+    Status RocksTicketServerParameter::set(const BSONElement& newValueElement) {
+        if (!newValueElement.isNumber())
+            return Status(ErrorCodes::BadValue, str::stream() << name() << " has to be a number");
+        return _set(newValueElement.numberInt());
+    }
+
+    Status RocksTicketServerParameter::setFromString(const std::string& str) {
+        int num = 0;
+        Status status = parseNumberFromString(str, &num);
+        if (!status.isOK())
+            return status;
+        return _set(num);
+    }
+
+    Status RocksTicketServerParameter::_set(int newNum) {
+        if (newNum <= 0) {
+            return Status(ErrorCodes::BadValue, str::stream() << name() << " has to be > 0");
+        }
+
+        return _holder->resize(newNum);
     }
 }

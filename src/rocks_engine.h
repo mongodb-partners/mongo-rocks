@@ -75,6 +75,8 @@ namespace mongo {
     public:
         RocksEngine(const std::string& path, bool durable);
         virtual ~RocksEngine();
+        
+        static void appendGlobalStats(BSONObjBuilder& b);
 
         virtual RecoveryUnit* newRecoveryUnit() override;
 
