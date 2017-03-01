@@ -38,6 +38,7 @@
 
 #include <boost/filesystem/operations.hpp>
 
+#include <rocksdb/version.h>
 #include <rocksdb/cache.h>
 #include <rocksdb/compaction_filter.h>
 #include <rocksdb/comparator.h>
@@ -158,6 +159,11 @@ namespace mongo {
                 return _droppedCache;
             }
 
+            // IgnoreSnapshots is available since RocksDB 4.3
+#if defined(ROCKSDB_MAJOR) && (ROCKSDB_MAJOR > 4 || (ROCKSDB_MAJOR == 4 && ROCKSDB_MINOR >= 3))
+            virtual bool IgnoreSnapshots() const { return true; }
+#endif
+
             virtual const char* Name() const { return "PrefixDeletingCompactionFilter"; }
 
         private:
@@ -190,7 +196,7 @@ namespace mongo {
         private:
             const RocksEngine* _engine;
         };
-        
+
         TicketHolder openWriteTransaction(128);
         RocksTicketServerParameter openWriteTransactionParam(&openWriteTransaction,
                                                         "rocksdbConcurrentWriteTransactions");
@@ -321,7 +327,7 @@ namespace mongo {
             _journalFlusher = stdx::make_unique<RocksJournalFlusher>(_durabilityManager.get());
             _journalFlusher->go();
         }
-        
+
         Locker::setGlobalThrottling(&openReadTransaction, &openWriteTransaction);
     }
 
@@ -345,7 +351,7 @@ namespace mongo {
         }
         bb.done();
     }
-    
+
     RecoveryUnit* RocksEngine::newRecoveryUnit() {
         return new RocksRecoveryUnit(&_transactionEngine, &_snapshotManager, _db.get(),
                                      _counterManager.get(), _compactionScheduler.get(),
