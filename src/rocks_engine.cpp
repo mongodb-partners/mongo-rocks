@@ -553,7 +553,7 @@ namespace mongo {
         return 1;
     }
 
-    int RocksEngine::flushAllFiles(bool sync) {
+    int RocksEngine::flushAllFiles(OperationContext* txn, bool sync) {
         LOG(1) << "RocksEngine::flushAllFiles";
         _counterManager->sync();
         _durabilityManager->waitUntilDurable(true);
