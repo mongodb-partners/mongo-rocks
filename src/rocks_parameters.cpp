@@ -43,6 +43,7 @@
 #include <rocksdb/db.h>
 #include <rocksdb/convenience.h>
 #include <rocksdb/options.h>
+#include <rocksdb/version.h>
 
 namespace mongo {
 
@@ -196,6 +197,7 @@ namespace mongo {
     }
 
     Status RocksOptionsParameter::setFromString(const std::string& str) {
+#if defined(ROCKSDB_MAJOR) && (ROCKSDB_MAJOR > 4 || (ROCKSDB_MAJOR == 4 && ROCKSDB_MINOR >= 13))        
         log() << "RocksDB: Attempting to apply settings: " << str;
         
         std::unordered_map<std::string, std::string> optionsMap;
@@ -210,6 +212,9 @@ namespace mongo {
         }
         
         return Status::OK();
+#else
+        return Status(ErrorCodes::BadValue, "This action is supported for RocksDB 4.13 and up");
+#endif
     }
 
     RocksTicketServerParameter::RocksTicketServerParameter(TicketHolder* holder, const std::string& name)
