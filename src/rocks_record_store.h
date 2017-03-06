@@ -293,7 +293,7 @@ namespace mongo {
         // compact oplog every 30 min
         static const int kOplogCompactEveryMins = 30;
         // compact oplog every 500K deletes
-        static const int kOplogCompactEveryDeletedRecrods = 500000;
+        static const int kOplogCompactEveryDeletedRecords = 500000;
 
         // invariant: there is no live records earlier than _cappedOldestKeyHint. There might be
         // some records that are dead after _cappedOldestKeyHint.

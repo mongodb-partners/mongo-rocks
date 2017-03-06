@@ -622,7 +622,7 @@ namespace mongo {
 
         if (_isOplog) {
             if ((_oplogSinceLastCompaction.minutes() >= kOplogCompactEveryMins) || 
-            (_oplogKeyTracker->getDeletedSinceCompaction() >= kOplogCompactEveryDeletedRecrods)) {
+            (_oplogKeyTracker->getDeletedSinceCompaction() >= kOplogCompactEveryDeletedRecords)) {
                 log() << "Scheduling oplog compactions. time since last " << _oplogSinceLastCompaction.minutes() <<
                     " deleted since last " << _oplogKeyTracker->getDeletedSinceCompaction();
                 _oplogSinceLastCompaction.reset();
