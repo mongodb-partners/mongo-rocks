@@ -55,6 +55,7 @@
 
 #include "mongo/db/client.h"
 #include "mongo/db/catalog/collection_options.h"
+#include "mongo/db/concurrency/locker.h"
 #include "mongo/db/index/index_descriptor.h"
 #include "mongo/db/namespace_string.h"
 #include "mongo/db/operation_context.h"
@@ -68,7 +69,6 @@
 
 #include "rocks_counter_manager.h"
 #include "rocks_global_options.h"
-#include "rocks_parameters.h"
 #include "rocks_record_store.h"
 #include "rocks_recovery_unit.h"
 #include "rocks_index.h"
@@ -195,6 +195,42 @@ namespace mongo {
 
         private:
             const RocksEngine* _engine;
+        };
+        
+        // ServerParameter to limit concurrency, to prevent thousands of threads running
+        // concurrent searches and thus blocking the entire DB.
+        class RocksTicketServerParameter : public ServerParameter {
+            MONGO_DISALLOW_COPYING(RocksTicketServerParameter);
+
+        public:
+            RocksTicketServerParameter(TicketHolder* holder, const std::string& name)
+                : ServerParameter(ServerParameterSet::getGlobal(), name, true, true), _holder(holder) {};
+            virtual void append(OperationContext* txn, BSONObjBuilder& b, const std::string& name) {
+                b.append(name, _holder->outof());
+            }
+            virtual Status set(const BSONElement& newValueElement) {
+                if (!newValueElement.isNumber())
+                    return Status(ErrorCodes::BadValue, str::stream() << name() << " has to be a number");
+                return _set(newValueElement.numberInt());
+            }
+            virtual Status setFromString(const std::string& str) {
+                int num = 0;
+                Status status = parseNumberFromString(str, &num);
+                if (!status.isOK())
+                    return status;
+                return _set(num);
+            }
+
+        private:
+            Status _set(int newNum) {
+                if (newNum <= 0) {
+                    return Status(ErrorCodes::BadValue, str::stream() << name() << " has to be > 0");
+                }
+
+                return _holder->resize(newNum);
+            }
+            
+            TicketHolder* _holder;
         };
 
         TicketHolder openWriteTransaction(128);
