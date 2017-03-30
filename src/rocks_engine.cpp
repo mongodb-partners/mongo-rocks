@@ -422,11 +422,13 @@ namespace mongo {
         RocksRecordStore* recordStore =
             options.capped
                 ? new RocksRecordStore(
-                      ns, ident, _db.get(), _counterManager.get(), _durabilityManager.get(), _getIdentPrefix(ident),
+                      ns, ident, _db.get(), _counterManager.get(), _durabilityManager.get(),
+                      _compactionScheduler.get(), _getIdentPrefix(ident),
                       true, options.cappedSize ? options.cappedSize : 4096,  // default size
                       options.cappedMaxDocs ? options.cappedMaxDocs : -1)
                 : new RocksRecordStore(ns, ident, _db.get(), _counterManager.get(),
-                                       _durabilityManager.get(), _getIdentPrefix(ident));
+                                       _durabilityManager.get(), _compactionScheduler.get(),
+                                       _getIdentPrefix(ident));
 
         {
             stdx::lock_guard<stdx::mutex> lk(_identObjectMapMutex);
