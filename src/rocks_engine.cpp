@@ -333,6 +333,7 @@ namespace mongo {
 
         // load dropped prefixes
         {
+            int dropped_count = 0;
             rocksdb::WriteBatch wb;
             // we will use this iter to check if prefixes are still alive
             std::unique_ptr<rocksdb::Iterator> prefixIter(_db->NewIterator(rocksdb::ReadOptions()));
@@ -345,6 +346,7 @@ namespace mongo {
                 invariantRocksOK(iter->status());
                 if (prefixIter->Valid() && prefixIter->key().starts_with(prefix)) {
                     // prefix is still alive, let's instruct the compaction filter to clear it up
+                    ++dropped_count;
                     uint32_t int_prefix;
                     bool ok = extractPrefix(prefix, &int_prefix);
                     invariant(ok);
@@ -352,12 +354,18 @@ namespace mongo {
                         stdx::lock_guard<stdx::mutex> lk(_droppedPrefixesMutex);
                         _droppedPrefixes.insert(int_prefix);
                     }
+                    LOG(1) << "compacting dropped prefix: " << prefix.ToString(true);
+                    auto s = _compactionScheduler->compactDroppedPrefix(prefix.ToString());
+                    if (!s.isOK()) {
+                        log() << "failed to schedule compaction for prefix " << prefix.ToString(true);
+                    }
                 } else {
                     // prefix is no longer alive. let's remove the prefix from our dropped prefixes
                     // list
                     wb.Delete(iter->key());
                 }
             }
+            log() << dropped_count << " dropped prefixes need compaction";
             if (wb.Count() > 0) {
                 auto s = _db->Write(rocksdb::WriteOptions(), &wb);
                 invariantRocksOK(s);
@@ -532,13 +540,9 @@ namespace mongo {
         // Suggest compaction for the prefixes that we need to drop, So that
         // we free space as fast as possible.
         for (auto& prefix : prefixesToDrop) {
-            std::string end_prefix_str = rocksGetNextPrefix(prefix);
-
-            rocksdb::Slice start_prefix = prefix;
-            rocksdb::Slice end_prefix = end_prefix_str;
-            s = rocksdb::experimental::SuggestCompactRange(_db.get(), &start_prefix, &end_prefix);
-            if (!s.ok()) {
-                log() << "failed to suggest compaction for prefix " << prefix;
+            auto s = _compactionScheduler->compactDroppedPrefix(prefix);
+            if (!s.isOK()) {
+                log() << "failed to schedule compaction for prefix " << rocksdb::Slice(prefix).ToString(true);
             }
         }
 
