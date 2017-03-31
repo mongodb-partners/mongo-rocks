@@ -380,8 +380,10 @@ namespace mongo {
         class RocksUniqueCursor final : public RocksCursorBase {
         public:
             RocksUniqueCursor(OperationContext* txn, rocksdb::DB* db, std::string prefix,
-                              bool forward, Ordering order, KeyString::Version keyStringVersion)
-                : RocksCursorBase(txn, db, prefix, forward, order, keyStringVersion) {}
+                              bool forward, Ordering order, KeyString::Version keyStringVersion,
+                              std::string indexName)
+                : RocksCursorBase(txn, db, prefix, forward, order, keyStringVersion),
+                  _indexName(std::move(indexName)) {}
 
             boost::optional<IndexKeyEntry> seekExact(const BSONObj& key,
                                                      RequestedInfo parts) override {
@@ -414,10 +416,13 @@ namespace mongo {
 
                 if (!br.atEof()) {
                     severe() << "Unique index cursor seeing multiple records for key "
-                             << redact(curr(kWantKey)->key);
+                             << redact(curr(kWantKey)->key) << " in index " << _indexName;
                     fassertFailed(28609);
                 }
             }
+
+        private:
+            std::string _indexName;
         };
 
     } // namespace
@@ -797,7 +802,7 @@ namespace mongo {
     std::unique_ptr<SortedDataInterface::Cursor> RocksUniqueIndex::newCursor(OperationContext* txn,
                                                                              bool forward) const {
         return stdx::make_unique<RocksUniqueCursor>(txn, _db, _prefix, forward, _order,
-                                                    _keyStringVersion);
+                                                    _keyStringVersion, _indexName);
     }
 
     Status RocksUniqueIndex::dupKeyCheck(OperationContext* txn, const BSONObj& key,
