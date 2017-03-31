@@ -95,6 +95,7 @@ namespace mongo {
             _compactionThreadRunning = false;
             _compactionQueue.clear();
         }
+        rocksdb::CancelAllBackgroundWork(_db);
         _compactionWakeUp.notify_one();
         wait();
     }
