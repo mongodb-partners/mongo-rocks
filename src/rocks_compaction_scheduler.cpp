@@ -56,7 +56,7 @@ namespace mongo {
 
         // schedule compact range operation for execution in _compactionThread
         Status scheduleCompactOp(const std::string& begin = std::string(), const std::string& end = std::string(),
-                                 bool rangeDropped = false, const std::function<void()>& cleanup = std::function<void()>());
+                                 bool rangeDropped = false, const std::function<void(bool)>& cleanup = std::function<void(bool)>());
 
     private:
         // struct with compaction operation data
@@ -66,7 +66,7 @@ namespace mongo {
             std::string _start_str;
             std::string _end_str;
             bool _rangeDropped;
-            std::function<void()> _cleanup;
+            std::function<void(bool)> _cleanup;
         };
 
         static const char * const _name;
@@ -143,7 +143,7 @@ namespace mongo {
     }
 
     Status CompactionBackgroundJob::scheduleCompactOp(const std::string& begin, const std::string& end,
-                                                       bool rangeDropped, const std::function<void()>& cleanup) {
+                                                       bool rangeDropped, const std::function<void(bool)>& cleanup) {
         {
             stdx::lock_guard<stdx::mutex> lk(_compactionMutex);
             _compactionQueue.push_back({begin, end, rangeDropped, cleanup});
@@ -180,7 +180,7 @@ namespace mongo {
         }
 
         if (_cleanup) {
-            _cleanup();
+            _cleanup(s.ok());
         }
     }
 
@@ -224,12 +224,12 @@ namespace mongo {
     }
 
     Status RocksCompactionScheduler::compactDroppedRange(const std::string& start, const std::string& end,
-                                                         const std::function<void()>& cleanup) {
+                                                         const std::function<void(bool)>& cleanup) {
         return _compactionJob->scheduleCompactOp(start, end, true, cleanup);
     }
 
     Status RocksCompactionScheduler::compactDroppedPrefix(const std::string& prefix,
-                                                          const std::function<void()>& cleanup) {
+                                                          const std::function<void(bool)>& cleanup) {
         return compactDroppedRange(prefix, rocksGetNextPrefix(prefix), cleanup);
     }
 
