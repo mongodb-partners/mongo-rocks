@@ -355,7 +355,12 @@ namespace mongo {
                         _droppedPrefixes.insert(int_prefix);
                     }
                     LOG(1) << "compacting dropped prefix: " << prefix.ToString(true);
-                    auto s = _compactionScheduler->compactDroppedPrefix(prefix.ToString());
+                    auto s = _compactionScheduler->compactDroppedPrefix(
+                                prefix.ToString(),
+                                [=]{
+                                    stdx::lock_guard<stdx::mutex> lk(_droppedPrefixesMutex);
+                                    _droppedPrefixes.erase(int_prefix);
+                                });
                     if (!s.isOK()) {
                         log() << "failed to schedule compaction for prefix " << prefix.ToString(true);
                     }
@@ -540,7 +545,15 @@ namespace mongo {
         // Suggest compaction for the prefixes that we need to drop, So that
         // we free space as fast as possible.
         for (auto& prefix : prefixesToDrop) {
-            auto s = _compactionScheduler->compactDroppedPrefix(prefix);
+            auto s = _compactionScheduler->compactDroppedPrefix(
+                        prefix,
+                        [=]{
+                            uint32_t int_prefix;
+                            bool ok = extractPrefix(prefix, &int_prefix);
+                            invariant(ok);
+                            stdx::lock_guard<stdx::mutex> lk(_droppedPrefixesMutex);
+                            _droppedPrefixes.erase(int_prefix);
+                        });
             if (!s.isOK()) {
                 log() << "failed to schedule compaction for prefix " << rocksdb::Slice(prefix).ToString(true);
             }

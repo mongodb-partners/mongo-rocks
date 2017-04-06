@@ -28,6 +28,7 @@
 
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -55,8 +56,9 @@ namespace mongo {
         Status compactAll();
         Status compactRange(const std::string& begin, const std::string& end);
         Status compactPrefix(const std::string& prefix);
-        Status compactDroppedRange(const std::string& begin, const std::string& end);
-        Status compactDroppedPrefix(const std::string& prefix);
+        Status compactDroppedRange(const std::string& begin, const std::string& end,
+                                   const std::function<void()>& cleanup);
+        Status compactDroppedPrefix(const std::string& prefix, const std::function<void()>& cleanup);
 
     private:
         stdx::mutex _lock;

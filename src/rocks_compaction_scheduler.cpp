@@ -56,7 +56,7 @@ namespace mongo {
 
         // schedule compact range operation for execution in _compactionThread
         Status scheduleCompactOp(const std::string& begin = std::string(), const std::string& end = std::string(),
-                                 bool rangeDropped = false);
+                                 bool rangeDropped = false, const std::function<void()>& cleanup = std::function<void()>());
 
     private:
         // struct with compaction operation data
@@ -66,6 +66,7 @@ namespace mongo {
             std::string _start_str;
             std::string _end_str;
             bool _rangeDropped;
+            std::function<void()> _cleanup;
         };
 
         static const char * const _name;
@@ -141,10 +142,11 @@ namespace mongo {
         LOG(1) << "compaction thread terminating" << std::endl;
     }
 
-    Status CompactionBackgroundJob::scheduleCompactOp(const std::string& begin, const std::string& end, bool rangeDropped) {
+    Status CompactionBackgroundJob::scheduleCompactOp(const std::string& begin, const std::string& end,
+                                                       bool rangeDropped, const std::function<void()>& cleanup) {
         {
             stdx::lock_guard<stdx::mutex> lk(_compactionMutex);
-            _compactionQueue.push_back({begin, end, rangeDropped});
+            _compactionQueue.push_back({begin, end, rangeDropped, cleanup});
         }
         _compactionWakeUp.notify_one();
         return Status::OK();
@@ -175,6 +177,10 @@ namespace mongo {
         auto s = db->CompactRange(compact_options, start, end);
         if (!s.ok()) {
             log() << "failed to compact range: " << s.ToString();
+        }
+
+        if (_cleanup) {
+            _cleanup();
         }
     }
 
@@ -217,12 +223,14 @@ namespace mongo {
         return compactRange(prefix, rocksGetNextPrefix(prefix));
     }
 
-    Status RocksCompactionScheduler::compactDroppedRange(const std::string& start, const std::string& end) {
-        return _compactionJob->scheduleCompactOp(start, end, true);
+    Status RocksCompactionScheduler::compactDroppedRange(const std::string& start, const std::string& end,
+                                                         const std::function<void()>& cleanup) {
+        return _compactionJob->scheduleCompactOp(start, end, true, cleanup);
     }
 
-    Status RocksCompactionScheduler::compactDroppedPrefix(const std::string& prefix) {
-        return compactDroppedRange(prefix, rocksGetNextPrefix(prefix));
+    Status RocksCompactionScheduler::compactDroppedPrefix(const std::string& prefix,
+                                                          const std::function<void()>& cleanup) {
+        return compactDroppedRange(prefix, rocksGetNextPrefix(prefix), cleanup);
     }
 
 }
