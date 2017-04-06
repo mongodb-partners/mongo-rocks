@@ -341,6 +341,7 @@ namespace mongo {
                  iter->Valid() && iter->key().starts_with(kDroppedPrefix); iter->Next()) {
                 invariantRocksOK(iter->status());
                 rocksdb::Slice prefix(iter->key());
+                std::string prefixkey(prefix.ToString());
                 prefix.remove_prefix(kDroppedPrefix.size());
                 prefixIter->Seek(prefix);
                 invariantRocksOK(iter->status());
@@ -357,9 +358,16 @@ namespace mongo {
                     LOG(1) << "compacting dropped prefix: " << prefix.ToString(true);
                     auto s = _compactionScheduler->compactDroppedPrefix(
                                 prefix.ToString(),
-                                [=]{
-                                    stdx::lock_guard<stdx::mutex> lk(_droppedPrefixesMutex);
-                                    _droppedPrefixes.erase(int_prefix);
+                                [=] (bool opSucceeded) {
+                                    {
+                                        stdx::lock_guard<stdx::mutex> lk(_droppedPrefixesMutex);
+                                        _droppedPrefixes.erase(int_prefix);
+                                    }
+                                    if (opSucceeded) {
+                                        rocksdb::WriteOptions syncOptions;
+                                        syncOptions.sync = true;
+                                        _db->Delete(syncOptions, prefixkey);
+                                    }
                                 });
                     if (!s.isOK()) {
                         log() << "failed to schedule compaction for prefix " << prefix.ToString(true);
@@ -547,12 +555,19 @@ namespace mongo {
         for (auto& prefix : prefixesToDrop) {
             auto s = _compactionScheduler->compactDroppedPrefix(
                         prefix,
-                        [=]{
-                            uint32_t int_prefix;
-                            bool ok = extractPrefix(prefix, &int_prefix);
-                            invariant(ok);
-                            stdx::lock_guard<stdx::mutex> lk(_droppedPrefixesMutex);
-                            _droppedPrefixes.erase(int_prefix);
+                        [=] (bool opSucceeded) {
+                            {
+                                uint32_t int_prefix;
+                                bool ok = extractPrefix(prefix, &int_prefix);
+                                invariant(ok);
+                                stdx::lock_guard<stdx::mutex> lk(_droppedPrefixesMutex);
+                                _droppedPrefixes.erase(int_prefix);
+                            }
+                            if (opSucceeded) {
+                                rocksdb::WriteOptions syncOptions;
+                                syncOptions.sync = true;
+                                _db->Delete(syncOptions, kDroppedPrefix + prefix);
+                            }
                         });
             if (!s.isOK()) {
                 log() << "failed to schedule compaction for prefix " << rocksdb::Slice(prefix).ToString(true);
