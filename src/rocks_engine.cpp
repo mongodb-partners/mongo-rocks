@@ -157,6 +157,11 @@ namespace mongo {
                 return _droppedCache;
             }
 
+            // IgnoreSnapshots is available since RocksDB 4.3
+#if defined(ROCKSDB_MAJOR) && (ROCKSDB_MAJOR > 4 || (ROCKSDB_MAJOR == 4 && ROCKSDB_MINOR >= 3))
+            virtual bool IgnoreSnapshots() const override { return true; }
+#endif
+
             virtual const char* Name() const { return "PrefixDeletingCompactionFilter"; }
 
         private:
