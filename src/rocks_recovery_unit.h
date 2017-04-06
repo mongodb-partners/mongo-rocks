@@ -46,6 +46,7 @@
 #include "mongo/base/owned_pointer_vector.h"
 #include "mongo/db/record_id.h"
 #include "mongo/db/storage/recovery_unit.h"
+#include "mongo/util/timer.h"
 
 #include "rocks_compaction_scheduler.h"
 #include "rocks_transaction.h"
@@ -189,6 +190,7 @@ namespace mongo {
         // it is consumed by getPreparedSnapshot()
         const rocksdb::Snapshot* _preparedSnapshot;  // owned
 
+        std::unique_ptr<Timer> _timer;
         CounterMap _deltaCounters;
 
         typedef OwnedPointerVector<Change> Changes;
