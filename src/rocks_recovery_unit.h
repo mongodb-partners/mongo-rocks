@@ -194,7 +194,7 @@ namespace mongo {
         typedef OwnedPointerVector<Change> Changes;
         Changes _changes;
 
-        uint64_t _myTransactionCount;
+        uint64_t _mySnapshotId;
 
         RecordId _oplogReadTill;
 
