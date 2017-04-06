@@ -334,55 +334,41 @@ namespace mongo {
         // load dropped prefixes
         {
             int dropped_count = 0;
-            rocksdb::WriteBatch wb;
-            // we will use this iter to check if prefixes are still alive
-            std::unique_ptr<rocksdb::Iterator> prefixIter(_db->NewIterator(rocksdb::ReadOptions()));
             for (iter->Seek(kDroppedPrefix);
                  iter->Valid() && iter->key().starts_with(kDroppedPrefix); iter->Next()) {
                 invariantRocksOK(iter->status());
                 rocksdb::Slice prefix(iter->key());
                 std::string prefixkey(prefix.ToString());
                 prefix.remove_prefix(kDroppedPrefix.size());
-                prefixIter->Seek(prefix);
-                invariantRocksOK(iter->status());
-                if (prefixIter->Valid() && prefixIter->key().starts_with(prefix)) {
-                    // prefix is still alive, let's instruct the compaction filter to clear it up
-                    ++dropped_count;
-                    uint32_t int_prefix;
-                    bool ok = extractPrefix(prefix, &int_prefix);
-                    invariant(ok);
-                    {
-                        stdx::lock_guard<stdx::mutex> lk(_droppedPrefixesMutex);
-                        _droppedPrefixes.insert(int_prefix);
-                    }
-                    LOG(1) << "compacting dropped prefix: " << prefix.ToString(true);
-                    auto s = _compactionScheduler->compactDroppedPrefix(
-                                prefix.ToString(),
-                                [=] (bool opSucceeded) {
-                                    {
-                                        stdx::lock_guard<stdx::mutex> lk(_droppedPrefixesMutex);
-                                        _droppedPrefixes.erase(int_prefix);
-                                    }
-                                    if (opSucceeded) {
-                                        rocksdb::WriteOptions syncOptions;
-                                        syncOptions.sync = true;
-                                        _db->Delete(syncOptions, prefixkey);
-                                    }
-                                });
-                    if (!s.isOK()) {
-                        log() << "failed to schedule compaction for prefix " << prefix.ToString(true);
-                    }
-                } else {
-                    // prefix is no longer alive. let's remove the prefix from our dropped prefixes
-                    // list
-                    wb.Delete(iter->key());
+
+                // let's instruct the compaction scheduler to compact dropped prefix
+                ++dropped_count;
+                uint32_t int_prefix;
+                bool ok = extractPrefix(prefix, &int_prefix);
+                invariant(ok);
+                {
+                    stdx::lock_guard<stdx::mutex> lk(_droppedPrefixesMutex);
+                    _droppedPrefixes.insert(int_prefix);
+                }
+                LOG(1) << "compacting dropped prefix: " << prefix.ToString(true);
+                auto s = _compactionScheduler->compactDroppedPrefix(
+                            prefix.ToString(),
+                            [=] (bool opSucceeded) {
+                                {
+                                    stdx::lock_guard<stdx::mutex> lk(_droppedPrefixesMutex);
+                                    _droppedPrefixes.erase(int_prefix);
+                                }
+                                if (opSucceeded) {
+                                    rocksdb::WriteOptions syncOptions;
+                                    syncOptions.sync = true;
+                                    _db->Delete(syncOptions, prefixkey);
+                                }
+                            });
+                if (!s.isOK()) {
+                    log() << "failed to schedule compaction for prefix " << prefix.ToString(true);
                 }
             }
             log() << dropped_count << " dropped prefixes need compaction";
-            if (wb.Count() > 0) {
-                auto s = _db->Write(rocksdb::WriteOptions(), &wb);
-                invariantRocksOK(s);
-            }
         }
 
         _durabilityManager.reset(new RocksDurabilityManager(_db.get(), _durable));
