@@ -33,9 +33,11 @@
 
 #include "rocks_server_status.h"
 
+#include "boost/algorithm/string.hpp"
 #include "boost/scoped_ptr.hpp"
 
 #include <rocksdb/db.h>
+#include <rocksdb/table.h>
 #include <rocksdb/statistics.h>
 
 #include "mongo/base/checked_cast.h"
@@ -203,6 +205,24 @@ namespace mongo {
           }
 
           bob.append("counters", countersObjBuilder.obj());
+        }
+
+        // add table options
+        auto tableFactory = _engine->getDB()->GetOptions().table_factory;
+        if (tableFactory) {
+          using namespace boost::algorithm;
+          bob.append("table-name", std::string(tableFactory->Name()));
+
+          BSONObjBuilder optionObjBuilder;
+          std::string options = tableFactory->GetPrintableTableOptions();
+          std::vector<std::string> tokens;
+          split(tokens, options, is_any_of("\n :"), token_compress_on);
+          for (int i = 0; i + 1 < tokens.size(); i += 2) {
+            if (!tokens[i].empty()) {
+              optionObjBuilder.append(tokens[i], tokens[i + 1]);
+            }
+          }
+          bob.append("table-options", optionObjBuilder.obj());
         }
         
         RocksEngine::appendGlobalStats(bob);
