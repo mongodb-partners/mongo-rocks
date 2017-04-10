@@ -44,6 +44,7 @@
 #include "mongo/base/checked_cast.h"
 #include "mongo/db/concurrency/write_conflict_exception.h"
 #include "mongo/db/operation_context.h"
+#include "mongo/db/server_options.h"
 #include "mongo/db/storage/journal_listener.h"
 #include "mongo/util/log.h"
 
@@ -54,6 +55,13 @@
 
 namespace mongo {
     namespace {
+        // SnapshotIds need to be globally unique, as they are used in a WorkingSetMember to
+        // determine if documents changed, but a different recovery unit may be used across a getMore,
+        // so there is a chance the snapshot ID will be reused.
+        AtomicUInt64 nextSnapshotId{1};
+
+        logger::LogSeverity kSlowTransactionSeverity = logger::LogSeverity::Debug(1);
+
         class PrefixStrippingIterator : public RocksIterator {
         public:
             // baseIterator is consumed
@@ -217,7 +225,7 @@ namespace mongo {
           _writeBatch(rocksdb::BytewiseComparator(), 0, true),
           _snapshot(nullptr),
           _preparedSnapshot(nullptr),
-          _myTransactionCount(1) {
+          _mySnapshotId(nextSnapshotId.fetchAndAdd(1)) {
         RocksRecoveryUnit::_totalLiveRecoveryUnits.fetch_add(1, std::memory_order_relaxed);
     }
 
@@ -293,9 +301,19 @@ namespace mongo {
         return SnapshotName(_snapshotManager->getCommittedSnapshot().get()->name);
     }
 
-    SnapshotId RocksRecoveryUnit::getSnapshotId() const { return SnapshotId(_myTransactionCount); }
+    SnapshotId RocksRecoveryUnit::getSnapshotId() const { return SnapshotId(_mySnapshotId); }
 
     void RocksRecoveryUnit::_releaseSnapshot() {
+        if (_timer) {
+            const int transactionTime = _timer->millis();
+            _timer.reset();
+            if (transactionTime >= serverGlobalParams.slowMS) {
+                LOG(kSlowTransactionSeverity) << "Slow transaction. Lifetime of SnapshotId "
+                                              << _mySnapshotId << " was " << transactionTime
+                                              << " ms";
+            }
+        }
+
         if (_snapshot) {
             _transaction.abort();
             _db->ReleaseSnapshot(_snapshot);
@@ -303,7 +321,7 @@ namespace mongo {
         }
         _snapshotHolder.reset();
 
-        _myTransactionCount++;
+        _mySnapshotId = nextSnapshotId.fetchAndAdd(1);
     }
 
     void RocksRecoveryUnit::prepareForCreateSnapshot(OperationContext* opCtx) {
@@ -369,6 +387,11 @@ namespace mongo {
     }
 
     const rocksdb::Snapshot* RocksRecoveryUnit::snapshot() {
+        // Only start a timer for transaction's lifetime if we're going to log it.
+        if (shouldLog(kSlowTransactionSeverity)) {
+            _timer.reset(new Timer());
+        }
+
         if (_readFromMajorityCommittedSnapshot) {
             if (_snapshotHolder.get() == nullptr) {
                 _snapshotHolder = _snapshotManager->getCommittedSnapshot();
