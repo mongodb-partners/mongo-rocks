@@ -196,7 +196,7 @@ namespace mongo {
         private:
             const RocksEngine* _engine;
         };
-        
+
         // ServerParameter to limit concurrency, to prevent thousands of threads running
         // concurrent searches and thus blocking the entire DB.
         class RocksTicketServerParameter : public ServerParameter {
@@ -229,7 +229,7 @@ namespace mongo {
 
                 return _holder->resize(newNum);
             }
-            
+
             TicketHolder* _holder;
         };
 
@@ -446,7 +446,8 @@ namespace mongo {
         RocksIndexBase* index;
         if (desc->unique()) {
             index = new RocksUniqueIndex(_db.get(), _getIdentPrefix(ident), ident.toString(),
-                                         Ordering::make(desc->keyPattern()));
+                                         Ordering::make(desc->keyPattern()), desc->isPartial());
+
         } else {
             auto si = new RocksStandardIndex(_db.get(), _getIdentPrefix(ident), ident.toString(),
                                              Ordering::make(desc->keyPattern()));
