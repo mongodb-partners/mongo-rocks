@@ -119,24 +119,19 @@ namespace mongo {
 
     class CompactionBackgroundJob : public BackgroundJob {
     public:
-        CompactionBackgroundJob(rocksdb::DB* db);
+        CompactionBackgroundJob(rocksdb::DB* db, RocksCompactionScheduler* compactionScheduler);
         virtual ~CompactionBackgroundJob();
 
         // schedule compact range operation for execution in _compactionThread
-        void scheduleCompactOp(
-            const std::string& begin = std::string(), const std::string& end = std::string(),
-            bool rangeDropped = false,
-            const std::function<void(bool)>& cleanup = std::function<void(bool)>());
+        void scheduleCompactOp(const std::string& begin, const std::string& end, bool rangeDropped);
 
     private:
         // struct with compaction operation data
         struct CompactOp {
-            void doCompact(rocksdb::DB* db) const;
-
             std::string _start_str;
             std::string _end_str;
+
             bool _rangeDropped;
-            std::function<void(bool)> _cleanup;
         };
 
         static const char * const _name;
@@ -145,7 +140,10 @@ namespace mongo {
         virtual std::string name() const override { return _name; }
         virtual void run() override;
 
+        void compact(const CompactOp& op);
+
         rocksdb::DB* _db;  // not owned
+        RocksCompactionScheduler* _compactionScheduler;  // not owned
 
         bool _compactionThreadRunning = true;
         stdx::mutex _compactionMutex;
@@ -155,8 +153,9 @@ namespace mongo {
 
     const char* const CompactionBackgroundJob::_name = "RocksCompactionThread";
 
-    CompactionBackgroundJob::CompactionBackgroundJob(rocksdb::DB* db)
-        : _db(db) {
+    CompactionBackgroundJob::CompactionBackgroundJob(rocksdb::DB* db,
+                                                     RocksCompactionScheduler* compactionScheduler)
+        : _db(db), _compactionScheduler(compactionScheduler) {
         go();
     }
 
@@ -211,7 +210,7 @@ namespace mongo {
                 // unlock mutex for the time of compaction
                 unlock_guard<decltype(lk)> rlk(lk);
                 // do compaction
-                op.doCompact(_db);
+                compact(op);
             }
         }
         lk.unlock();
@@ -219,29 +218,28 @@ namespace mongo {
     }
 
     void CompactionBackgroundJob::scheduleCompactOp(const std::string& begin,
-                                                    const std::string& end, bool rangeDropped,
-                                                    const std::function<void(bool)>& cleanup) {
+                                                    const std::string& end, bool rangeDropped) {
         {
             stdx::lock_guard<stdx::mutex> lk(_compactionMutex);
-            _compactionQueue.push_back({begin, end, rangeDropped, cleanup});
+            _compactionQueue.push_back({begin, end, rangeDropped});
         }
         _compactionWakeUp.notify_one();
     }
 
-    void CompactionBackgroundJob::CompactOp::doCompact(rocksdb::DB* db) const {
-        rocksdb::Slice start_slice(_start_str);
-        rocksdb::Slice end_slice(_end_str);
+    void CompactionBackgroundJob::compact(const CompactOp& op) {
+        rocksdb::Slice start_slice(op._start_str);
+        rocksdb::Slice end_slice(op._end_str);
 
-        rocksdb::Slice* start = !_start_str.empty() ? &start_slice : nullptr;
-        rocksdb::Slice* end = !_end_str.empty() ? &end_slice : nullptr;
+        rocksdb::Slice* start = !op._start_str.empty() ? &start_slice : nullptr;
+        rocksdb::Slice* end = !op._end_str.empty() ? &end_slice : nullptr;
 
         LOG(1) << "starting compaction of range: "
               << (start ? start->ToString(true) : "<begin>") << " .. "
               << (end ? end->ToString(true) : "<end>")
-              << " (_rangeDropped is " << _rangeDropped << ")";
+              << " (rangeDropped is " << op._rangeDropped << ")";
 
-        if (_rangeDropped) {
-            auto s = rocksdb::DeleteFilesInRange(db, db->DefaultColumnFamily(), start, end);
+        if (op._rangeDropped) {
+            auto s = rocksdb::DeleteFilesInRange(_db, _db->DefaultColumnFamily(), start, end);
             if (!s.ok()) {
                 log() << "failed to delete files in range: " << s.ToString();
             }
@@ -250,14 +248,12 @@ namespace mongo {
         rocksdb::CompactRangeOptions compact_options;
         compact_options.bottommost_level_compaction = rocksdb::BottommostLevelCompaction::kForce;
         compact_options.exclusive_manual_compaction = false;
-        auto s = db->CompactRange(compact_options, start, end);
+        auto s = _db->CompactRange(compact_options, start, end);
         if (!s.ok()) {
             log() << "failed to compact range: " << s.ToString();
         }
 
-        if (_cleanup) {
-            _cleanup(s.ok());
-        }
+        _compactionScheduler->notifyCompacted(op._start_str, op._end_str, op._rangeDropped, s.ok());
     }
 
     // first four bytes are the default prefix 0
@@ -268,7 +264,7 @@ namespace mongo {
     void RocksCompactionScheduler::start(rocksdb::DB* db) {
         _db = db;
         _timer.reset();
-        _compactionJob.reset(new CompactionBackgroundJob(db));
+        _compactionJob.reset(new CompactionBackgroundJob(db, this));
     }
 
     void RocksCompactionScheduler::reportSkippedDeletionsAboveThreshold(const std::string& prefix) {
@@ -296,7 +292,7 @@ namespace mongo {
     void RocksCompactionScheduler::compactAll() { compactRange(std::string(), std::string()); }
 
     void RocksCompactionScheduler::compactRange(const std::string& start, const std::string& end) {
-        _compactionJob->scheduleCompactOp(start, end);
+        _compactionJob->scheduleCompactOp(start, end, false);
     }
 
     void RocksCompactionScheduler::compactPrefix(const std::string& prefix) {
@@ -304,14 +300,12 @@ namespace mongo {
     }
 
     void RocksCompactionScheduler::compactDroppedRange(const std::string& start,
-                                                       const std::string& end,
-                                                       const std::function<void(bool)>& cleanup) {
-        _compactionJob->scheduleCompactOp(start, end, true, cleanup);
+                                                       const std::string& end) {
+        _compactionJob->scheduleCompactOp(start, end, true);
     }
 
-    void RocksCompactionScheduler::compactDroppedPrefix(const std::string& prefix,
-                                                        const std::function<void(bool)>& cleanup) {
-        compactDroppedRange(prefix, rocksGetNextPrefix(prefix), cleanup);
+    void RocksCompactionScheduler::compactDroppedPrefix(const std::string& prefix) {
+        compactDroppedRange(prefix, rocksGetNextPrefix(prefix));
     }
 
     rocksdb::CompactionFilterFactory* RocksCompactionScheduler::createCompactionFilterFactory()
@@ -333,7 +327,6 @@ namespace mongo {
              iter->Next()) {
             invariantRocksOK(iter->status());
             rocksdb::Slice prefix(iter->key());
-            std::string prefixkey(prefix.ToString());
             prefix.remove_prefix(kDroppedPrefix.size());
 
             // let's instruct the compaction scheduler to compact dropped prefix
@@ -346,17 +339,7 @@ namespace mongo {
                 _droppedPrefixes.insert(int_prefix);
             }
             LOG(1) << "compacting dropped prefix: " << prefix.ToString(true);
-            compactDroppedPrefix(prefix.ToString(), [=](bool opSucceeded) {
-                {
-                    stdx::lock_guard<stdx::mutex> lk(_droppedPrefixesMutex);
-                    _droppedPrefixes.erase(int_prefix);
-                }
-                if (opSucceeded) {
-                    rocksdb::WriteOptions syncOptions;
-                    syncOptions.sync = true;
-                    _db->Delete(syncOptions, prefixkey);
-                }
-            });
+            compactDroppedPrefix(prefix.ToString());
         }
         log() << dropped_count << " dropped prefixes need compaction";
     }
@@ -389,22 +372,32 @@ namespace mongo {
         // Suggest compaction for the prefixes that we need to drop, So that
         // we free space as fast as possible.
         for (auto& prefix : prefixesToDrop) {
-            compactDroppedPrefix(prefix, [=](bool opSucceeded) {
-                {
-                    uint32_t int_prefix;
-                    bool ok = extractPrefix(prefix, &int_prefix);
-                    invariant(ok);
-                    stdx::lock_guard<stdx::mutex> lk(_droppedPrefixesMutex);
-                    _droppedPrefixes.erase(int_prefix);
-                }
-                if (opSucceeded) {
-                    rocksdb::WriteOptions syncOptions;
-                    syncOptions.sync = true;
-                    _db->Delete(syncOptions, kDroppedPrefix + prefix);
-                }
-            });
+            compactDroppedPrefix(prefix);
         }
 
         return Status::OK();
+    }
+
+    void RocksCompactionScheduler::notifyCompacted(const std::string& begin, const std::string& end,
+                                                   bool rangeDropped, bool opSucceeded) {
+        if (rangeDropped) {
+            droppedPrefixCompacted(begin, opSucceeded);
+        }
+    }
+
+    void RocksCompactionScheduler::droppedPrefixCompacted(const std::string& prefix,
+                                                          bool opSucceeded) {
+        uint32_t int_prefix;
+        bool ok = extractPrefix(prefix, &int_prefix);
+        invariant(ok);
+        {
+            stdx::lock_guard<stdx::mutex> lk(_droppedPrefixesMutex);
+            _droppedPrefixes.erase(int_prefix);
+        }
+        if (opSucceeded) {
+            rocksdb::WriteOptions syncOptions;
+            syncOptions.sync = true;
+            _db->Delete(syncOptions, kDroppedPrefix + prefix);
+        }
     }
 }
