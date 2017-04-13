@@ -64,7 +64,8 @@ namespace mongo {
             _db.reset(db);
             _counterManager.reset(new RocksCounterManager(_db.get(), true));
             _durabilityManager.reset(new RocksDurabilityManager(_db.get(), true));
-            _compactionScheduler.reset(new RocksCompactionScheduler(_db.get()));
+            _compactionScheduler.reset(new RocksCompactionScheduler());
+            _compactionScheduler->start(_db.get());
         }
 
         virtual std::unique_ptr<RecordStore> newNonCappedRecordStore() {

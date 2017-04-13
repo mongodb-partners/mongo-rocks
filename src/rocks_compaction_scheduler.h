@@ -39,6 +39,7 @@
 #include "mongo/util/timer.h"
 
 namespace rocksdb {
+    class CompactionFilterFactory;
     class DB;
     class Iterator;
     class WriteOptions;
@@ -51,8 +52,10 @@ namespace mongo {
 
     class RocksCompactionScheduler {
     public:
-        RocksCompactionScheduler(rocksdb::DB* db);
+        RocksCompactionScheduler();
         ~RocksCompactionScheduler();
+
+        void start(rocksdb::DB* db);
 
         static int getSkippedDeletionsThreshold() { return kSkippedDeletionsThreshold; }
 
@@ -63,6 +66,7 @@ namespace mongo {
         Status compactRange(const std::string& begin, const std::string& end);
         Status compactPrefix(const std::string& prefix);
 
+        rocksdb::CompactionFilterFactory* createCompactionFilterFactory() const;
         std::unordered_set<uint32_t> getDroppedPrefixes() const;
         void loadDroppedPrefixes(rocksdb::Iterator* iter);
         Status dropPrefixesAtomic(const std::vector<std::string>& prefixesToDrop,
