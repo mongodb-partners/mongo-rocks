@@ -32,7 +32,18 @@
 #include <string>
 #include <rocksdb/status.h>
 
+#include "mongo/platform/endian.h"
+
 namespace mongo {
+    // we encode prefixes in big endian because we want to quickly jump to the max prefix
+    // (iter->SeekToLast())
+    bool extractPrefix(const rocksdb::Slice& slice, uint32_t* prefix) {
+        if (slice.size() < sizeof(uint32_t)) {
+            return false;
+        }
+        *prefix = endian::bigToNative(*reinterpret_cast<const uint32_t*>(slice.data()));
+        return true;
+    }
 
     Status rocksToMongoStatus_slow(const rocksdb::Status& status, const char* prefix) {
         if (status.ok()) {
