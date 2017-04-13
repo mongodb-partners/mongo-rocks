@@ -48,6 +48,8 @@ namespace mongo {
         return nextPrefix;
     }
 
+    bool extractPrefix(const rocksdb::Slice& slice, uint32_t* prefix);
+
     Status rocksToMongoStatus_slow(const rocksdb::Status& status, const char* prefix);
 
     /**
