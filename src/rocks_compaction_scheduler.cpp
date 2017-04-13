@@ -46,6 +46,7 @@
 #include <rocksdb/convenience.h>
 #include <rocksdb/db.h>
 #include <rocksdb/experimental.h>
+#include <rocksdb/perf_context.h>
 #include <rocksdb/slice.h>
 #include <rocksdb/write_batch.h>
 
@@ -259,7 +260,7 @@ namespace mongo {
     // first four bytes are the default prefix 0
     const std::string RocksCompactionScheduler::kDroppedPrefix("\0\0\0\0droppedprefix-", 18);
 
-    RocksCompactionScheduler::RocksCompactionScheduler() : _db(nullptr) {}
+    RocksCompactionScheduler::RocksCompactionScheduler() : _db(nullptr), _droppedPrefixesCount(0) {}
 
     void RocksCompactionScheduler::start(rocksdb::DB* db) {
         _db = db;
@@ -322,6 +323,8 @@ namespace mongo {
 
     void RocksCompactionScheduler::loadDroppedPrefixes(rocksdb::Iterator* iter) {
         invariant(iter);
+        const uint32_t rocksdbSkippedDeletionsInitial =
+            rocksdb::perf_context.internal_delete_skipped_count;
         int dropped_count = 0;
         for (iter->Seek(kDroppedPrefix); iter->Valid() && iter->key().starts_with(kDroppedPrefix);
              iter->Next()) {
@@ -342,6 +345,10 @@ namespace mongo {
             compactDroppedPrefix(prefix.ToString());
         }
         log() << dropped_count << " dropped prefixes need compaction";
+
+        const uint32_t skippedDroppedPrefixMarkers =
+            rocksdb::perf_context.internal_delete_skipped_count - rocksdbSkippedDeletionsInitial;
+        _droppedPrefixesCount.fetch_add(skippedDroppedPrefixMarkers, std::memory_order_relaxed);
     }
 
     Status RocksCompactionScheduler::dropPrefixesAtomic(
@@ -398,6 +405,19 @@ namespace mongo {
             rocksdb::WriteOptions syncOptions;
             syncOptions.sync = true;
             _db->Delete(syncOptions, kDroppedPrefix + prefix);
+
+            // This operation only happens from one thread, so no concurrent
+            // updates are possible.
+            // The only time this counter may be modified from a different
+            // thread is during startup loading of dropped prefixes.
+            // But that's not a big issue, we'll eventually sync and call
+            // compaction next time if needed.
+            if (_droppedPrefixesCount.fetch_add(1, std::memory_order_relaxed) >=
+                kSkippedDeletionsThreshold) {
+                log() << "Compacting dropped prefixes markers";
+                _droppedPrefixesCount.store(0, std::memory_order_relaxed);
+                compactPrefix(kDroppedPrefix);
+            }
         }
     }
 }
