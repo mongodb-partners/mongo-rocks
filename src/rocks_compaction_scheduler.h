@@ -72,12 +72,13 @@ namespace mongo {
         Status dropPrefixesAtomic(const std::vector<std::string>& prefixesToDrop,
                                   const rocksdb::WriteOptions& syncOptions,
                                   rocksdb::WriteBatch& wb);
+        void notifyCompacted(const std::string& begin, const std::string& end, bool rangeDropped,
+                             bool opSucceeded);
 
     private:
-        void compactDroppedRange(const std::string& begin, const std::string& end,
-                                 const std::function<void(bool)>& cleanup);
-        void compactDroppedPrefix(const std::string& prefix,
-                                  const std::function<void(bool)>& cleanup);
+        void compactDroppedRange(const std::string& begin, const std::string& end);
+        void compactDroppedPrefix(const std::string& prefix);
+        void droppedPrefixCompacted(const std::string& prefix, bool opSucceeded);
 
     private:
         stdx::mutex _lock;
