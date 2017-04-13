@@ -123,70 +123,6 @@ namespace mongo {
             return std::string(reinterpret_cast<const char*>(&bigEndianPrefix), sizeof(uint32_t));
         }
 
-        class PrefixDeletingCompactionFilter : public rocksdb::CompactionFilter {
-        public:
-            explicit PrefixDeletingCompactionFilter(std::unordered_set<uint32_t> droppedPrefixes)
-                : _droppedPrefixes(std::move(droppedPrefixes)),
-                  _prefixCache(0),
-                  _droppedCache(false) {}
-
-            // filter is not called from multiple threads simultaneously
-            virtual bool Filter(int level, const rocksdb::Slice& key,
-                                const rocksdb::Slice& existing_value, std::string* new_value,
-                                bool* value_changed) const {
-                uint32_t prefix = 0;
-                if (!extractPrefix(key, &prefix)) {
-                    // this means there is a key in the database that's shorter than 4 bytes. this
-                    // should never happen and this is a corruption. however, it's not compaction
-                    // filter's job to report corruption, so we just silently continue
-                    return false;
-                }
-                if (prefix == _prefixCache) {
-                    return _droppedCache;
-                }
-                _prefixCache = prefix;
-                _droppedCache = _droppedPrefixes.find(prefix) != _droppedPrefixes.end();
-                return _droppedCache;
-            }
-
-            // IgnoreSnapshots is available since RocksDB 4.3
-#if defined(ROCKSDB_MAJOR) && (ROCKSDB_MAJOR > 4 || (ROCKSDB_MAJOR == 4 && ROCKSDB_MINOR >= 3))
-            virtual bool IgnoreSnapshots() const override { return true; }
-#endif
-
-            virtual const char* Name() const { return "PrefixDeletingCompactionFilter"; }
-
-        private:
-            std::unordered_set<uint32_t> _droppedPrefixes;
-            mutable uint32_t _prefixCache;
-            mutable bool _droppedCache;
-        };
-
-        class PrefixDeletingCompactionFilterFactory : public rocksdb::CompactionFilterFactory {
-        public:
-            explicit
-            PrefixDeletingCompactionFilterFactory(const RocksEngine* engine) : _engine(engine) {}
-
-            virtual std::unique_ptr<rocksdb::CompactionFilter> CreateCompactionFilter(
-                const rocksdb::CompactionFilter::Context& context) override {
-                auto droppedPrefixes = _engine->getCompactionScheduler()->getDroppedPrefixes();
-                if (droppedPrefixes.size() == 0) {
-                    // no compaction filter needed
-                    return std::unique_ptr<rocksdb::CompactionFilter>(nullptr);
-                } else {
-                    return std::unique_ptr<rocksdb::CompactionFilter>(
-                        new PrefixDeletingCompactionFilter(std::move(droppedPrefixes)));
-                }
-            }
-
-            virtual const char* Name() const override {
-                return "PrefixDeletingCompactionFilterFactory";
-            }
-
-        private:
-            const RocksEngine* _engine;
-        };
-        
         // ServerParameter to limit concurrency, to prevent thousands of threads running
         // concurrent searches and thus blocking the entire DB.
         class RocksTicketServerParameter : public ServerParameter {
@@ -262,6 +198,9 @@ namespace mongo {
             _statistics = rocksdb::CreateDBStatistics();
         }
 
+        // used in building options for the db
+        _compactionScheduler.reset(new RocksCompactionScheduler());
+
         // open DB
         rocksdb::DB* db;
         rocksdb::Status s;
@@ -275,7 +214,6 @@ namespace mongo {
 
         _counterManager.reset(
             new RocksCounterManager(_db.get(), rocksGlobalOptions.crashSafeCounters));
-        _compactionScheduler.reset(new RocksCompactionScheduler(_db.get()));
 
         // open iterator
         std::unique_ptr<rocksdb::Iterator> iter(_db->NewIterator(rocksdb::ReadOptions()));
@@ -320,7 +258,8 @@ namespace mongo {
         // reserve prefix+1 for oplog key tracker
         ++_maxPrefix;
 
-        // load dropped prefixes
+        // start compaction thread and load dropped prefixes
+        _compactionScheduler->start(_db.get());
         _compactionScheduler->loadDroppedPrefixes(iter.get());
 
         _durabilityManager.reset(new RocksDurabilityManager(_db.get(), _durable));
@@ -618,7 +557,8 @@ namespace mongo {
         // keep all RocksDB files opened.
         options.max_open_files = -1;
         options.optimize_filters_for_hits = true;
-        options.compaction_filter_factory.reset(new PrefixDeletingCompactionFilterFactory(this));
+        options.compaction_filter_factory.reset(
+            _compactionScheduler->createCompactionFilterFactory());
         options.enable_thread_tracking = true;
         // Enable concurrent memtable
         options.allow_concurrent_memtable_write = true;

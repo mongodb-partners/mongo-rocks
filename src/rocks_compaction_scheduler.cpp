@@ -42,6 +42,7 @@
 #include "mongo/util/log.h"
 #include "rocks_util.h"
 
+#include <rocksdb/compaction_filter.h>
 #include <rocksdb/convenience.h>
 #include <rocksdb/db.h>
 #include <rocksdb/experimental.h>
@@ -49,6 +50,73 @@
 #include <rocksdb/write_batch.h>
 
 namespace mongo {
+    namespace {
+        class PrefixDeletingCompactionFilter : public rocksdb::CompactionFilter {
+        public:
+            explicit PrefixDeletingCompactionFilter(std::unordered_set<uint32_t> droppedPrefixes)
+                : _droppedPrefixes(std::move(droppedPrefixes)),
+                  _prefixCache(0),
+                  _droppedCache(false) {}
+
+            // filter is not called from multiple threads simultaneously
+            virtual bool Filter(int level, const rocksdb::Slice& key,
+                                const rocksdb::Slice& existing_value, std::string* new_value,
+                                bool* value_changed) const {
+                uint32_t prefix = 0;
+                if (!extractPrefix(key, &prefix)) {
+                    // this means there is a key in the database that's shorter than 4 bytes. this
+                    // should never happen and this is a corruption. however, it's not compaction
+                    // filter's job to report corruption, so we just silently continue
+                    return false;
+                }
+                if (prefix == _prefixCache) {
+                    return _droppedCache;
+                }
+                _prefixCache = prefix;
+                _droppedCache = _droppedPrefixes.find(prefix) != _droppedPrefixes.end();
+                return _droppedCache;
+            }
+
+            // IgnoreSnapshots is available since RocksDB 4.3
+#if defined(ROCKSDB_MAJOR) && (ROCKSDB_MAJOR > 4 || (ROCKSDB_MAJOR == 4 && ROCKSDB_MINOR >= 3))
+            virtual bool IgnoreSnapshots() const override { return true; }
+#endif
+
+            virtual const char* Name() const { return "PrefixDeletingCompactionFilter"; }
+
+        private:
+            std::unordered_set<uint32_t> _droppedPrefixes;
+            mutable uint32_t _prefixCache;
+            mutable bool _droppedCache;
+        };
+
+        class PrefixDeletingCompactionFilterFactory : public rocksdb::CompactionFilterFactory {
+        public:
+            explicit PrefixDeletingCompactionFilterFactory(
+                const RocksCompactionScheduler* scheduler)
+                : _compactionScheduler(scheduler) {}
+
+            virtual std::unique_ptr<rocksdb::CompactionFilter> CreateCompactionFilter(
+                const rocksdb::CompactionFilter::Context& context) override {
+                auto droppedPrefixes = _compactionScheduler->getDroppedPrefixes();
+                if (droppedPrefixes.size() == 0) {
+                    // no compaction filter needed
+                    return std::unique_ptr<rocksdb::CompactionFilter>(nullptr);
+                } else {
+                    return std::unique_ptr<rocksdb::CompactionFilter>(
+                        new PrefixDeletingCompactionFilter(std::move(droppedPrefixes)));
+                }
+            }
+
+            virtual const char* Name() const override {
+                return "PrefixDeletingCompactionFilterFactory";
+            }
+
+        private:
+            const RocksCompactionScheduler* _compactionScheduler;
+        };
+    } // end of anon namespace
+
     class CompactionBackgroundJob : public BackgroundJob {
     public:
         CompactionBackgroundJob(rocksdb::DB* db);
@@ -193,9 +261,12 @@ namespace mongo {
     // first four bytes are the default prefix 0
     const std::string RocksCompactionScheduler::kDroppedPrefix("\0\0\0\0droppedprefix-", 18);
 
-    RocksCompactionScheduler::RocksCompactionScheduler(rocksdb::DB* db)
-        : _db(db), _compactionJob(new CompactionBackgroundJob(db)) {
+    RocksCompactionScheduler::RocksCompactionScheduler() : _db(nullptr) {}
+
+    void RocksCompactionScheduler::start(rocksdb::DB* db) {
+        _db = db;
         _timer.reset();
+        _compactionJob.reset(new CompactionBackgroundJob(db));
     }
 
     void RocksCompactionScheduler::reportSkippedDeletionsAboveThreshold(const std::string& prefix) {
@@ -240,6 +311,11 @@ namespace mongo {
     Status RocksCompactionScheduler::compactDroppedPrefix(const std::string& prefix,
                                                           const std::function<void(bool)>& cleanup) {
         return compactDroppedRange(prefix, rocksGetNextPrefix(prefix), cleanup);
+    }
+
+    rocksdb::CompactionFilterFactory* RocksCompactionScheduler::createCompactionFilterFactory()
+        const {
+        return new PrefixDeletingCompactionFilterFactory(this);
     }
 
     std::unordered_set<uint32_t> RocksCompactionScheduler::getDroppedPrefixes() const {
