@@ -115,7 +115,8 @@ namespace mongo {
     }
 
     Status RocksCompactServerParameter::setFromString(const std::string& str) {
-        return _engine->getCompactionScheduler()->compactAll();
+        _engine->getCompactionScheduler()->compactAll();
+        return Status::OK();
     }
 
     RocksCacheSizeParameter::RocksCacheSizeParameter(RocksEngine* engine)

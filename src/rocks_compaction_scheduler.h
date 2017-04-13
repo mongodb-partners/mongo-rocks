@@ -62,9 +62,9 @@ namespace mongo {
         void reportSkippedDeletionsAboveThreshold(const std::string& prefix);
 
         // schedule compact range operation for execution in _compactionThread
-        Status compactAll();
-        Status compactRange(const std::string& begin, const std::string& end);
-        Status compactPrefix(const std::string& prefix);
+        void compactAll();
+        void compactRange(const std::string& begin, const std::string& end);
+        void compactPrefix(const std::string& prefix);
 
         rocksdb::CompactionFilterFactory* createCompactionFilterFactory() const;
         std::unordered_set<uint32_t> getDroppedPrefixes() const;
@@ -74,9 +74,10 @@ namespace mongo {
                                   rocksdb::WriteBatch& wb);
 
     private:
-        Status compactDroppedRange(const std::string& begin, const std::string& end,
-                                   const std::function<void(bool)>& cleanup);
-        Status compactDroppedPrefix(const std::string& prefix, const std::function<void(bool)>& cleanup);
+        void compactDroppedRange(const std::string& begin, const std::string& end,
+                                 const std::function<void(bool)>& cleanup);
+        void compactDroppedPrefix(const std::string& prefix,
+                                  const std::function<void(bool)>& cleanup);
 
     private:
         stdx::mutex _lock;
