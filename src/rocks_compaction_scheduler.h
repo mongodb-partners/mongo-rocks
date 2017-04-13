@@ -28,6 +28,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <string>
@@ -99,6 +100,7 @@ namespace mongo {
         // set of all prefixes that are deleted. we delete them in the background thread
         mutable stdx::mutex _droppedPrefixesMutex;
         std::unordered_set<uint32_t> _droppedPrefixes;
+        std::atomic<uint32_t> _droppedPrefixesCount;
 
         static const std::string kDroppedPrefix;
     };
