@@ -252,6 +252,12 @@ namespace mongo {
         auto s = _db->CompactRange(compact_options, start, end);
         if (!s.ok()) {
             log() << "Failed to compact range: " << s.ToString();
+
+            // Let's leave as quickly as possible if in shutdown
+            stdx::lock_guard<stdx::mutex> lk(_compactionMutex);
+            if (!_compactionThreadRunning) {
+                return;
+            }
         }
 
         _compactionScheduler->notifyCompacted(op._start_str, op._end_str, op._rangeDropped, s.ok());
