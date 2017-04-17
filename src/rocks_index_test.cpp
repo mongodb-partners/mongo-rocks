@@ -36,6 +36,7 @@
 #include <rocksdb/options.h>
 #include <rocksdb/slice.h>
 
+#include "mongo/base/init.h"
 #include "mongo/db/concurrency/write_conflict_exception.h"
 #include "mongo/db/storage/sorted_data_interface_test_harness.h"
 #include "mongo/stdx/memory.h"
@@ -49,10 +50,11 @@
 #include "rocks_snapshot_manager.h"
 
 namespace mongo {
+namespace {
 
     using std::string;
 
-    class RocksIndexHarness final : public HarnessHelper {
+    class RocksIndexHarness final : public SortedDataInterfaceHarnessHelper {
     public:
         RocksIndexHarness() : _order(Ordering::make(BSONObj())), _tempDir(_testNamespace) {
             boost::filesystem::remove_all(_tempDir.path());
@@ -96,12 +98,17 @@ namespace mongo {
         std::unique_ptr<RocksCounterManager> _counterManager;
     };
 
-    std::unique_ptr<HarnessHelper> newHarnessHelper() {
+    std::unique_ptr<HarnessHelper> makeHarnessHelper() {
         return stdx::make_unique<RocksIndexHarness>();
     }
 
+    MONGO_INITIALIZER(RegisterHarnessFactory)(InitializerContext* const) {
+        mongo::registerHarnessHelperFactory(makeHarnessHelper);
+        return Status::OK();
+    }
+
     TEST(RocksIndexTest, Isolation) {
-        const std::unique_ptr<HarnessHelper> harnessHelper(newHarnessHelper());
+        auto harnessHelper = stdx::make_unique<RocksIndexHarness>();
 
         const std::unique_ptr<SortedDataInterface>
         sorted(harnessHelper->newSortedDataInterface(true));
@@ -168,7 +175,8 @@ namespace mongo {
     }
 
     void testSeekExactRemoveNext(bool forward, bool unique) {
-        auto harnessHelper = newHarnessHelper();
+        std::unique_ptr<SortedDataInterfaceHarnessHelper> harnessHelper =
+            stdx::make_unique<RocksIndexHarness>();
         auto opCtx = harnessHelper->newOperationContext();
         auto sorted = harnessHelper->newSortedDataInterface(unique,
                 {{key1, loc1}, {key2, loc1}, {key3, loc1}});
@@ -196,4 +204,5 @@ namespace mongo {
     TEST(RocksIndexTest, SeekExactRemoveNext_Reverse_Standard) {
         testSeekExactRemoveNext(false, false);
     }
-}
+} // namespace
+} // namespace mongo
