@@ -28,11 +28,11 @@
 
 #define MONGO_LOG_DEFAULT_COMPONENT ::mongo::logger::LogComponent::kStorage
 
-#include <deque>
-
 #include "mongo/platform/basic.h"
 
 #include "rocks_compaction_scheduler.h"
+
+#include <queue>
 
 #include "mongo/db/client.h"
 #include "mongo/stdx/condition_variable.h"
@@ -52,6 +52,15 @@
 
 namespace mongo {
     namespace {
+        // The order in which compaction ops are executed (priority).
+        // Smaller values run first.
+        enum : uint32_t {
+            kOrderOplog,
+            kOrderFull,
+            kOrderRange,
+            kOrderDroppedRange,
+        };
+
         class PrefixDeletingCompactionFilter : public rocksdb::CompactionFilter {
         public:
             explicit PrefixDeletingCompactionFilter(std::unordered_set<uint32_t> droppedPrefixes)
@@ -124,15 +133,18 @@ namespace mongo {
         virtual ~CompactionBackgroundJob();
 
         // schedule compact range operation for execution in _compactionThread
-        void scheduleCompactOp(const std::string& begin, const std::string& end, bool rangeDropped);
+        void scheduleCompactOp(const std::string& begin, const std::string& end, bool rangeDropped,
+                               uint32_t order);
 
     private:
         // struct with compaction operation data
         struct CompactOp {
             std::string _start_str;
             std::string _end_str;
-
             bool _rangeDropped;
+
+            uint32_t _order;
+            bool operator>(const CompactOp& other) const { return _order > other._order; }
         };
 
         static const char * const _name;
@@ -149,7 +161,9 @@ namespace mongo {
         bool _compactionThreadRunning = true;
         stdx::mutex _compactionMutex;
         stdx::condition_variable _compactionWakeUp;
-        std::deque<CompactOp> _compactionQueue;
+        using CompactQueue =
+            std::priority_queue<CompactOp, std::vector<CompactOp>, std::greater<CompactOp>>;
+        CompactQueue _compactionQueue;
     };
 
     const char* const CompactionBackgroundJob::_name = "RocksCompactionThread";
@@ -164,7 +178,9 @@ namespace mongo {
         {
             stdx::lock_guard<stdx::mutex> lk(_compactionMutex);
             _compactionThreadRunning = false;
-            _compactionQueue.clear();
+            // Clean up the queue
+            CompactQueue tmp;
+            _compactionQueue.swap(tmp);
         }
 // From 4.13 public release, CancelAllBackgroundWork() flushes all memtables for databases
 // containing writes that have bypassed the WAL (writes issued with WriteOptions::disableWAL=true)
@@ -206,8 +222,8 @@ namespace mongo {
                 _compactionWakeUp.wait(lk);
             else {
                 // get item from queue
-                const CompactOp op(std::move(_compactionQueue.front()));
-                _compactionQueue.pop_front();
+                const CompactOp op(std::move(_compactionQueue.top()));
+                _compactionQueue.pop();
                 // unlock mutex for the time of compaction
                 unlock_guard<decltype(lk)> rlk(lk);
                 // do compaction
@@ -219,10 +235,11 @@ namespace mongo {
     }
 
     void CompactionBackgroundJob::scheduleCompactOp(const std::string& begin,
-                                                    const std::string& end, bool rangeDropped) {
+                                                    const std::string& end, bool rangeDropped,
+                                                    uint32_t order) {
         {
             stdx::lock_guard<stdx::mutex> lk(_compactionMutex);
-            _compactionQueue.push_back({begin, end, rangeDropped});
+            _compactionQueue.push({begin, end, rangeDropped, order});
         }
         _compactionWakeUp.notify_one();
     }
@@ -296,23 +313,25 @@ namespace mongo {
         _compactionJob.reset();
     }
 
-    void RocksCompactionScheduler::compactAll() { compactRange(std::string(), std::string()); }
+    void RocksCompactionScheduler::compactAll() {
+        compact(std::string(), std::string(), false, kOrderFull);
+    }
 
-    void RocksCompactionScheduler::compactRange(const std::string& start, const std::string& end) {
-        _compactionJob->scheduleCompactOp(start, end, false);
+    void RocksCompactionScheduler::compactOplog(const std::string& begin, const std::string& end) {
+        compact(begin, end, false, kOrderOplog);
     }
 
     void RocksCompactionScheduler::compactPrefix(const std::string& prefix) {
-        compactRange(prefix, rocksGetNextPrefix(prefix));
-    }
-
-    void RocksCompactionScheduler::compactDroppedRange(const std::string& start,
-                                                       const std::string& end) {
-        _compactionJob->scheduleCompactOp(start, end, true);
+        compact(prefix, rocksGetNextPrefix(prefix), false, kOrderRange);
     }
 
     void RocksCompactionScheduler::compactDroppedPrefix(const std::string& prefix) {
-        compactDroppedRange(prefix, rocksGetNextPrefix(prefix));
+        compact(prefix, rocksGetNextPrefix(prefix), true, kOrderDroppedRange);
+    }
+
+    void RocksCompactionScheduler::compact(const std::string& begin, const std::string& end,
+                                           bool rangeDropped, uint32_t order) {
+        _compactionJob->scheduleCompactOp(begin, end, rangeDropped, order);
     }
 
     rocksdb::CompactionFilterFactory* RocksCompactionScheduler::createCompactionFilterFactory()

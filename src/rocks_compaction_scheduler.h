@@ -64,8 +64,7 @@ namespace mongo {
 
         // schedule compact range operation for execution in _compactionThread
         void compactAll();
-        void compactRange(const std::string& begin, const std::string& end);
-        void compactPrefix(const std::string& prefix);
+        void compactOplog(const std::string& begin, const std::string& end);
 
         rocksdb::CompactionFilterFactory* createCompactionFilterFactory() const;
         std::unordered_set<uint32_t> getDroppedPrefixes() const;
@@ -77,8 +76,10 @@ namespace mongo {
                              bool opSucceeded);
 
     private:
-        void compactDroppedRange(const std::string& begin, const std::string& end);
+        void compactPrefix(const std::string& prefix);
         void compactDroppedPrefix(const std::string& prefix);
+        void compact(const std::string& begin, const std::string& end, bool rangeDropped,
+                     uint32_t order);
         void droppedPrefixCompacted(const std::string& prefix, bool opSucceeded);
 
     private:
