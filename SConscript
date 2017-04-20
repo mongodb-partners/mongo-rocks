@@ -1,5 +1,7 @@
 Import("env")
 
+env = env.Clone()
+
 env.Library(
     target= 'storage_rocks_base',
     source= [
