@@ -385,7 +385,8 @@ namespace mongo {
         return _snapshot;
     }
 
-    rocksdb::Status RocksRecoveryUnit::Get(const rocksdb::Slice& key, std::string* value) {
+    rocksdb::Status RocksRecoveryUnit::Get(rocksdb::ColumnFamilyHandle* cfHandle,
+					   const rocksdb::Slice& key, std::string* value) {
         if (_writeBatch.GetWriteBatch()->Count() > 0) {
             std::unique_ptr<rocksdb::WBWIIterator> wb_iterator(_writeBatch.NewIterator());
             wb_iterator->Seek(key);
@@ -400,26 +401,38 @@ namespace mongo {
         }
         rocksdb::ReadOptions options;
         options.snapshot = snapshot();
-        return _db->Get(options, key, value);
+	if (cfHandle) {
+	    return _db->Get(options, cfHandle, key, value);
+	} else {
+	    return _db->Get(options, key, value);
+	}
     }
 
-    RocksIterator* RocksRecoveryUnit::NewIterator(std::string prefix, bool isOplog) {
+    RocksIterator* RocksRecoveryUnit::NewIterator(rocksdb::ColumnFamilyHandle* cfHandle,
+						  std::string prefix, bool isOplog) {
         std::unique_ptr<rocksdb::Slice> upperBound(new rocksdb::Slice());
         rocksdb::ReadOptions options;
         options.iterate_upper_bound = upperBound.get();
         options.snapshot = snapshot();
-        auto iterator = _writeBatch.NewIteratorWithBase(_db->NewIterator(options));
+	
+	auto iterator = (cfHandle) ?
+	    _writeBatch.NewIteratorWithBase(_db->NewIterator(options, cfHandle)) :
+	    _writeBatch.NewIteratorWithBase(_db->NewIterator(options));
         auto prefixIterator = new PrefixStrippingIterator(std::move(prefix), iterator,
                                                           isOplog ? nullptr : _compactionScheduler,
                                                           std::move(upperBound));
         return prefixIterator;
     }
 
-    RocksIterator* RocksRecoveryUnit::NewIteratorNoSnapshot(rocksdb::DB* db, std::string prefix) {
+    RocksIterator* RocksRecoveryUnit::NewIteratorNoSnapshot(rocksdb::DB* db,
+							    rocksdb::ColumnFamilyHandle* cfHandle, std::string prefix) {
         std::unique_ptr<rocksdb::Slice> upperBound(new rocksdb::Slice());
         rocksdb::ReadOptions options;
         options.iterate_upper_bound = upperBound.get();
-        auto iterator = db->NewIterator(rocksdb::ReadOptions());
+	
+	auto iterator = (cfHandle) ?
+	    db->NewIterator(rocksdb::ReadOptions(), cfHandle) :
+	    db->NewIterator(rocksdb::ReadOptions());
         return new PrefixStrippingIterator(std::move(prefix), iterator, nullptr,
                                            std::move(upperBound));
     }

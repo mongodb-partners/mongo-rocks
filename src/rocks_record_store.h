@@ -49,6 +49,7 @@
 #include "mongo/util/timer.h"
 
 namespace rocksdb {
+    class ColumnFamilyHandle;
     class DB;
     class Iterator;
     class Slice;
@@ -197,7 +198,13 @@ namespace mongo {
         bool cappedMaxDocs() const { invariant(_isCapped); return _cappedMaxDocs; }
         bool cappedMaxSize() const { invariant(_isCapped); return _cappedMaxSize; }
         bool isOplog() const { return _isOplog; }
-
+	void setCFHandle(rocksdb::ColumnFamilyHandle* cfHandle) {
+	    stdx::lock_guard<stdx::mutex> lk(_cfMutex);
+            if (_cfHandle == nullptr) {
+		_cfHandle = cfHandle;
+	    }
+	}
+	
         int64_t cappedDeleteAsNeeded(OperationContext* txn, const RecordId& justInserted);
         int64_t cappedDeleteAsNeeded_inlock(OperationContext* txn, const RecordId& justInserted);
         boost::timed_mutex& cappedDeleterMutex() { return _cappedDeleterMutex; }
@@ -213,8 +220,8 @@ namespace mongo {
         // shared_ptrs
         class Cursor : public SeekableRecordCursor {
         public:
-            Cursor(OperationContext* txn, rocksdb::DB* db, std::string prefix,
-                   std::shared_ptr<CappedVisibilityManager> cappedVisibilityManager,
+            Cursor(OperationContext* txn, rocksdb::DB* db, rocksdb::ColumnFamilyHandle* cfHandle,
+		   std::string prefix, std::shared_ptr<CappedVisibilityManager> cappedVisibilityManager,
                    bool forward, bool _isCapped);
 
             boost::optional<Record> next() final;
@@ -235,6 +242,7 @@ namespace mongo {
 
             OperationContext* _txn;
             rocksdb::DB* _db; // not owned
+	    rocksdb::ColumnFamilyHandle* _cfHandle;
             std::string _prefix;
             std::shared_ptr<CappedVisibilityManager> _cappedVisibilityManager;
             bool _forward;
@@ -253,7 +261,8 @@ namespace mongo {
 
         static RecordId _makeRecordId( const rocksdb::Slice& slice );
 
-        static RecordData _getDataFor(rocksdb::DB* db, const std::string& prefix,
+        static RecordData _getDataFor(rocksdb::DB* db, rocksdb::ColumnFamilyHandle* cfHandle,
+				      const std::string& prefix,
                                       OperationContext* txn, const RecordId& loc);
 
         RecordId _nextId();
@@ -283,6 +292,9 @@ namespace mongo {
         const bool _isOplog;
         // nullptr iff _isOplog == false
         RocksOplogKeyTracker* _oplogKeyTracker;
+	
+	mutable stdx::mutex _cfMutex;
+	rocksdb::ColumnFamilyHandle* _cfHandle;
         // keep track of when we compacted oplog last time. only valid when _isOplog == true.
         // Protected by _cappedDeleterMutex.
         Timer _oplogSinceLastCompaction;
