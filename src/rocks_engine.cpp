@@ -466,7 +466,7 @@ namespace mongo {
         if (desc->unique()) {
             index = new RocksUniqueIndex(_db.get(), prefix, ident.toString(),
                                          Ordering::make(desc->keyPattern()), std::move(config),
-                                         desc->isPartial());
+                                         desc->parentNS(), desc->indexName(), desc->isPartial());
         } else {
             auto si = new RocksStandardIndex(_db.get(), prefix, ident.toString(),
                                              Ordering::make(desc->keyPattern()), std::move(config));

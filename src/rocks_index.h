@@ -100,7 +100,8 @@ namespace mongo {
     class RocksUniqueIndex : public RocksIndexBase {
     public:
         RocksUniqueIndex(rocksdb::DB* db, std::string prefix, std::string ident, Ordering order,
-                         const BSONObj& config, bool partial = false);
+                         const BSONObj& config, std::string collectionNamespace,
+                         std::string indexName, bool partial = false);
 
         virtual Status insert(OperationContext* txn, const BSONObj& key, const RecordId& loc,
                               bool dupsAllowed);
@@ -114,6 +115,8 @@ namespace mongo {
         virtual SortedDataBuilderInterface* getBulkBuilder(OperationContext* txn,
                                                            bool dupsAllowed) override;
     private:
+        std::string _collectionNamespace;
+        std::string _indexName;
         const bool _partial;
     };
 
