@@ -96,7 +96,13 @@ namespace mongo {
             _compactionThreadRunning = false;
             _compactionQueue.clear();
         }
+// From 4.13 public release, CancelAllBackgroundWork() flushes all memtables for databases
+// containing writes that have bypassed the WAL (writes issued with WriteOptions::disableWAL=true)
+// before shutting down background threads, so it's safe to be called even if --nojournal mode
+// is set.
+#if defined(ROCKSDB_MAJOR) && (ROCKSDB_MAJOR > 4 || (ROCKSDB_MAJOR == 4 && ROCKSDB_MINOR >= 13))
         rocksdb::CancelAllBackgroundWork(_db);
+#endif
         _compactionWakeUp.notify_one();
         wait();
     }
