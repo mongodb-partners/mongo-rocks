@@ -62,7 +62,7 @@
 #include "mongo/db/server_parameters.h"
 #include "mongo/db/storage/journal_listener.h"
 #include "mongo/db/storage/storage_options.h"
-#include "mongo/platform/endian.h"
+#include "mongo/stdx/memory.h"
 #include "mongo/util/background.h"
 #include "mongo/util/log.h"
 #include "mongo/util/processinfo.h"
@@ -118,11 +118,6 @@ namespace mongo {
     };
 
     namespace {
-        std::string encodePrefix(uint32_t prefix) {
-            uint32_t bigEndianPrefix = endian::nativeToBig(prefix);
-            return std::string(reinterpret_cast<const char*>(&bigEndianPrefix), sizeof(uint32_t));
-        }
-
         // ServerParameter to limit concurrency, to prevent thousands of threads running
         // concurrent searches and thus blocking the entire DB.
         class RocksTicketServerParameter : public ServerParameter {
