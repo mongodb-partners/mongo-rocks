@@ -441,7 +441,8 @@ namespace mongo {
                 kSkippedDeletionsThreshold) {
                 log() << "Compacting dropped prefixes markers";
                 _droppedPrefixesCount.store(0, std::memory_order_relaxed);
-                compactPrefix(kDroppedPrefix);
+                // Let's compact the full default (system) prefix 0.
+                compactPrefix(encodePrefix(0));
             }
         }
     }
