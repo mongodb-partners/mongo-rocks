@@ -30,6 +30,7 @@
 #define MONGO_LOG_DEFAULT_COMPONENT ::mongo::logger::LogComponent::kStorage
 
 #include "mongo/platform/basic.h"
+#include "mongo/util/quick_exit.h"
 
 #include "rocks_engine.h"
 
@@ -411,7 +412,7 @@ namespace mongo {
 		s = db->Get(rocksdb::ReadOptions(), ReopenTagKey, &val);
 		if (s.ok()) { // case 2
 		    error() << "Inconsistent Oplog Option, UseSeparateOplogCF should be false";
-		    assert(0);
+		    mongo::quickExit(1);
 		}
 		// case 3, need to manually create oplogCF
 		rocksdb::ColumnFamilyHandle* cf = nullptr;
@@ -423,7 +424,7 @@ namespace mongo {
 		return openDB(cfDescriptors, readOnly, outdb);
 	    } else { // case 1
 		error() << "Inconsistent Oplog Option, UseSeparateOplogCF should be true";
-		assert(0);
+		mongo::quickExit(1);
 	    }
 	}
 	db->Put(rocksdb::WriteOptions(), ReopenTagKey, "");
