@@ -76,7 +76,7 @@ namespace mongo {
     public:
     //static const int kDefaultCFIndex = 0;
     //static const int kOplogCFIndex = 1;
-	
+
     public:
         RocksEngine(const std::string& path, bool durable, int formatVersion, bool readOnly);
         virtual ~RocksEngine();
@@ -168,12 +168,12 @@ namespace mongo {
         }
 
     private:
-	      rocksdb::Status openDB(const rocksdb::Options& options,
+        rocksdb::Status openDB(const rocksdb::Options& options,
                                const std::vector<rocksdb::ColumnFamilyDescriptor>& descriptors,
                                bool readOnly, rocksdb::DB** db);
         Status createOplogStore(OperationContext* opCtx,
-				StringData ident,
-				const CollectionOptions& options);
+        StringData ident,
+        const CollectionOptions& options);
 
         Status _createIdent(StringData ident, BSONObjBuilder* configBuilder);
         BSONObj _getIdentConfig(StringData ident);
