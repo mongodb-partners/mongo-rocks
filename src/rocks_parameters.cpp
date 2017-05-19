@@ -33,12 +33,16 @@
 #include "rocks_util.h"
 
 #include "mongo/logger/parse_log_component_settings.h"
+#include "mongo/util/concurrency/ticketholder.h"
 #include "mongo/util/log.h"
 #include "mongo/util/mongoutils/str.h"
 
+#include <rocksdb/status.h>
 #include <rocksdb/cache.h>
 #include <rocksdb/experimental.h>
 #include <rocksdb/db.h>
+#include <rocksdb/convenience.h>
+#include <rocksdb/options.h>
 
 namespace mongo {
 
@@ -150,5 +154,89 @@ namespace mongo {
         _engine->getBlockCache()->SetCapacity(newSizeInBytes);
 
         return Status::OK();
+    }    
+    
+    RocksOptionsParameter::RocksOptionsParameter(RocksEngine* engine)
+        : ServerParameter(ServerParameterSet::getGlobal(), "rocksdbOptions", false,
+                          true),
+          _engine(engine) {}
+
+    void RocksOptionsParameter::append(OperationContext* txn, BSONObjBuilder& b,
+                                         const std::string& name) {
+        std::string columnOptions;
+        std::string dbOptions;
+        std::string fullOptionsStr;
+        rocksdb::Options fullOptions = _engine->getDB()->GetOptions();
+        rocksdb::Status s = GetStringFromColumnFamilyOptions(&columnOptions, fullOptions);
+        if (!s.ok()) { // If we failed, append the error for the user to see.
+            b.append(name, s.ToString()); 
+            return;
+        }
+        
+        fullOptionsStr.append(columnOptions);
+        
+        s = GetStringFromDBOptions(&dbOptions, fullOptions);
+        if (!s.ok()) { // If we failed, append the error for the user to see.
+            b.append(name, s.ToString()); 
+            return;
+        }
+        
+        fullOptionsStr.append(dbOptions);
+
+        b.append(name, fullOptionsStr);
+    }
+
+    Status RocksOptionsParameter::set(const BSONElement& newValueElement) {        
+        // In case the BSON element is not a string, the conversion will fail, 
+        // raising an exception catched by the outer layer.
+        // Which will generate an error message that looks like this:
+        // wrong type for field (rocksdbOptions) 3 != 2        
+        return setFromString(newValueElement.String());
+    }
+
+    Status RocksOptionsParameter::setFromString(const std::string& str) {
+        log() << "RocksDB: Attempting to apply settings: " << str;
+        
+        std::unordered_map<std::string, std::string> optionsMap;
+        rocksdb::Status s = rocksdb::StringToMap(str, &optionsMap);
+        if (!s.ok()) {
+            return Status(ErrorCodes::BadValue, s.ToString());
+        }
+        
+        s = _engine->getDB()->SetOptions(optionsMap);
+        if (!s.ok()) {
+            return Status(ErrorCodes::BadValue, s.ToString());
+        }
+        
+        return Status::OK();
+    }
+
+    RocksTicketServerParameter::RocksTicketServerParameter(TicketHolder* holder, const std::string& name)
+        : ServerParameter(ServerParameterSet::getGlobal(), name, true, true), _holder(holder) {}
+
+    void RocksTicketServerParameter::append(OperationContext* txn, BSONObjBuilder& b, const std::string& name) {
+        b.append(name, _holder->outof());
+    }
+
+    Status RocksTicketServerParameter::set(const BSONElement& newValueElement) {
+        if (!newValueElement.isNumber())
+            return Status(ErrorCodes::BadValue, str::stream() << name() << " has to be a number");
+        return _set(newValueElement.numberInt());
+    }
+
+    Status RocksTicketServerParameter::setFromString(const std::string& str) {
+        int num = 0;
+        Status status = parseNumberFromString(str, &num);
+        if (!status.isOK())
+            return status;
+        return _set(num);
+    }
+
+    Status RocksTicketServerParameter::_set(int newNum) {
+        if (newNum <= 0) {
+            return Status(ErrorCodes::BadValue, str::stream() << name() << " has to be > 0");
+        }
+
+        return _holder->resize(newNum);
     }
 }

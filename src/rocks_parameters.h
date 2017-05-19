@@ -28,6 +28,7 @@
 
 #include "mongo/base/disallow_copying.h"
 #include "mongo/db/server_parameters.h"
+#include "mongo/util/concurrency/ticketholder.h"
 
 #include "rocks_engine.h"
 
@@ -98,5 +99,38 @@ namespace mongo {
     private:
         Status _set(int newNum);
         RocksEngine* _engine;
+    };
+    
+    
+    // We use mongo's setParameter() API to dynamically change the RocksDB options using the SetOptions API
+    // To dynamically change an option, call:
+    // db.adminCommand({setParameter:1, "rocksdbOptions": "someoption=1; someoption2=3"})
+    class RocksOptionsParameter : public ServerParameter {
+        MONGO_DISALLOW_COPYING(RocksOptionsParameter);
+
+    public:
+        RocksOptionsParameter(RocksEngine* engine);
+        virtual void append(OperationContext* txn, BSONObjBuilder& b, const std::string& name);
+        virtual Status set(const BSONElement& newValueElement);
+        virtual Status setFromString(const std::string& str);
+
+    private:
+        RocksEngine* _engine;
+    };
+    
+    // ServerParameter to limit concurrency, to prevent thousands of threads running
+    // concurrent searches and thus blocking the entire DB.
+    class RocksTicketServerParameter : public ServerParameter {
+        MONGO_DISALLOW_COPYING(RocksTicketServerParameter);
+
+    public:
+        RocksTicketServerParameter(TicketHolder* holder, const std::string& name);
+        virtual void append(OperationContext* txn, BSONObjBuilder& b, const std::string& name);
+        virtual Status set(const BSONElement& newValueElement);
+        virtual Status setFromString(const std::string& str);
+
+    private:
+        Status _set(int newNum);
+        TicketHolder* _holder;
     };
 }

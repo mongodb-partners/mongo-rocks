@@ -181,9 +181,7 @@ namespace mongo {
                                         BSONObjBuilder* result,
                                         double scale ) const;
 
-        virtual void temp_cappedTruncateAfter(OperationContext* txn,
-                                              RecordId end,
-                                              bool inclusive);
+        virtual void cappedTruncateAfter(OperationContext* txn, RecordId end, bool inclusive);
 
         virtual boost::optional<RecordId> oplogStartHack(OperationContext* txn,
                                                          const RecordId& startingPosition) const;
