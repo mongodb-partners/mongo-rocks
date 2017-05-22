@@ -77,6 +77,8 @@ namespace mongo {
         RocksEngine(const std::string& path, bool durable, int formatVersion, bool readOnly);
         virtual ~RocksEngine();
 
+        static void appendGlobalStats(BSONObjBuilder& b);
+
         virtual RecoveryUnit* newRecoveryUnit() override;
 
         virtual Status createRecordStore(OperationContext* opCtx,
@@ -109,7 +111,7 @@ namespace mongo {
             return false;
         }
 
-        virtual int flushAllFiles(bool sync) override;
+        virtual int flushAllFiles(OperationContext* txn, bool sync) override;
 
         virtual Status beginBackup(OperationContext* txn) override;
 

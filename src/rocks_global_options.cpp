@@ -126,9 +126,9 @@ namespace mongo {
 
     void RocksGlobalOptions::printOptions() const {
         log() << "[RocksDB] Block Cache Size GB: " << rocksGlobalOptions.cacheSizeGB;
-        log() << "[RocksDB] Compression: " << rocksGlobalOptions.compression;
+        log() << "[RocksDB] Compression: " << redact(rocksGlobalOptions.compression);
         log() << "[RocksDB] MaxWriteMBPerSec: " << rocksGlobalOptions.maxWriteMBPerSec;
-        log() << "[RocksDB] Engine custom option: " << rocksGlobalOptions.configString;
+        log() << "[RocksDB] Engine custom option: " << redact(rocksGlobalOptions.configString);
         log() << "[RocksDB] Crash safe counters: " << rocksGlobalOptions.crashSafeCounters;
         log() << "[RocksDB] Counters: " << rocksGlobalOptions.counters;
         log() << "[RocksDB] Use SingleDelete in index: " << rocksGlobalOptions.singleDeleteIndex;
