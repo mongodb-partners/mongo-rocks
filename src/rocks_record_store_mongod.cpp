@@ -81,8 +81,6 @@ namespace mongo {
                 const auto txn = cc().makeOperationContext();
 
                 try {
-                    ScopedTransaction transaction(txn.get(), MODE_IX);
-
                     AutoGetDb autoDb(txn.get(), _ns.db(), MODE_IX);
                     Database* db = autoDb.getDb();
                     if (!db) {

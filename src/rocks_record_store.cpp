@@ -254,6 +254,7 @@ namespace mongo {
         }
         void deleteKey(RocksRecoveryUnit* ru, const RecordId& loc) {
             ru->writeBatch()->Delete(RocksRecordStore::_makePrefixedKey(_prefix, loc));
+            _deletedKeysSinceCompaction++;
         }
         rocksdb::Iterator* newIterator(RocksRecoveryUnit* ru) {
             return ru->NewIterator(_prefix, true);
@@ -262,9 +263,16 @@ namespace mongo {
             uint32_t size =
                 endian::littleToNative(*reinterpret_cast<const uint32_t*>(value.data()));
             return static_cast<int>(size);
+        }        
+        void resetDeletedSinceCompaction() {
+            _deletedKeysSinceCompaction = 0;
         }
+        long long getDeletedSinceCompaction() {
+            return _deletedKeysSinceCompaction;
+        }        
 
     private:
+        std::atomic<long long> _deletedKeysSinceCompaction;
         std::string _prefix;
     };
 
@@ -612,8 +620,10 @@ namespace mongo {
         txn->setRecoveryUnit(realRecoveryUnit, realRUstate);
 
         if (_isOplog) {
-            if (_oplogSinceLastCompaction.minutes() >= kOplogCompactEveryMins) {
-                log() << "Scheduling oplog compactions";
+            if ((_oplogSinceLastCompaction.minutes() >= kOplogCompactEveryMins) || 
+            (_oplogKeyTracker->getDeletedSinceCompaction() >= kOplogCompactEveryDeletedRecords)) {
+                log() << "Scheduling oplog compactions. time since last " << _oplogSinceLastCompaction.minutes() <<
+                    " deleted since last " << _oplogKeyTracker->getDeletedSinceCompaction();
                 _oplogSinceLastCompaction.reset();
                 // schedule compaction for oplog
                 std::string oldestAliveKey(_makePrefixedKey(_prefix, _cappedOldestKeyHint));
@@ -623,6 +633,8 @@ namespace mongo {
                 std::string oplogKeyTrackerPrefix(rocksGetNextPrefix(_prefix));
                 oldestAliveKey = _makePrefixedKey(oplogKeyTrackerPrefix, _cappedOldestKeyHint);
                 _compactionScheduler->compactRange(oplogKeyTrackerPrefix, oldestAliveKey);
+
+                _oplogKeyTracker->resetDeletedSinceCompaction();
             }
         }
 
