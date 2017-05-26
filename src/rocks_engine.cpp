@@ -399,10 +399,9 @@ namespace mongo {
         rocksdb::DB* db = nullptr;
         rocksdb::Status s;
         if (readOnly) {
-            s = rocksdb::DB::OpenForReadOnly(options, _path, cfDescriptors, &_cfHandles, &db);
-        }
-        else {
-            s = rocksdb::DB::Open(options, _path, cfDescriptors, &_cfHandles, &db);
+            s = rocksdb::DB::OpenForReadOnly(options, _path, descriptors, &_cfHandles, &db);
+        } else {
+            s = rocksdb::DB::Open(options, _path, descriptors, &_cfHandles, &db);
         }
         if (!s.ok()) {
             if (_useSeparateOplogCF) {
@@ -411,7 +410,10 @@ namespace mongo {
                 s = (readOnly)
                     ? rocksdb::DB::OpenForReadOnly(options, _path, &db)
                     : rocksdb::DB::Open(options, _path, &db);
-                assert(s.ok());
+		if (!s.ok()) {
+		    error() << "Fail to open db: " << s.ToString();
+		    mongo::quickExit(1);
+		}
                 std::string val;
                 s = db->Get(rocksdb::ReadOptions(), ReopenTagKey, &val);
                 if (s.ok()) { // case 2
@@ -425,9 +427,8 @@ namespace mongo {
                 delete cf;
                 delete db;
                 // recur call myself, should succ this time
-                return openDB(options, cfDescriptors, readOnly, outdb);
-            }
-            else { // case 1
+                return openDB(options, descriptors, readOnly, outdb);
+            } else { // case 1
                 error() << "Inconsistent Oplog Option, UseSeparateOplogCF should be true";
                 mongo::quickExit(1);
             }

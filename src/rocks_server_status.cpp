@@ -27,6 +27,8 @@
  *    it in the license file.
  */
 
+#define MONGO_LOG_DEFAULT_COMPONENT ::mongo::logger::LogComponent::kStorage
+
 #include <sstream>
 
 #include "mongo/platform/basic.h"
@@ -43,11 +45,14 @@
 #include "mongo/base/checked_cast.h"
 #include "mongo/bson/bsonobjbuilder.h"
 #include "mongo/util/assert_util.h"
+#include "mongo/util/log.h"
 #include "mongo/util/scopeguard.h"
 
 #include "rocks_recovery_unit.h"
 #include "rocks_engine.h"
 #include "rocks_transaction.h"
+
+#define ROCKS_TRACE log()
 
 namespace mongo {
     using std::string;
@@ -64,6 +69,38 @@ namespace mongo {
                 return std::to_string(bytes >> 30) + "GB";
             }
         }
+	
+	BSONObjBuilder convertPlain2Bson(const std::vector<std::string>& arr, int start, int& index) {
+	    using namespace boost::algorithm;
+	    BSONObjBuilder builder;
+	    int indent = arr[start].find_first_not_of("\t ");
+	    for (int i = start; i < (int)arr.size(); ) {
+		const std::string& str = arr[i];
+		if (indent > 0 && !isspace(str[indent - 1])) { // step to outside scope 
+		    // parent scope may accidentally has 'space' this place
+		    index = i;
+		    break;
+		} else {
+		    if (str.find(':') == std::string::npos) {
+			builder.append("404", "invalid format encountered");
+			error() << "Invalid table-option encountered: " << str;
+			break;
+		    }
+		    std::vector<std::string> tokens;
+		    split(tokens, arr[i], is_any_of(":"), token_compress_on);
+		    if (tokens.size() == 2) { // same scope
+			builder.append(trim_copy(tokens[0]), trim_copy(tokens[1]));
+			i ++;
+		    } else { // step to inner scope
+			BSONObjBuilder subBuilder = convertPlain2Bson(arr, i, index);
+			builder.append(trim_copy(tokens[0]), subBuilder.obj());
+			i = index;
+		    }
+		}
+	    }
+	    return builder;
+	}
+
     }  // namespace
 
     RocksServerStatusSection::RocksServerStatusSection(RocksEngine* engine)
@@ -210,23 +247,23 @@ namespace mongo {
         // add table options
         auto tableFactory = _engine->getDB()->GetOptions().table_factory;
         if (tableFactory) {
-          using namespace boost::algorithm;
-          bob.append("table-name", std::string(tableFactory->Name()));
-
-          BSONObjBuilder optionObjBuilder;
-          std::string options = tableFactory->GetPrintableTableOptions();
-          std::vector<std::string> tokens;
-          split(tokens, options, is_any_of("\n :"), token_compress_on);
-          for (int i = 0; i + 1 < tokens.size(); i += 2) {
-            if (!tokens[i].empty()) {
-              optionObjBuilder.append(tokens[i], tokens[i + 1]);
-            }
-          }
-          bob.append("table-options", optionObjBuilder.obj());
+	    using namespace boost::algorithm;
+	    bob.append("table-name", std::string(tableFactory->Name()));
+	    std::string options = tableFactory->GetPrintableTableOptions();
+	    std::vector<std::string> settings;
+	    split(settings, options, is_any_of("\n"), token_compress_on);
+	    // erase blank lines
+	    settings.erase(std::remove_if(settings.begin(), settings.end(), [](const auto& iter) {
+		    return iter.find_first_not_of("\t \n") == std::string::npos;
+		    }));
+	    if (!settings.empty()) {
+		int index = 0;
+		BSONObjBuilder builder = convertPlain2Bson(settings, 0, index);
+		bob.append("table-options", builder.obj());
+	    }
         }
-        
-        RocksEngine::appendGlobalStats(bob);
 
+        RocksEngine::appendGlobalStats(bob);
         return bob.obj();
     }
 
