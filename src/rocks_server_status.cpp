@@ -27,25 +27,33 @@
  *    it in the license file.
  */
 
+#define MONGO_LOG_DEFAULT_COMPONENT ::mongo::logger::LogComponent::kStorage
+
 #include <sstream>
 
 #include "mongo/platform/basic.h"
 
 #include "rocks_server_status.h"
 
+#include "boost/algorithm/string.hpp"
 #include "boost/scoped_ptr.hpp"
 
 #include <rocksdb/db.h>
+#include <rocksdb/table.h>
 #include <rocksdb/statistics.h>
 
 #include "mongo/base/checked_cast.h"
 #include "mongo/bson/bsonobjbuilder.h"
 #include "mongo/util/assert_util.h"
+#include "mongo/util/log.h"
 #include "mongo/util/scopeguard.h"
+#include "mongo/util/mongoutils/str.h"
 
 #include "rocks_recovery_unit.h"
 #include "rocks_engine.h"
 #include "rocks_transaction.h"
+
+#define ROCKS_TRACE log()
 
 namespace mongo {
     using std::string;
@@ -62,6 +70,38 @@ namespace mongo {
                 return std::to_string(bytes >> 30) + "GB";
             }
         }
+	
+	BSONObjBuilder convertPlain2Bson(const std::vector<std::string>& arr, int start, int& index) {
+	    using namespace boost::algorithm;
+	    BSONObjBuilder builder;
+	    int indent = arr[start].find_first_not_of("\t ");
+	    for (int i = start; i < (int)arr.size(); ) {
+		const std::string& str = arr[i];
+		if (indent > 0 && !isspace(str[indent - 1])) { // step to outside scope 
+		    // parent scope may accidentally has 'space' this place
+		    index = i;
+		    break;
+		} else {
+		    std::string left, right;
+		    // return true if delimiter found
+		    if (!mongo::str::splitOn(str, ':', left, right)) {
+			builder.append("404", "invalid format encountered");
+			error() << "Invalid table-option encountered: " << str;
+			break;
+		    }
+		    if (!right.empty()) { // same scope
+			builder.append(trim_copy(left), trim_copy(right));
+			i ++;
+		    } else { // step to inner scope
+			BSONObjBuilder subBuilder = convertPlain2Bson(arr, i + 1, index);
+			builder.append(trim_copy(left), subBuilder.obj());
+			i = index;
+		    }
+		}
+	    }
+	    return builder;
+	}
+
     }  // namespace
 
     RocksServerStatusSection::RocksServerStatusSection(RocksEngine* engine)
@@ -204,9 +244,27 @@ namespace mongo {
 
           bob.append("counters", countersObjBuilder.obj());
         }
-        
-        RocksEngine::appendGlobalStats(bob);
 
+        // add table options
+        auto tableFactory = _engine->getDB()->GetOptions().table_factory;
+        if (tableFactory) {
+	    using namespace boost::algorithm;
+	    bob.append("table-name", std::string(tableFactory->Name()));
+	    std::string options = tableFactory->GetPrintableTableOptions();
+	    std::vector<std::string> settings;
+	    split(settings, options, is_any_of("\n"), token_compress_on);
+	    // erase blank lines
+	    settings.erase(std::remove_if(settings.begin(), settings.end(), [](const auto& iter) {
+		    return iter.find_first_not_of("\t \n") == std::string::npos;
+		    }));
+	    if (!settings.empty()) {
+		int index = 0;
+		BSONObjBuilder builder = convertPlain2Bson(settings, 0, index);
+		bob.append("table-options", builder.obj());
+	    }
+        }
+
+        RocksEngine::appendGlobalStats(bob);
         return bob.obj();
     }
 
