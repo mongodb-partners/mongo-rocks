@@ -47,6 +47,7 @@
 #include "mongo/util/assert_util.h"
 #include "mongo/util/log.h"
 #include "mongo/util/scopeguard.h"
+#include "mongo/util/mongoutils/str.h"
 
 #include "rocks_recovery_unit.h"
 #include "rocks_engine.h"
@@ -81,19 +82,19 @@ namespace mongo {
 		    index = i;
 		    break;
 		} else {
-		    if (str.find(':') == std::string::npos) {
+		    std::string left, right;
+		    // return true if delimiter found
+		    if (!mongo::str::splitOn(str, ':', left, right)) {
 			builder.append("404", "invalid format encountered");
 			error() << "Invalid table-option encountered: " << str;
 			break;
 		    }
-		    std::vector<std::string> tokens;
-		    split(tokens, arr[i], is_any_of(":"), token_compress_on);
-		    if (tokens.size() == 2) { // same scope
-			builder.append(trim_copy(tokens[0]), trim_copy(tokens[1]));
+		    if (!right.empty()) { // same scope
+			builder.append(trim_copy(left), trim_copy(right));
 			i ++;
 		    } else { // step to inner scope
-			BSONObjBuilder subBuilder = convertPlain2Bson(arr, i, index);
-			builder.append(trim_copy(tokens[0]), subBuilder.obj());
+			BSONObjBuilder subBuilder = convertPlain2Bson(arr, i + 1, index);
+			builder.append(trim_copy(left), subBuilder.obj());
 			i = index;
 		    }
 		}
