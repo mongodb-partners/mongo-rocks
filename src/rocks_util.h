@@ -48,6 +48,9 @@ namespace mongo {
         return nextPrefix;
     }
 
+    std::string encodePrefix(uint32_t prefix);
+    bool extractPrefix(const rocksdb::Slice& slice, uint32_t* prefix);
+
     Status rocksToMongoStatus_slow(const rocksdb::Status& status, const char* prefix);
 
     /**
