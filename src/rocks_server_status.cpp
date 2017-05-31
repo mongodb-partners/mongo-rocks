@@ -69,7 +69,7 @@ namespace mongo {
 
     bool RocksServerStatusSection::includeByDefault() const { return true; }
 
-    BSONObj RocksServerStatusSection::generateSection(OperationContext* txn,
+    BSONObj RocksServerStatusSection::generateSection(OperationContext* opCtx,
                                                       const BSONElement& configElement) const {
 
         BSONObjBuilder bob;
