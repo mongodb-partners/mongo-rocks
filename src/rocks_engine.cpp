@@ -205,7 +205,7 @@ namespace mongo {
         public:
             RocksTicketServerParameter(TicketHolder* holder, const std::string& name)
                 : ServerParameter(ServerParameterSet::getGlobal(), name, true, true), _holder(holder) {};
-            virtual void append(OperationContext* txn, BSONObjBuilder& b, const std::string& name) {
+            virtual void append(OperationContext* opCtx, BSONObjBuilder& b, const std::string& name) {
                 b.append(name, _holder->outof());
             }
             virtual Status set(const BSONElement& newValueElement) {
@@ -590,18 +590,18 @@ namespace mongo {
         return 1;
     }
 
-    int RocksEngine::flushAllFiles(OperationContext* txn, bool sync) {
+    int RocksEngine::flushAllFiles(OperationContext* opCtx, bool sync) {
         LOG(1) << "RocksEngine::flushAllFiles";
         _counterManager->sync();
         _durabilityManager->waitUntilDurable(true);
         return 1;
     }
 
-    Status RocksEngine::beginBackup(OperationContext* txn) {
+    Status RocksEngine::beginBackup(OperationContext* opCtx) {
         return rocksToMongoStatus(_db->PauseBackgroundWork());
     }
 
-    void RocksEngine::endBackup(OperationContext* txn) { _db->ContinueBackgroundWork(); }
+    void RocksEngine::endBackup(OperationContext* opCtx) { _db->ContinueBackgroundWork(); }
 
     void RocksEngine::setMaxWriteMBPerSec(int maxWriteMBPerSec) {
         _maxWriteMBPerSec = maxWriteMBPerSec;

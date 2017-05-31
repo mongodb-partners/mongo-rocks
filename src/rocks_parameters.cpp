@@ -51,7 +51,7 @@ namespace mongo {
                           false, true),
           _engine(engine) {}
 
-    void RocksRateLimiterServerParameter::append(OperationContext* txn, BSONObjBuilder& b,
+    void RocksRateLimiterServerParameter::append(OperationContext* opCtx, BSONObjBuilder& b,
                                                  const std::string& name) {
         b.append(name, _engine->getMaxWriteMBPerSec());
     }
@@ -84,7 +84,7 @@ namespace mongo {
         : ServerParameter(ServerParameterSet::getGlobal(), "rocksdbBackup", false, true),
           _engine(engine) {}
 
-    void RocksBackupServerParameter::append(OperationContext* txn, BSONObjBuilder& b,
+    void RocksBackupServerParameter::append(OperationContext* opCtx, BSONObjBuilder& b,
                                             const std::string& name) {
         b.append(name, "");
     }
@@ -105,7 +105,7 @@ namespace mongo {
         : ServerParameter(ServerParameterSet::getGlobal(), "rocksdbCompact", false, true),
           _engine(engine) {}
 
-    void RocksCompactServerParameter::append(OperationContext* txn, BSONObjBuilder& b,
+    void RocksCompactServerParameter::append(OperationContext* opCtx, BSONObjBuilder& b,
                                              const std::string& name) {
         b.append(name, "");
     }
@@ -124,7 +124,7 @@ namespace mongo {
                           true),
           _engine(engine) {}
 
-    void RocksCacheSizeParameter::append(OperationContext* txn, BSONObjBuilder& b,
+    void RocksCacheSizeParameter::append(OperationContext* opCtx, BSONObjBuilder& b,
                                          const std::string& name) {
         const long long bytesInGB = 1024 * 1024 * 1024LL;
         long long cacheSizeInGB = _engine->getBlockCache()->GetCapacity() / bytesInGB;
@@ -162,7 +162,7 @@ namespace mongo {
                           true),
           _engine(engine) {}
 
-    void RocksOptionsParameter::append(OperationContext* txn, BSONObjBuilder& b,
+    void RocksOptionsParameter::append(OperationContext* opCtx, BSONObjBuilder& b,
                                          const std::string& name) {
         std::string columnOptions;
         std::string dbOptions;
