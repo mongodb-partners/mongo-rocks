@@ -39,6 +39,7 @@
 #include "mongo/stdx/mutex.h"
 #include "mongo/util/assert_util.h"
 #include "mongo/util/background.h"
+#include "mongo/util/concurrency/idle_thread_block.h"
 #include "mongo/util/log.h"
 #include "rocks_util.h"
 
@@ -217,9 +218,10 @@ namespace mongo {
         stdx::unique_lock<stdx::mutex> lk(_compactionMutex);
         while (_compactionThreadRunning) {
             // check if we have something to compact
-            if (_compactionQueue.empty())
+            if (_compactionQueue.empty()) {
+                MONGO_IDLE_THREAD_BLOCK;
                 _compactionWakeUp.wait(lk);
-            else {
+            } else {
                 // get item from queue
                 const CompactOp op(std::move(_compactionQueue.top()));
                 _compactionQueue.pop();
