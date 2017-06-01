@@ -64,6 +64,7 @@
 #include "mongo/platform/endian.h"
 #include "mongo/stdx/memory.h"
 #include "mongo/util/background.h"
+#include "mongo/util/concurrency/idle_thread_block.h"
 #include "mongo/util/log.h"
 #include "mongo/util/processinfo.h"
 
@@ -102,6 +103,7 @@ namespace mongo {
                     ms = 100;
                 }
 
+                MONGO_IDLE_THREAD_BLOCK;
                 sleepmillis(ms);
             }
             LOG(1) << "stopping " << name() << " thread";
