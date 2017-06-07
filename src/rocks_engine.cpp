@@ -161,7 +161,7 @@ namespace mongo {
 
             // IgnoreSnapshots is available since RocksDB 4.3
 #if defined(ROCKSDB_MAJOR) && (ROCKSDB_MAJOR > 4 || (ROCKSDB_MAJOR == 4 && ROCKSDB_MINOR >= 3))
-            virtual bool IgnoreSnapshots() const { return true; }
+            virtual bool IgnoreSnapshots() const override { return true; }
 #endif
 
             virtual const char* Name() const { return "PrefixDeletingCompactionFilter"; }
@@ -333,35 +333,42 @@ namespace mongo {
 
         // load dropped prefixes
         {
-            rocksdb::WriteBatch wb;
-            // we will use this iter to check if prefixes are still alive
-            std::unique_ptr<rocksdb::Iterator> prefixIter(_db->NewIterator(rocksdb::ReadOptions()));
+            int dropped_count = 0;
             for (iter->Seek(kDroppedPrefix);
                  iter->Valid() && iter->key().starts_with(kDroppedPrefix); iter->Next()) {
                 invariantRocksOK(iter->status());
                 rocksdb::Slice prefix(iter->key());
+                std::string prefixkey(prefix.ToString());
                 prefix.remove_prefix(kDroppedPrefix.size());
-                prefixIter->Seek(prefix);
-                invariantRocksOK(iter->status());
-                if (prefixIter->Valid() && prefixIter->key().starts_with(prefix)) {
-                    // prefix is still alive, let's instruct the compaction filter to clear it up
-                    uint32_t int_prefix;
-                    bool ok = extractPrefix(prefix, &int_prefix);
-                    invariant(ok);
-                    {
-                        stdx::lock_guard<stdx::mutex> lk(_droppedPrefixesMutex);
-                        _droppedPrefixes.insert(int_prefix);
-                    }
-                } else {
-                    // prefix is no longer alive. let's remove the prefix from our dropped prefixes
-                    // list
-                    wb.Delete(iter->key());
+
+                // let's instruct the compaction scheduler to compact dropped prefix
+                ++dropped_count;
+                uint32_t int_prefix;
+                bool ok = extractPrefix(prefix, &int_prefix);
+                invariant(ok);
+                {
+                    stdx::lock_guard<stdx::mutex> lk(_droppedPrefixesMutex);
+                    _droppedPrefixes.insert(int_prefix);
+                }
+                LOG(1) << "compacting dropped prefix: " << prefix.ToString(true);
+                auto s = _compactionScheduler->compactDroppedPrefix(
+                            prefix.ToString(),
+                            [=] (bool opSucceeded) {
+                                {
+                                    stdx::lock_guard<stdx::mutex> lk(_droppedPrefixesMutex);
+                                    _droppedPrefixes.erase(int_prefix);
+                                }
+                                if (opSucceeded) {
+                                    rocksdb::WriteOptions syncOptions;
+                                    syncOptions.sync = true;
+                                    _db->Delete(syncOptions, prefixkey);
+                                }
+                            });
+                if (!s.isOK()) {
+                    log() << "failed to schedule compaction for prefix " << prefix.ToString(true);
                 }
             }
-            if (wb.Count() > 0) {
-                auto s = _db->Write(rocksdb::WriteOptions(), &wb);
-                invariantRocksOK(s);
-            }
+            log() << dropped_count << " dropped prefixes need compaction";
         }
 
         _durabilityManager.reset(new RocksDurabilityManager(_db.get(), _durable));
@@ -434,11 +441,13 @@ namespace mongo {
         std::unique_ptr<RocksRecordStore> recordStore =
             options.capped
                 ? stdx::make_unique<RocksRecordStore>(
-                      ns, ident, _db.get(), _counterManager.get(), _durabilityManager.get(), prefix,
+                      ns, ident, _db.get(), _counterManager.get(), _durabilityManager.get(),
+                      _compactionScheduler.get(), prefix,
                       true, options.cappedSize ? options.cappedSize : 4096,  // default size
                       options.cappedMaxDocs ? options.cappedMaxDocs : -1)
                 : stdx::make_unique<RocksRecordStore>(ns, ident, _db.get(), _counterManager.get(),
-                                                      _durabilityManager.get(), prefix);
+                                                      _durabilityManager.get(), _compactionScheduler.get(),
+                                                      prefix);
 
         {
             stdx::lock_guard<stdx::mutex> lk(_identObjectMapMutex);
@@ -530,13 +539,24 @@ namespace mongo {
         // Suggest compaction for the prefixes that we need to drop, So that
         // we free space as fast as possible.
         for (auto& prefix : prefixesToDrop) {
-            std::string end_prefix_str = rocksGetNextPrefix(prefix);
-
-            rocksdb::Slice start_prefix = prefix;
-            rocksdb::Slice end_prefix = end_prefix_str;
-            s = rocksdb::experimental::SuggestCompactRange(_db.get(), &start_prefix, &end_prefix);
-            if (!s.ok()) {
-                log() << "failed to suggest compaction for prefix " << prefix;
+            auto s = _compactionScheduler->compactDroppedPrefix(
+                        prefix,
+                        [=] (bool opSucceeded) {
+                            {
+                                uint32_t int_prefix;
+                                bool ok = extractPrefix(prefix, &int_prefix);
+                                invariant(ok);
+                                stdx::lock_guard<stdx::mutex> lk(_droppedPrefixesMutex);
+                                _droppedPrefixes.erase(int_prefix);
+                            }
+                            if (opSucceeded) {
+                                rocksdb::WriteOptions syncOptions;
+                                syncOptions.sync = true;
+                                _db->Delete(syncOptions, kDroppedPrefix + prefix);
+                            }
+                        });
+            if (!s.isOK()) {
+                log() << "failed to schedule compaction for prefix " << rocksdb::Slice(prefix).ToString(true);
             }
         }
 

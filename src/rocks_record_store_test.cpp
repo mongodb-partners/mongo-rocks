@@ -42,6 +42,7 @@
 #include "mongo/unittest/unittest.h"
 #include "mongo/unittest/temp_dir.h"
 
+#include "rocks_compaction_scheduler.h"
 #include "rocks_record_store.h"
 #include "rocks_recovery_unit.h"
 #include "rocks_transaction.h"
@@ -63,6 +64,7 @@ namespace mongo {
             _db.reset(db);
             _counterManager.reset(new RocksCounterManager(_db.get(), true));
             _durabilityManager.reset(new RocksDurabilityManager(_db.get(), true));
+            _compactionScheduler.reset(new RocksCompactionScheduler(_db.get()));
         }
 
         virtual std::unique_ptr<RecordStore> newNonCappedRecordStore() {
@@ -70,7 +72,8 @@ namespace mongo {
         }
         std::unique_ptr<RecordStore> newNonCappedRecordStore(const std::string& ns) {
             return stdx::make_unique<RocksRecordStore>(ns, "1", _db.get(), _counterManager.get(),
-                                                       _durabilityManager.get(), "prefix");
+                                                       _durabilityManager.get(),
+                                                       _compactionScheduler.get(), "prefix");
         }
 
         std::unique_ptr<RecordStore> newCappedRecordStore(int64_t cappedMaxSize,
@@ -82,7 +85,9 @@ namespace mongo {
                                                           int64_t cappedMaxSize,
                                                           int64_t cappedMaxDocs) {
             return stdx::make_unique<RocksRecordStore>(ns, "1", _db.get(), _counterManager.get(),
-                                                       _durabilityManager.get(), "prefix", true,
+                                                       _durabilityManager.get(),
+                                                       _compactionScheduler.get(),
+                                                       "prefix", true,
                                                        cappedMaxSize, cappedMaxDocs);
         }
 
@@ -104,6 +109,7 @@ namespace mongo {
         RocksSnapshotManager _snapshotManager;
         std::unique_ptr<RocksDurabilityManager> _durabilityManager;
         std::unique_ptr<RocksCounterManager> _counterManager;
+        std::unique_ptr<RocksCompactionScheduler> _compactionScheduler;
     };
 
     std::unique_ptr<HarnessHelper> newHarnessHelper() {

@@ -58,6 +58,7 @@ namespace mongo {
 
     class RocksCounterManager;
     class RocksDurabilityManager;
+    class RocksCompactionScheduler;
     class RocksRecoveryUnit;
     class RocksOplogKeyTracker;
     class RocksRecordStore;
@@ -106,7 +107,9 @@ namespace mongo {
     public:
         RocksRecordStore(StringData ns, StringData id, rocksdb::DB* db,
                          RocksCounterManager* counterManager,
-                         RocksDurabilityManager* durabilityManager, std::string prefix,
+                         RocksDurabilityManager* durabilityManager,
+                         RocksCompactionScheduler* compactionScheduler,
+                         std::string prefix,
                          bool isCapped = false, int64_t cappedMaxSize = -1,
                          int64_t cappedMaxDocs = -1, CappedCallback* cappedDeleteCallback = NULL);
 
@@ -270,6 +273,7 @@ namespace mongo {
 
         rocksdb::DB* _db;                      // not owned
         RocksCounterManager* _counterManager;  // not owned
+        RocksCompactionScheduler* _compactionScheduler;  // not owned
         std::string _prefix;
 
         const bool _isCapped;

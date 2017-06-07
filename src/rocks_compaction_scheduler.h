@@ -28,32 +28,39 @@
 
 #pragma once
 
-#include <atomic>
-#include <set>
-#include <unordered_map>
+#include <functional>
 #include <memory>
 #include <string>
-#include <list>
 
 #include <rocksdb/db.h>
 #include <rocksdb/slice.h>
 
+#include "mongo/base/status.h"
 #include "mongo/stdx/mutex.h"
 #include "mongo/util/timer.h"
 
 namespace mongo {
 
+    class CompactionBackgroundJob;
+
     class RocksCompactionScheduler {
     public:
-        RocksCompactionScheduler(rocksdb::DB* db) : _db(db) { _timer.reset(); }
+        RocksCompactionScheduler(rocksdb::DB* db);
+        ~RocksCompactionScheduler();
 
         static int getSkippedDeletionsThreshold() { return kSkippedDeletionsThreshold; }
 
         void reportSkippedDeletionsAboveThreshold(const std::string& prefix);
 
-    private:
-        rocksdb::DB* _db;  // not owned
+        // schedule compact range operation for execution in _compactionThread
+        Status compactAll();
+        Status compactRange(const std::string& begin, const std::string& end);
+        Status compactPrefix(const std::string& prefix);
+        Status compactDroppedRange(const std::string& begin, const std::string& end,
+                                   const std::function<void(bool)>& cleanup);
+        Status compactDroppedPrefix(const std::string& prefix, const std::function<void(bool)>& cleanup);
 
+    private:
         stdx::mutex _lock;
         // protected by _lock
         Timer _timer;
@@ -63,5 +70,8 @@ namespace mongo {
         // We'll compact the prefix if any operation on the prefix reports more than 50.000
         // deletions it had to skip over (this is about 10ms extra overhead)
         static const int kSkippedDeletionsThreshold = 50000;
+
+        // thread for async execution of range compactions
+        std::unique_ptr<CompactionBackgroundJob> _compactionJob;
     };
 }

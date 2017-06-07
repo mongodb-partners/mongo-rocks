@@ -61,6 +61,7 @@
 
 #include "rocks_counter_manager.h"
 #include "rocks_durability_manager.h"
+#include "rocks_compaction_scheduler.h"
 #include "rocks_engine.h"
 #include "rocks_recovery_unit.h"
 #include "rocks_util.h"
@@ -278,11 +279,13 @@ namespace mongo {
     RocksRecordStore::RocksRecordStore(StringData ns, StringData id, rocksdb::DB* db,
                                        RocksCounterManager* counterManager,
                                        RocksDurabilityManager* durabilityManager,
+                                       RocksCompactionScheduler* compactionScheduler,
                                        std::string prefix, bool isCapped, int64_t cappedMaxSize,
                                        int64_t cappedMaxDocs, CappedCallback* cappedCallback)
         : RecordStore(ns),
           _db(db),
           _counterManager(counterManager),
+          _compactionScheduler(compactionScheduler),
           _prefix(std::move(prefix)),
           _isCapped(isCapped),
           _cappedMaxSize(cappedMaxSize),
@@ -624,16 +627,13 @@ namespace mongo {
                 _oplogSinceLastCompaction.reset();
                 // schedule compaction for oplog
                 std::string oldestAliveKey(_makePrefixedKey(_prefix, _cappedOldestKeyHint));
-                rocksdb::Slice begin(_prefix), end(oldestAliveKey);
-                rocksdb::experimental::SuggestCompactRange(_db, &begin, &end);
+                _compactionScheduler->compactRange(_prefix, oldestAliveKey);
 
                 // schedule compaction for oplog tracker
                 std::string oplogKeyTrackerPrefix(rocksGetNextPrefix(_prefix));
                 oldestAliveKey = _makePrefixedKey(oplogKeyTrackerPrefix, _cappedOldestKeyHint);
-                begin = rocksdb::Slice(oplogKeyTrackerPrefix);
-                end = rocksdb::Slice(oldestAliveKey);
-                rocksdb::experimental::SuggestCompactRange(_db, &begin, &end);
-                
+                _compactionScheduler->compactRange(oplogKeyTrackerPrefix, oldestAliveKey);
+
                 _oplogKeyTracker->resetDeletedSinceCompaction();
             }
         }
