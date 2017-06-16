@@ -162,8 +162,9 @@ namespace mongo {
                 for (const auto& prop : speed_properties) {
                     auto itr = op_properties.find(prop.first);
                     if (itr != op_properties.end()) {
-                        size_t speed =
-                            (itr->second * 1000 * 1000) / static_cast<size_t>(ts.op_elapsed_micros + 1);
+                        size_t speed = (itr->second * 1000 * 1000) /
+                                       static_cast<size_t>(
+                                           (ts.op_elapsed_micros == 0) ? 1 : ts.op_elapsed_micros);
                         threadObjBuilder.append(
                             prop.second, PrettyPrintBytes(static_cast<size_t>(speed)) + "/s");
                     }
@@ -203,7 +204,7 @@ namespace mongo {
 
           bob.append("counters", countersObjBuilder.obj());
         }
-        
+
         RocksEngine::appendGlobalStats(bob);
 
         return bob.obj();
