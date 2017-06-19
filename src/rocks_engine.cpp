@@ -53,8 +53,8 @@
 #include <rocksdb/utilities/write_batch_with_index.h>
 #include <rocksdb/utilities/checkpoint.h>
 
-#include "mongo/db/client.h"
 #include "mongo/db/catalog/collection_options.h"
+#include "mongo/db/client.h"
 #include "mongo/db/concurrency/locker.h"
 #include "mongo/db/index/index_descriptor.h"
 #include "mongo/db/namespace_string.h"
@@ -65,6 +65,7 @@
 #include "mongo/stdx/memory.h"
 #include "mongo/util/background.h"
 #include "mongo/util/concurrency/idle_thread_block.h"
+#include "mongo/util/concurrency/ticketholder.h"
 #include "mongo/util/log.h"
 #include "mongo/util/processinfo.h"
 

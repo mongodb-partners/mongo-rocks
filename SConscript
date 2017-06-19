@@ -40,6 +40,7 @@ env.Library(
         '$BUILD_DIR/mongo/db/storage/key_string',
         '$BUILD_DIR/mongo/db/storage/oplog_hack',
         '$BUILD_DIR/mongo/util/background_job',
+        '$BUILD_DIR/mongo/util/concurrency/ticketholder',
         '$BUILD_DIR/mongo/util/processinfo',
         '$BUILD_DIR/third_party/shim_snappy',
         ],
