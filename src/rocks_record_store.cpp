@@ -267,13 +267,13 @@ namespace mongo {
             uint32_t size =
                 endian::littleToNative(*reinterpret_cast<const uint32_t*>(value.data()));
             return static_cast<int>(size);
-        }        
+        }
         void resetDeletedSinceCompaction() {
             _deletedKeysSinceCompaction = 0;
         }
         long long getDeletedSinceCompaction() {
             return _deletedKeysSinceCompaction;
-        }        
+        }
 
     private:
         std::atomic<long long> _deletedKeysSinceCompaction;
@@ -358,7 +358,7 @@ namespace mongo {
 
     RocksRecordStore::~RocksRecordStore() {
         {
-            stdx::lock_guard<boost::timed_mutex> lk(_cappedDeleterMutex);
+            stdx::lock_guard<stdx::timed_mutex> lk(_cappedDeleterMutex);
             _shuttingDown = true;
         }
         delete _oplogKeyTracker;
@@ -451,7 +451,7 @@ namespace mongo {
         }
 
         // ensure only one thread at a time can do deletes, otherwise they'll conflict.
-       boost::unique_lock<boost::timed_mutex> lock(_cappedDeleterMutex, boost::defer_lock);
+       stdx::unique_lock<stdx::timed_mutex> lock(_cappedDeleterMutex, stdx::defer_lock);
 
         if (_cappedMaxDocs != -1) {
             lock.lock(); // Max docs has to be exact, so have to check every time.
@@ -469,7 +469,7 @@ namespace mongo {
             // on the deleter thread.
 
             if (!lock.try_lock()) {
-                (void)lock.try_lock_for(boost::chrono::milliseconds(200));
+                (void)lock.try_lock_for(stdx::chrono::milliseconds(200));
             }
             return 0;
         } else {
@@ -479,7 +479,7 @@ namespace mongo {
                 if ((_dataSize.load() - _cappedMaxSize) < _cappedMaxSizeSlack)
                     return 0;
 
-                if (!lock.try_lock_for(boost::chrono::milliseconds(200)))
+                if (!lock.try_lock_for(stdx::chrono::milliseconds(200)))
                     return 0;
 
                 // If we already waited, let someone else do cleanup unless we are significantly
@@ -624,7 +624,7 @@ namespace mongo {
         opCtx->setRecoveryUnit(realRecoveryUnit, realRUstate);
 
         if (_isOplog) {
-            if ((_oplogSinceLastCompaction.minutes() >= kOplogCompactEveryMins) || 
+            if ((_oplogSinceLastCompaction.minutes() >= kOplogCompactEveryMins) ||
             (_oplogKeyTracker->getDeletedSinceCompaction() >= kOplogCompactEveryDeletedRecords)) {
                 log() << "Scheduling oplog compactions. time since last " << _oplogSinceLastCompaction.minutes() <<
                     " deleted since last " << _oplogKeyTracker->getDeletedSinceCompaction();

@@ -99,7 +99,7 @@ namespace mongo {
                     RocksRecordStore* rs =
                         checked_cast<RocksRecordStore*>(collection->getRecordStore());
                     WriteUnitOfWork wuow(opCtx.get());
-                    stdx::lock_guard<boost::timed_mutex> lock(rs->cappedDeleterMutex());
+                    stdx::lock_guard<stdx::timed_mutex> lock(rs->cappedDeleterMutex());
                     int64_t removed = rs->cappedDeleteAsNeeded_inlock(opCtx.get(), RecordId::max());
                     wuow.commit();
                     return removed;

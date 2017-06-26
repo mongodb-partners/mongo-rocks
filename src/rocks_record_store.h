@@ -203,7 +203,7 @@ namespace mongo {
 
         int64_t cappedDeleteAsNeeded(OperationContext* opCtx, const RecordId& justInserted);
         int64_t cappedDeleteAsNeeded_inlock(OperationContext* opCtx, const RecordId& justInserted);
-        boost::timed_mutex& cappedDeleterMutex() { return _cappedDeleterMutex; }
+        stdx::timed_mutex& cappedDeleterMutex() { return _cappedDeleterMutex; }
 
         static rocksdb::Comparator* newRocksCollectionComparator();
 
@@ -281,7 +281,7 @@ namespace mongo {
         CappedCallback* _cappedCallback;
         stdx::mutex _cappedCallbackMutex;  // guards _cappedCallback.
 
-        mutable boost::timed_mutex _cappedDeleterMutex;  // see comment in ::cappedDeleteAsNeeded
+        mutable stdx::timed_mutex _cappedDeleterMutex;  // see comment in ::cappedDeleteAsNeeded
         int _cappedDeleteCheckCount;      // see comment in ::cappedDeleteAsNeeded
 
         const bool _isOplog;
