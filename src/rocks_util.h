@@ -50,6 +50,7 @@ namespace mongo {
 
     std::string encodePrefix(uint32_t prefix);
     bool extractPrefix(const rocksdb::Slice& slice, uint32_t* prefix);
+    int get_internal_delete_skipped_count();
 
     Status rocksToMongoStatus_slow(const rocksdb::Status& status, const char* prefix);
 
