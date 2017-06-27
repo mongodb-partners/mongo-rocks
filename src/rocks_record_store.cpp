@@ -56,6 +56,7 @@
 #include "mongo/stdx/memory.h"
 #include "mongo/util/assert_util.h"
 #include "mongo/util/background.h"
+#include "mongo/util/concurrency/idle_thread_block.h"
 #include "mongo/util/log.h"
 #include "mongo/util/mongoutils/str.h"
 
@@ -128,8 +129,11 @@ namespace mongo {
         Client::initThread("RocksOplogJournalThread");
         while (true) {
             stdx::unique_lock<stdx::mutex> lk(_uncommittedRecordIdsMutex);
-            _opsWaitingForJournalCV.wait(
-                lk, [&] { return _shuttingDown || !_opsWaitingForJournal.empty(); });
+            {
+                MONGO_IDLE_THREAD_BLOCK;
+                _opsWaitingForJournalCV.wait(
+                    lk, [&] { return _shuttingDown || !_opsWaitingForJournal.empty(); });
+            }
 
             if (_shuttingDown) {
                 return;
