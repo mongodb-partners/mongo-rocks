@@ -635,11 +635,13 @@ namespace mongo {
     /// RocksUniqueIndex
 
     RocksUniqueIndex::RocksUniqueIndex(rocksdb::DB* db, std::string prefix, std::string ident,
-                                       Ordering order, const BSONObj& config, std::string collectionNamespace,
-                                       std::string indexName)
+                                       Ordering order, const BSONObj& config,
+                                       std::string collectionNamespace, std::string indexName,
+                                       bool partial)
         : RocksIndexBase(db, prefix, ident, order, config),
           _collectionNamespace(std::move(collectionNamespace)),
-          _indexName(std::move(indexName)) {}
+          _indexName(std::move(indexName)),
+          _partial(partial) {}
 
     Status RocksUniqueIndex::insert(OperationContext* txn, const BSONObj& key, const RecordId& loc,
                                     bool dupsAllowed) {
@@ -738,10 +740,26 @@ namespace mongo {
             throw WriteConflictException();
         }
 
-        _indexStorageSize.fetch_sub(static_cast<long long>(prefixedKey.size()),
-                                    std::memory_order_relaxed);
-
         if (!dupsAllowed) {
+            if (_partial) {
+                // Check that the record id matches.  We may be called to unindex records that are
+                // not present in the index due to the partial filter expression.
+                std::string val;
+                auto s = ru->Get(prefixedKey, &val);
+                if (s.IsNotFound()) {
+                    return;
+                }
+                BufReader br(val.data(), val.size());
+                fassert(90416, br.remaining());
+                if (KeyString::decodeRecordId(&br) != loc) {
+                    return;
+                }
+                // Ensure there aren't any other values in here.
+                KeyString::TypeBits::fromBuffer(_keyStringVersion, &br);
+                fassert(90417, !br.remaining());
+            }
+            _indexStorageSize.fetch_sub(static_cast<long long>(prefixedKey.size()),
+                                        std::memory_order_relaxed);
             ru->writeBatch()->Delete(prefixedKey);
             return;
         }
@@ -750,7 +768,6 @@ namespace mongo {
         std::string currentValue;
         auto getStatus = ru->Get(prefixedKey, &currentValue);
         if (getStatus.IsNotFound()) {
-            // nothing here. just return
             return;
         }
         invariantRocksOK(getStatus);
@@ -767,6 +784,8 @@ namespace mongo {
                 if (records.empty() && !br.remaining()) {
                     // This is the common case: we are removing the only loc for this key.
                     // Remove the whole entry.
+                    _indexStorageSize.fetch_sub(static_cast<long long>(prefixedKey.size()),
+                                                std::memory_order_relaxed);
                     ru->writeBatch()->Delete(prefixedKey);
                     return;
                 }
@@ -797,6 +816,8 @@ namespace mongo {
 
         rocksdb::Slice newValueSlice(newValue.getBuffer(), newValue.getSize());
         ru->writeBatch()->Put(prefixedKey, newValueSlice);
+        _indexStorageSize.fetch_sub(static_cast<long long>(prefixedKey.size()),
+                                    std::memory_order_relaxed);
     }
 
     std::unique_ptr<SortedDataInterface::Cursor> RocksUniqueIndex::newCursor(OperationContext* txn,

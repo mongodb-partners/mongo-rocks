@@ -89,7 +89,7 @@ namespace mongo {
                     }
 
                     Lock::CollectionLock collectionLock(txn->lockState(), _ns.ns(), MODE_IX);
-                    Collection* collection = db->getCollection(_ns);
+                    Collection* collection = db->getCollection(txn.get(), _ns);
                     if (!collection) {
                         LOG(2) << "no collection " << _ns;
                         return 0;
