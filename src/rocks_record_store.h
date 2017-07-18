@@ -197,8 +197,8 @@ namespace mongo {
           stdx::lock_guard<stdx::mutex> lk(_cappedCallbackMutex);
           _cappedCallback = cb;
         }
-        bool cappedMaxDocs() const { invariant(_isCapped); return _cappedMaxDocs; }
-        bool cappedMaxSize() const { invariant(_isCapped); return _cappedMaxSize; }
+        int64_t cappedMaxDocs() const { invariant(_isCapped); return _cappedMaxDocs; }
+        int64_t cappedMaxSize() const { invariant(_isCapped); return _cappedMaxSize; }
         bool isOplog() const { return _isOplog; }
 
         int64_t cappedDeleteAsNeeded(OperationContext* txn, const RecordId& justInserted);

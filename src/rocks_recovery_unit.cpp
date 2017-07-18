@@ -37,6 +37,8 @@
 #include <rocksdb/iterator.h>
 #include <rocksdb/slice.h>
 #include <rocksdb/options.h>
+// Temporary fix for https://github.com/facebook/rocksdb/pull/2336#issuecomment-303226208
+#define ROCKSDB_SUPPORT_THREAD_LOCAL
 #include <rocksdb/perf_context.h>
 #include <rocksdb/write_batch.h>
 #include <rocksdb/utilities/write_batch_with_index.h>
