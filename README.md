@@ -3,7 +3,7 @@
 ### TL;DR
 
 Execute this series of commands to compile MongoDB with RocksDB storage engine:
-    
+
     # install compression libraries (zlib, bzip2, snappy):
     sudo apt-get install zlib1g-dev; sudo apt-get install libbz2-dev; sudo apt-get install libsnappy-dev
     # get rocksdb
@@ -21,7 +21,7 @@ Execute this series of commands to compile MongoDB with RocksDB storage engine:
     cd mongo; scons
 
 Start `mongod` using the `--storageEngine=rocksdb` option.
-    
+
 ### More information
 
 To use this module, it has to be linked from `mongo/src/mongo/db/modules`. The build system will automatically recognize it. In the `mongo` repository directory do the following:
@@ -31,11 +31,11 @@ To use this module, it has to be linked from `mongo/src/mongo/db/modules`. The b
 
 To build you will need to first install the RocksDB library, see `INSTALL.md`
 at https://github.com/facebook/rocksdb for more information. If you install
-in non-standard locations, you may need to add `--cpppath` and `--libpath`
-options to the `scons` command line:
+in non-standard locations, you may need to set `CPPPATH` and `LIBPATH`
+environment variables:
 
-    scons --cpppath=/myrocksdb/include --libpath=/myrocksdb/lib
-    
+    CPPPATH=/myrocksdb/include LIBPATH=/myrocksdb/lib scons
+
 ### Reach out
 
 If you have any issues with MongoRocks, feel free to reach out to our Google Group https://groups.google.com/forum/#!forum/mongo-rocks
