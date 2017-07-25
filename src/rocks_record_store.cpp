@@ -586,7 +586,7 @@ namespace mongo {
                 iter->Next();
             }
 
-            if (!iter->status().ok()) {
+            if (!iter->Valid() && !iter->status().ok()) {
                 log() << "RocksDB iterator failure when trying to delete capped, ignoring: "
                       << redact(iter->status().ToString());
             }
@@ -1064,7 +1064,7 @@ namespace mongo {
         _skipNextAdvance = false;
         int64_t locStorage;
         _iterator->Seek(RocksRecordStore::_makeKey(_lastLoc, &locStorage));
-        invariantRocksOK(_iterator->status());
+        invariantRocksOK(_iterator->Valid() ? rocksdb::Status::OK() : _iterator->status());
 
         if (_forward) {
             // If _skipNextAdvance is true we landed after where we were. Return our new location on
@@ -1190,7 +1190,6 @@ namespace mongo {
     }
 
     boost::optional<Record> RocksRecordStore::Cursor::curr() {
-        invariantRocksOK(_iterator->status());
         if (!_iterator->Valid()) {
             _eof = true;
             return {};
