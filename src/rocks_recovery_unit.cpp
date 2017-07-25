@@ -250,9 +250,7 @@ namespace mongo {
     }
 
     void RocksRecoveryUnit::commitUnitOfWork() {
-        if (_writeBatch.GetWriteBatch()->Count() > 0) {
-            _commit();
-        }
+        _commit();
 
         try {
             for (Changes::const_iterator it = _changes.begin(), end = _changes.end(); it != end;
