@@ -220,7 +220,7 @@ namespace mongo {
         public:
             Cursor(OperationContext* txn, rocksdb::DB* db, std::string prefix,
                    std::shared_ptr<CappedVisibilityManager> cappedVisibilityManager,
-                   bool forward, bool _isCapped);
+                   bool forward, bool _isCapped, RecordId startIterator);
 
             boost::optional<Record> next() final;
             boost::optional<Record> seekExact(const RecordId& id) final;
