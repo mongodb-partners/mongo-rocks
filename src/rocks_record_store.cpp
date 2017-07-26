@@ -1063,8 +1063,13 @@ namespace mongo {
     void RocksRecordStore::Cursor::positionIterator() {
         _skipNextAdvance = false;
         int64_t locStorage;
-        _iterator->Seek(RocksRecordStore::_makeKey(_lastLoc, &locStorage));
-        invariantRocksOK(_iterator->Valid() ? rocksdb::Status::OK() : _iterator->status());
+        auto seekTarget = RocksRecordStore::_makeKey(_lastLoc, &locStorage);
+        if (!_iterator->Valid() || _iterator->key() != seekTarget) {
+            _iterator->Seek(seekTarget);
+            if (!_iterator->Valid()) {
+                invariantRocksOK(_iterator->status());
+            }
+        }
 
         if (_forward) {
             // If _skipNextAdvance is true we landed after where we were. Return our new location on
