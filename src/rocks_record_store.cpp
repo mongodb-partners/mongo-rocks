@@ -775,7 +775,7 @@ namespace mongo {
         }
 
         return stdx::make_unique<Cursor>(opCtx, _db, _prefix, _cappedVisibilityManager, forward,
-                                         _isCapped);
+                                         _isCapped, _cappedOldestKeyHint);
     }
 
     Status RocksRecordStore::truncate(OperationContext* opCtx) {
@@ -1047,7 +1047,8 @@ namespace mongo {
             std::string prefix,
             std::shared_ptr<CappedVisibilityManager> cappedVisibilityManager,
             bool forward,
-            bool isCapped)
+            bool isCapped,
+            RecordId startIterator)
         : _opCtx(opCtx),
           _db(db),
           _prefix(std::move(prefix)),
@@ -1057,6 +1058,14 @@ namespace mongo {
           _readUntilForOplog(RocksRecoveryUnit::getRocksRecoveryUnit(opCtx)->getOplogReadTill()) {
         _currentSequenceNumber =
           RocksRecoveryUnit::getRocksRecoveryUnit(opCtx)->snapshot()->GetSequenceNumber();
+
+        if (!startIterator.isNull() && !_readUntilForOplog.isNull() && forward) {
+            // This is a hack to speed up first record retrieval from the oplog
+            _needFirstSeek = false;
+            _lastLoc = startIterator;
+            iterator();
+            _skipNextAdvance = true;
+        }
     }
 
     // requires !_eof
