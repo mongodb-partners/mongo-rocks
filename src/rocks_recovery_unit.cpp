@@ -39,6 +39,7 @@
 #include <rocksdb/options.h>
 // Temporary fix for https://github.com/facebook/rocksdb/pull/2336#issuecomment-303226208
 #define ROCKSDB_SUPPORT_THREAD_LOCAL
+#include <rocksdb/version.h>
 #include <rocksdb/perf_context.h>
 #include <rocksdb/write_batch.h>
 #include <rocksdb/utilities/write_batch_with_index.h>
@@ -176,19 +177,25 @@ namespace mongo {
                 if (rocksdb::GetPerfLevel() == rocksdb::PerfLevel::kDisable) {
                     rocksdb::SetPerfLevel(rocksdb::kEnableCount);
                 }
-                _rocksdbSkippedDeletionsInitial =
-                    rocksdb::perf_context.internal_delete_skipped_count;
+                _rocksdbSkippedDeletionsInitial = get_internal_delete_skipped_count();
             }
             void endOp() {
                 if (_compactionScheduler == nullptr) {
                     return;
                 }
-                int skippedDeletionsOp = rocksdb::perf_context.internal_delete_skipped_count -
+                int skippedDeletionsOp = get_internal_delete_skipped_count() -
                                          _rocksdbSkippedDeletionsInitial;
                 if (skippedDeletionsOp >=
                     RocksCompactionScheduler::getSkippedDeletionsThreshold()) {
                     _compactionScheduler->reportSkippedDeletionsAboveThreshold(_prefix);
                 }
+            }
+            inline int get_internal_delete_skipped_count() {
+                #if ROCKSDB_MAJOR > 5 || (ROCKSDB_MAJOR == 5 && ROCKSDB_MINOR >= 6)
+                    return rocksdb::get_perf_context()->internal_delete_skipped_count;
+                #else
+                    return rocksdb::perf_context.internal_delete_skipped_count;
+                #endif
             }
 
             int _rocksdbSkippedDeletionsInitial;

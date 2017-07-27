@@ -40,7 +40,7 @@ namespace mongo {
 
     public:
         RocksRateLimiterServerParameter(RocksEngine* engine);
-        virtual void append(OperationContext* txn, BSONObjBuilder& b, const std::string& name);
+        virtual void append(OperationContext* opCtx, BSONObjBuilder& b, const std::string& name);
         virtual Status set(const BSONElement& newValueElement);
         virtual Status setFromString(const std::string& str);
 
@@ -59,7 +59,7 @@ namespace mongo {
 
     public:
         RocksBackupServerParameter(RocksEngine* engine);
-        virtual void append(OperationContext* txn, BSONObjBuilder& b, const std::string& name);
+        virtual void append(OperationContext* opCtx, BSONObjBuilder& b, const std::string& name);
         virtual Status set(const BSONElement& newValueElement);
         virtual Status setFromString(const std::string& str);
 
@@ -75,7 +75,7 @@ namespace mongo {
 
     public:
         RocksCompactServerParameter(RocksEngine* engine);
-        virtual void append(OperationContext* txn, BSONObjBuilder& b, const std::string& name);
+        virtual void append(OperationContext* opCtx, BSONObjBuilder& b, const std::string& name);
         virtual Status set(const BSONElement& newValueElement);
         virtual Status setFromString(const std::string& str);
 
@@ -91,7 +91,7 @@ namespace mongo {
 
     public:
         RocksCacheSizeParameter(RocksEngine* engine);
-        virtual void append(OperationContext* txn, BSONObjBuilder& b, const std::string& name);
+        virtual void append(OperationContext* opCtx, BSONObjBuilder& b, const std::string& name);
         virtual Status set(const BSONElement& newValueElement);
         virtual Status setFromString(const std::string& str);
 
@@ -109,7 +109,7 @@ namespace mongo {
 
     public:
         RocksOptionsParameter(RocksEngine* engine);
-        virtual void append(OperationContext* txn, BSONObjBuilder& b, const std::string& name);
+        virtual void append(OperationContext* opCtx, BSONObjBuilder& b, const std::string& name);
         virtual Status set(const BSONElement& newValueElement);
         virtual Status setFromString(const std::string& str);
 
