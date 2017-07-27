@@ -1196,6 +1196,7 @@ namespace mongo {
 
     boost::optional<Record> RocksRecordStore::Cursor::curr() {
         if (!_iterator->Valid()) {
+            invariantRocksOK(_iterator->status());
             _eof = true;
             return {};
         }
