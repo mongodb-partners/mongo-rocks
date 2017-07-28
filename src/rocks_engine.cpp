@@ -53,8 +53,8 @@
 #include <rocksdb/utilities/write_batch_with_index.h>
 #include <rocksdb/utilities/checkpoint.h>
 
-#include "mongo/db/client.h"
 #include "mongo/db/catalog/collection_options.h"
+#include "mongo/db/client.h"
 #include "mongo/db/concurrency/locker.h"
 #include "mongo/db/index/index_descriptor.h"
 #include "mongo/db/namespace_string.h"
@@ -63,6 +63,8 @@
 #include "mongo/db/storage/journal_listener.h"
 #include "mongo/stdx/memory.h"
 #include "mongo/util/background.h"
+#include "mongo/util/concurrency/idle_thread_block.h"
+#include "mongo/util/concurrency/ticketholder.h"
 #include "mongo/util/log.h"
 #include "mongo/util/processinfo.h"
 
@@ -101,6 +103,7 @@ namespace mongo {
                     ms = 100;
                 }
 
+                MONGO_IDLE_THREAD_BLOCK;
                 sleepmillis(ms);
             }
             LOG(1) << "stopping " << name() << " thread";
@@ -125,7 +128,7 @@ namespace mongo {
         public:
             RocksTicketServerParameter(TicketHolder* holder, const std::string& name)
                 : ServerParameter(ServerParameterSet::getGlobal(), name, true, true), _holder(holder) {};
-            virtual void append(OperationContext* txn, BSONObjBuilder& b, const std::string& name) {
+            virtual void append(OperationContext* opCtx, BSONObjBuilder& b, const std::string& name) {
                 b.append(name, _holder->outof());
             }
             virtual Status set(const BSONElement& newValueElement) {
@@ -450,18 +453,18 @@ namespace mongo {
         return 1;
     }
 
-    int RocksEngine::flushAllFiles(OperationContext* txn, bool sync) {
+    int RocksEngine::flushAllFiles(OperationContext* opCtx, bool sync) {
         LOG(1) << "RocksEngine::flushAllFiles";
         _counterManager->sync();
         _durabilityManager->waitUntilDurable(true);
         return 1;
     }
 
-    Status RocksEngine::beginBackup(OperationContext* txn) {
+    Status RocksEngine::beginBackup(OperationContext* opCtx) {
         return rocksToMongoStatus(_db->PauseBackgroundWork());
     }
 
-    void RocksEngine::endBackup(OperationContext* txn) { _db->ContinueBackgroundWork(); }
+    void RocksEngine::endBackup(OperationContext* opCtx) { _db->ContinueBackgroundWork(); }
 
     void RocksEngine::setMaxWriteMBPerSec(int maxWriteMBPerSec) {
         _maxWriteMBPerSec = maxWriteMBPerSec;

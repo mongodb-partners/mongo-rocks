@@ -47,7 +47,6 @@
 #include <rocksdb/convenience.h>
 #include <rocksdb/db.h>
 #include <rocksdb/experimental.h>
-#include <rocksdb/perf_context.h>
 #include <rocksdb/slice.h>
 #include <rocksdb/write_batch.h>
 
@@ -351,7 +350,7 @@ namespace mongo {
     void RocksCompactionScheduler::loadDroppedPrefixes(rocksdb::Iterator* iter) {
         invariant(iter);
         const uint32_t rocksdbSkippedDeletionsInitial =
-            rocksdb::perf_context.internal_delete_skipped_count;
+            (uint32_t)get_internal_delete_skipped_count();
         int dropped_count = 0;
         for (iter->Seek(kDroppedPrefix); iter->Valid() && iter->key().starts_with(kDroppedPrefix);
              iter->Next()) {
@@ -374,7 +373,7 @@ namespace mongo {
         log() << dropped_count << " dropped prefixes need compaction";
 
         const uint32_t skippedDroppedPrefixMarkers =
-            rocksdb::perf_context.internal_delete_skipped_count - rocksdbSkippedDeletionsInitial;
+            (uint32_t)get_internal_delete_skipped_count() - rocksdbSkippedDeletionsInitial;
         _droppedPrefixesCount.fetch_add(skippedDroppedPrefixMarkers, std::memory_order_relaxed);
     }
 

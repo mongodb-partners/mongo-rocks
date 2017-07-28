@@ -41,7 +41,7 @@ namespace mongo {
     public:
         RocksServerStatusSection(RocksEngine* engine);
         virtual bool includeByDefault() const;
-        virtual BSONObj generateSection(OperationContext* txn,
+        virtual BSONObj generateSection(OperationContext* opCtx,
                                         const BSONElement& configElement) const;
 
     private:

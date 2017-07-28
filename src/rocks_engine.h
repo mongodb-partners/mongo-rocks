@@ -110,11 +110,11 @@ namespace mongo {
             return false;
         }
 
-        virtual int flushAllFiles(OperationContext* txn, bool sync) override;
+        virtual int flushAllFiles(OperationContext* opCtx, bool sync) override;
 
-        virtual Status beginBackup(OperationContext* txn) override;
+        virtual Status beginBackup(OperationContext* opCtx) override;
 
-        virtual void endBackup(OperationContext* txn) override;
+        virtual void endBackup(OperationContext* opCtx) override;
 
         virtual Status hotBackup(const std::string& path);
 

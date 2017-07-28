@@ -78,29 +78,29 @@ namespace mongo {
                     return 0;
                 }
 
-                const auto txn = cc().makeOperationContext();
+                const auto opCtx = cc().makeOperationContext();
 
                 try {
-                    AutoGetDb autoDb(txn.get(), _ns.db(), MODE_IX);
+                    AutoGetDb autoDb(opCtx.get(), _ns.db(), MODE_IX);
                     Database* db = autoDb.getDb();
                     if (!db) {
                         LOG(2) << "no local database yet";
                         return 0;
                     }
 
-                    Lock::CollectionLock collectionLock(txn->lockState(), _ns.ns(), MODE_IX);
-                    Collection* collection = db->getCollection(txn.get(), _ns);
+                    Lock::CollectionLock collectionLock(opCtx->lockState(), _ns.ns(), MODE_IX);
+                    Collection* collection = db->getCollection(opCtx.get(), _ns);
                     if (!collection) {
                         LOG(2) << "no collection " << _ns;
                         return 0;
                     }
 
-                    OldClientContext ctx(txn.get(), _ns.ns(), false);
+                    OldClientContext ctx(opCtx.get(), _ns.ns(), false);
                     RocksRecordStore* rs =
                         checked_cast<RocksRecordStore*>(collection->getRecordStore());
-                    WriteUnitOfWork wuow(txn.get());
-                    stdx::lock_guard<boost::timed_mutex> lock(rs->cappedDeleterMutex());
-                    int64_t removed = rs->cappedDeleteAsNeeded_inlock(txn.get(), RecordId::max());
+                    WriteUnitOfWork wuow(opCtx.get());
+                    stdx::lock_guard<stdx::timed_mutex> lock(rs->cappedDeleterMutex());
+                    int64_t removed = rs->cappedDeleteAsNeeded_inlock(opCtx.get(), RecordId::max());
                     wuow.commit();
                     return removed;
                 }

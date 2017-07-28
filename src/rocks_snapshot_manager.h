@@ -59,7 +59,7 @@ public:
         dropAllSnapshots();
     }
 
-    Status prepareForCreateSnapshot(OperationContext* txn) final;
+    Status prepareForCreateSnapshot(OperationContext* opCtx) final;
     Status createSnapshot(OperationContext* ru, const SnapshotName& name) final;
     void setCommittedSnapshot(const SnapshotName& name) final;
     void cleanupUnneededSnapshots() final;

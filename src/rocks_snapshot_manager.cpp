@@ -40,15 +40,15 @@
 
 namespace mongo {
     // This only checks invariants
-    Status RocksSnapshotManager::prepareForCreateSnapshot(OperationContext* txn) {
-        RocksRecoveryUnit::getRocksRecoveryUnit(txn)->prepareForCreateSnapshot(txn);
+    Status RocksSnapshotManager::prepareForCreateSnapshot(OperationContext* opCtx) {
+        RocksRecoveryUnit::getRocksRecoveryUnit(opCtx)->prepareForCreateSnapshot(opCtx);
         return Status::OK();
     }
 
-    Status RocksSnapshotManager::createSnapshot(OperationContext* txn, const SnapshotName& name) {
+    Status RocksSnapshotManager::createSnapshot(OperationContext* opCtx, const SnapshotName& name) {
         stdx::lock_guard<stdx::mutex> lock(_mutex);
         uint64_t nameU64 = name.asU64();
-        _snapshotMap[nameU64] = std::make_shared<SnapshotHolder>(txn, nameU64);
+        _snapshotMap[nameU64] = std::make_shared<SnapshotHolder>(opCtx, nameU64);
         _snapshots.push_back(nameU64);
         return Status::OK();
     }

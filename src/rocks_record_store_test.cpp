@@ -462,15 +462,15 @@ namespace mongo {
         }
     }
 
-    RecordId _oplogOrderInsertOplog( OperationContext* txn,
+    RecordId _oplogOrderInsertOplog( OperationContext* opCtx,
                                     std::unique_ptr<RecordStore>& rs,
                                     int inc ) {
         Timestamp opTime = Timestamp(5,inc);
         RocksRecordStore* rrs = dynamic_cast<RocksRecordStore*>(rs.get());
-        Status status = rrs->oplogDiskLocRegister( txn, opTime );
+        Status status = rrs->oplogDiskLocRegister( opCtx, opTime );
         ASSERT_OK( status );
         BSONObj obj = BSON( "ts" << opTime );
-        StatusWith<RecordId> res = rs->insertRecord( txn, obj.objdata(), obj.objsize(), false );
+        StatusWith<RecordId> res = rs->insertRecord( opCtx, obj.objdata(), obj.objsize(), false );
         ASSERT_OK( res.getStatus() );
         return res.getValue();
     }
@@ -561,8 +561,8 @@ namespace mongo {
         // Rollback the last two oplog entries, then insert entries with older optimes and ensure that
         // the visibility rules aren't violated. See SERVER-21645
         {
-            ServiceContext::UniqueOperationContext txn(harnessHelper->newOperationContext());
-            rs->cappedTruncateAfter(txn.get(), loc1, /*inclusive*/ false);
+            ServiceContext::UniqueOperationContext opCtx(harnessHelper->newOperationContext());
+            rs->cappedTruncateAfter(opCtx.get(), loc1, /*inclusive*/ false);
         }
 
         {
