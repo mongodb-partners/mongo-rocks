@@ -808,45 +808,40 @@ namespace mongo {
                                        BSONObjBuilder* output ) {
         long long nrecords = 0;
         long long dataSizeTotal = 0;
-        if (level == kValidateRecordStore || level == kValidateFull) {
-            auto cursor = getCursor(opCtx, true);
-            results->valid = true;
-            const int interruptInterval = 4096;
-            while (auto record = cursor->next()) {
-                if (!(nrecords % interruptInterval))
-                    opCtx->checkForInterrupt();
-                ++nrecords;
-                if (level == kValidateFull) {
-                    size_t dataSize;
-                    Status status = adaptor->validate(record->id, record->data, &dataSize);
-                    if (!status.isOK()) {
-                        results->valid = false;
-                        results->errors.push_back(str::stream() << record->id << " is corrupted");
-                    }
-                    dataSizeTotal += static_cast<long long>(dataSize);
-                }
-            }
 
-            if (level == kValidateFull && results->valid) {
-                long long storedNumRecords = numRecords(opCtx);
-                long long storedDataSize = dataSize(opCtx);
-
-                if (nrecords != storedNumRecords || dataSizeTotal != storedDataSize) {
-                    warning() << redact(_ident) << ": Existing record and data size counters ("
-                              << storedNumRecords << " records " << storedDataSize << " bytes) "
-                              << "are inconsistent with full validation results (" << nrecords
-                              << " records " << dataSizeTotal << " bytes). "
-                              << "Updating counters with new values.";
-                    if (nrecords != storedNumRecords) {
-                        _changeNumRecords(opCtx, nrecords - storedNumRecords);
-                        _increaseDataSize(opCtx, dataSizeTotal - storedDataSize);
-                    }
-                }
+        auto cursor = getCursor(opCtx, true);
+        results->valid = true;
+        const int interruptInterval = 4096;
+        while (auto record = cursor->next()) {
+            if (!(nrecords % interruptInterval))
+                opCtx->checkForInterrupt();
+            ++nrecords;
+            size_t dataSize;
+            Status status = adaptor->validate(record->id, record->data, &dataSize);
+            if (!status.isOK()) {
+                results->valid = false;
+                results->errors.push_back(str::stream() << record->id << " is corrupted");
             }
-            output->appendNumber("nrecords", nrecords);
-        } else {
-            output->appendNumber("nrecords", numRecords(opCtx));
+            dataSizeTotal += static_cast<long long>(dataSize);
         }
+
+        if (results->valid) {
+            long long storedNumRecords = numRecords(opCtx);
+            long long storedDataSize = dataSize(opCtx);
+
+            if (nrecords != storedNumRecords || dataSizeTotal != storedDataSize) {
+                warning() << redact(_ident) << ": Existing record and data size counters ("
+                          << storedNumRecords << " records " << storedDataSize << " bytes) "
+                          << "are inconsistent with full validation results (" << nrecords
+                          << " records " << dataSizeTotal << " bytes). "
+                          << "Updating counters with new values.";
+                if (nrecords != storedNumRecords) {
+                    _changeNumRecords(opCtx, nrecords - storedNumRecords);
+                    _increaseDataSize(opCtx, dataSizeTotal - storedDataSize);
+                }
+            }
+        }
+        output->appendNumber("nrecords", nrecords);
 
         return Status::OK();
     }
