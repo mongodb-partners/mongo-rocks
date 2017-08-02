@@ -9,14 +9,14 @@ Execute this series of commands to compile MongoDB with RocksDB storage engine:
     # get rocksdb
     git clone https://github.com/facebook/rocksdb.git
     # compile rocksdb
-    cd rocksdb; make static_lib; sudo INSTALL_PATH=/usr make install; cd ..
+    cd rocksdb; USE_RTTI=1 CFLAGS=-fPIC make static_lib; sudo INSTALL_PATH=/usr make install; cd ..
     # get mongo
     git clone https://github.com/mongodb/mongo.git
     # get mongorocks
     git clone https://github.com/mongodb-partners/mongo-rocks
     # add rocksdb module to mongo
     mkdir -p mongo/src/mongo/db/modules/
-    ln -sf ./mongo-rocks mongo/src/mongo/db/modules/rocks
+    ln -sf ~/mongo-rocks mongo/src/mongo/db/modules/rocks
     # compile mongo
     cd mongo; scons
 
@@ -27,7 +27,7 @@ Start `mongod` using the `--storageEngine=rocksdb` option.
 To use this module, it has to be linked from `mongo/src/mongo/db/modules`. The build system will automatically recognize it. In the `mongo` repository directory do the following:
 
     mkdir -p src/mongo/db/modules/
-    ln -sf ./mongo-rocks src/mongo/db/modules/rocks
+    ln -sf ~/mongo-rocks src/mongo/db/modules/rocks
 
 To build you will need to first install the RocksDB library, see `INSTALL.md`
 at https://github.com/facebook/rocksdb for more information. If you install
