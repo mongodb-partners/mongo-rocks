@@ -33,8 +33,6 @@
 
 #include "rocks_server_status.h"
 
-#include "boost/scoped_ptr.hpp"
-
 #include <rocksdb/db.h>
 #include <rocksdb/statistics.h>
 

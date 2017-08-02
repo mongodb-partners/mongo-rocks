@@ -37,8 +37,6 @@
 #include <memory>
 #include <algorithm>
 
-#include <boost/thread/locks.hpp>
-
 #include <rocksdb/comparator.h>
 #include <rocksdb/db.h>
 #include <rocksdb/experimental.h>
