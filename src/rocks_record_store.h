@@ -38,8 +38,6 @@
 
 #include <rocksdb/options.h>
 
-#include <boost/thread/mutex.hpp>
-
 #include "mongo/db/storage/capped_callback.h"
 #include "mongo/db/storage/record_store.h"
 #include "mongo/platform/atomic_word.h"
