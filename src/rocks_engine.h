@@ -33,7 +33,6 @@
 #include <map>
 #include <string>
 #include <memory>
-#include <unordered_set>
 
 #include <boost/optional.hpp>
 
@@ -117,6 +116,8 @@ namespace mongo {
 
         virtual void endBackup(OperationContext* opCtx) override;
 
+        virtual Status hotBackup(const std::string& path);
+
         virtual bool isDurable() const override { return _durable; }
 
         virtual bool isEphemeral() const override { return false; }
@@ -150,7 +151,6 @@ namespace mongo {
         const rocksdb::DB* getDB() const { return _db.get(); }
         size_t getBlockCacheUsage() const { return _block_cache->GetUsage(); }
         std::shared_ptr<rocksdb::Cache> getBlockCache() { return _block_cache; }
-        std::unordered_set<uint32_t> getDroppedPrefixes() const;
 
         RocksTransactionEngine* getTransactionEngine() { return &_transactionEngine; }
 
@@ -200,10 +200,6 @@ namespace mongo {
         // mapping from ident --> collection object
         StringMap<RocksRecordStore*> _identCollectionMap;
 
-        // set of all prefixes that are deleted. we delete them in the background thread
-        mutable stdx::mutex _droppedPrefixesMutex;
-        std::unordered_set<uint32_t> _droppedPrefixes;
-
         // This is for concurrency control
         RocksTransactionEngine _transactionEngine;
 
@@ -215,7 +211,6 @@ namespace mongo {
         std::unique_ptr<RocksCompactionScheduler> _compactionScheduler;
 
         static const std::string kMetadataPrefix;
-        static const std::string kDroppedPrefix;
 
         std::unique_ptr<RocksDurabilityManager> _durabilityManager;
         class RocksJournalFlusher;

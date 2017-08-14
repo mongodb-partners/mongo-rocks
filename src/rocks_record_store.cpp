@@ -449,7 +449,7 @@ namespace mongo {
         }
 
         // ensure only one thread at a time can do deletes, otherwise they'll conflict.
-       stdx::unique_lock<stdx::timed_mutex> lock(_cappedDeleterMutex, stdx::defer_lock);
+        stdx::unique_lock<stdx::timed_mutex> lock(_cappedDeleterMutex, stdx::defer_lock);
 
         if (_cappedMaxDocs != -1) {
             lock.lock(); // Max docs has to be exact, so have to check every time.
@@ -629,12 +629,12 @@ namespace mongo {
                 _oplogSinceLastCompaction.reset();
                 // schedule compaction for oplog
                 std::string oldestAliveKey(_makePrefixedKey(_prefix, _cappedOldestKeyHint));
-                _compactionScheduler->compactRange(_prefix, oldestAliveKey);
+                _compactionScheduler->compactOplog(_prefix, oldestAliveKey);
 
                 // schedule compaction for oplog tracker
                 std::string oplogKeyTrackerPrefix(rocksGetNextPrefix(_prefix));
                 oldestAliveKey = _makePrefixedKey(oplogKeyTrackerPrefix, _cappedOldestKeyHint);
-                _compactionScheduler->compactRange(oplogKeyTrackerPrefix, oldestAliveKey);
+                _compactionScheduler->compactOplog(oplogKeyTrackerPrefix, oldestAliveKey);
 
                 _oplogKeyTracker->resetDeletedSinceCompaction();
             }

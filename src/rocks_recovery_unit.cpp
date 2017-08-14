@@ -37,9 +37,6 @@
 #include <rocksdb/iterator.h>
 #include <rocksdb/slice.h>
 #include <rocksdb/options.h>
-// Temporary fix for https://github.com/facebook/rocksdb/pull/2336#issuecomment-303226208
-#define ROCKSDB_SUPPORT_THREAD_LOCAL
-#include <rocksdb/version.h>
 #include <rocksdb/perf_context.h>
 #include <rocksdb/write_batch.h>
 #include <rocksdb/utilities/write_batch_with_index.h>
@@ -47,6 +44,7 @@
 #include "mongo/base/checked_cast.h"
 #include "mongo/db/concurrency/write_conflict_exception.h"
 #include "mongo/db/operation_context.h"
+#include "mongo/db/server_options.h"
 #include "mongo/db/storage/journal_listener.h"
 #include "mongo/util/log.h"
 
@@ -61,6 +59,8 @@ namespace mongo {
         // determine if documents changed, but a different recovery unit may be used across a getMore,
         // so there is a chance the snapshot ID will be reused.
         AtomicUInt64 nextSnapshotId{1};
+
+        logger::LogSeverity kSlowTransactionSeverity = logger::LogSeverity::Debug(1);
 
         class PrefixStrippingIterator : public RocksIterator {
         public:
@@ -187,13 +187,6 @@ namespace mongo {
                     _compactionScheduler->reportSkippedDeletionsAboveThreshold(_prefix);
                 }
             }
-            inline int get_internal_delete_skipped_count() {
-                #if ROCKSDB_MAJOR > 5 || (ROCKSDB_MAJOR == 5 && ROCKSDB_MINOR >= 6)
-                    return rocksdb::get_perf_context()->internal_delete_skipped_count;
-                #else
-                    return rocksdb::perf_context.internal_delete_skipped_count;
-                #endif
-            }
 
             int _rocksdbSkippedDeletionsInitial;
 
@@ -308,6 +301,16 @@ namespace mongo {
     SnapshotId RocksRecoveryUnit::getSnapshotId() const { return SnapshotId(_mySnapshotId); }
 
     void RocksRecoveryUnit::_releaseSnapshot() {
+        if (_timer) {
+            const int transactionTime = _timer->millis();
+            _timer.reset();
+            if (transactionTime >= serverGlobalParams.slowMS) {
+                LOG(kSlowTransactionSeverity) << "Slow transaction. Lifetime of SnapshotId "
+                                              << _mySnapshotId << " was " << transactionTime
+                                              << " ms";
+            }
+        }
+
         if (_snapshot) {
             _transaction.abort();
             _db->ReleaseSnapshot(_snapshot);
@@ -381,6 +384,11 @@ namespace mongo {
     }
 
     const rocksdb::Snapshot* RocksRecoveryUnit::snapshot() {
+        // Only start a timer for transaction's lifetime if we're going to log it.
+        if (shouldLog(kSlowTransactionSeverity)) {
+            _timer.reset(new Timer());
+        }
+
         if (_readFromMajorityCommittedSnapshot) {
             if (_snapshotHolder.get() == nullptr) {
                 _snapshotHolder = _snapshotManager->getCommittedSnapshot();
