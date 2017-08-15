@@ -21,9 +21,11 @@ Copyright (c) 2006, 2016, Percona and/or its affiliates. All rights reserved.
 #include "rocks_global_options.h"
 
 namespace mongo {
-    MONGO_INITIALIZER_WITH_PREREQUISITES(RocksOptions_PrintOptions,
-                                         ("ServerLogRedirection"))
-    (InitializerContext* context) {
+    // This initializer was dependent on ServerLogRedirection but since 3.5.10
+    // that dependency caused 'missing dependency' error on many unittests.
+    // To fix that issue now RocksOptions_PrintOptions implicitly depends on
+    // 'default' and 'default' depends on ServerLogRedirection
+    MONGO_INITIALIZER(RocksOptions_PrintOptions)(InitializerContext* context) {
         rocksGlobalOptions.printOptions();
         return Status::OK();
     }

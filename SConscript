@@ -3,11 +3,17 @@ Import("env")
 env = env.Clone()
 
 env.Library(
+    target= 'storage_rocks_global_options',
+    source= [
+        'src/rocks_global_options.cpp',
+        ],
+    )
+
+env.Library(
     target= 'storage_rocks_base',
     source= [
         'src/rocks_compaction_scheduler.cpp',
         'src/rocks_counter_manager.cpp',
-        'src/rocks_global_options.cpp',
         'src/rocks_engine.cpp',
         'src/rocks_record_store.cpp',
         'src/rocks_recovery_unit.cpp',
@@ -34,6 +40,7 @@ env.Library(
         '$BUILD_DIR/mongo/util/processinfo',
         '$BUILD_DIR/third_party/shim_snappy',
         '$BUILD_DIR/third_party/shim_lz4',
+        'storage_rocks_global_options',
         ],
     SYSLIBDEPS=["rocksdb",
                 "z",
@@ -63,7 +70,7 @@ env.Library(
         'src/rocks_options_redirect.cpp',
         ],
     LIBDEPS= [
-        '$BUILD_DIR/mongo/db/serveronly',
+        'storage_rocks_global_options',
         ],
     LIBDEPS_DEPENDENTS=['$BUILD_DIR/mongo/db/mongod_options']
     )
