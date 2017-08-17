@@ -35,9 +35,6 @@
 #include <vector>
 #include <unordered_map>
 
-#include <boost/scoped_ptr.hpp>
-#include <boost/shared_ptr.hpp>
-
 #include <rocksdb/slice.h>
 #include <rocksdb/write_batch.h>
 #include <rocksdb/utilities/write_batch_with_index.h>

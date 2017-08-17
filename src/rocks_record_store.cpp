@@ -37,8 +37,6 @@
 #include <memory>
 #include <algorithm>
 
-#include <boost/thread/locks.hpp>
-
 #include <rocksdb/comparator.h>
 #include <rocksdb/db.h>
 #include <rocksdb/experimental.h>
@@ -586,7 +584,7 @@ namespace mongo {
                 iter->Next();
             }
 
-            if (!iter->status().ok()) {
+            if (!iter->Valid() && !iter->status().ok()) {
                 log() << "RocksDB iterator failure when trying to delete capped, ignoring: "
                       << redact(iter->status().ToString());
             }
@@ -763,19 +761,25 @@ namespace mongo {
 
     std::unique_ptr<SeekableRecordCursor> RocksRecordStore::getCursor(OperationContext* opCtx,
                                                                       bool forward) const {
-        if (_isOplog && forward) {
-            auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(opCtx);
-            // If we already have a snapshot we don't know what it can see, unless we know no
-            // one else could be writing (because we hold an exclusive lock).
-            if (ru->hasSnapshot() && !opCtx->lockState()->isNoop() &&
-                !opCtx->lockState()->isCollectionLockedForMode(_ns, MODE_X)) {
-                throw WriteConflictException();
+        RecordId startIterator;
+        if (_isOplog) {
+            if (forward) {
+                auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(opCtx);
+                // If we already have a snapshot we don't know what it can see, unless we know no
+                // one else could be writing (because we hold an exclusive lock).
+                if (ru->hasSnapshot() && !opCtx->lockState()->isNoop() &&
+                    !opCtx->lockState()->isCollectionLockedForMode(_ns, MODE_X)) {
+                    throw WriteConflictException();
+                }
+                ru->setOplogReadTill(_cappedVisibilityManager->oplogStartHack());
+                startIterator = _cappedOldestKeyHint;
+            } else {
+                startIterator = _cappedVisibilityManager->oplogStartHack();
             }
-            ru->setOplogReadTill(_cappedVisibilityManager->oplogStartHack());
         }
 
         return stdx::make_unique<Cursor>(opCtx, _db, _prefix, _cappedVisibilityManager, forward,
-                                         _isCapped);
+                                         _isCapped, startIterator);
     }
 
     Status RocksRecordStore::truncate(OperationContext* opCtx) {
@@ -808,45 +812,40 @@ namespace mongo {
                                        BSONObjBuilder* output ) {
         long long nrecords = 0;
         long long dataSizeTotal = 0;
-        if (level == kValidateRecordStore || level == kValidateFull) {
-            auto cursor = getCursor(opCtx, true);
-            results->valid = true;
-            const int interruptInterval = 4096;
-            while (auto record = cursor->next()) {
-                if (!(nrecords % interruptInterval))
-                    opCtx->checkForInterrupt();
-                ++nrecords;
-                if (level == kValidateFull) {
-                    size_t dataSize;
-                    Status status = adaptor->validate(record->id, record->data, &dataSize);
-                    if (!status.isOK()) {
-                        results->valid = false;
-                        results->errors.push_back(str::stream() << record->id << " is corrupted");
-                    }
-                    dataSizeTotal += static_cast<long long>(dataSize);
-                }
-            }
 
-            if (level == kValidateFull && results->valid) {
-                long long storedNumRecords = numRecords(opCtx);
-                long long storedDataSize = dataSize(opCtx);
-
-                if (nrecords != storedNumRecords || dataSizeTotal != storedDataSize) {
-                    warning() << redact(_ident) << ": Existing record and data size counters ("
-                              << storedNumRecords << " records " << storedDataSize << " bytes) "
-                              << "are inconsistent with full validation results (" << nrecords
-                              << " records " << dataSizeTotal << " bytes). "
-                              << "Updating counters with new values.";
-                    if (nrecords != storedNumRecords) {
-                        _changeNumRecords(opCtx, nrecords - storedNumRecords);
-                        _increaseDataSize(opCtx, dataSizeTotal - storedDataSize);
-                    }
-                }
+        auto cursor = getCursor(opCtx, true);
+        results->valid = true;
+        const int interruptInterval = 4096;
+        while (auto record = cursor->next()) {
+            if (!(nrecords % interruptInterval))
+                opCtx->checkForInterrupt();
+            ++nrecords;
+            size_t dataSize;
+            Status status = adaptor->validate(record->id, record->data, &dataSize);
+            if (!status.isOK()) {
+                results->valid = false;
+                results->errors.push_back(str::stream() << record->id << " is corrupted");
             }
-            output->appendNumber("nrecords", nrecords);
-        } else {
-            output->appendNumber("nrecords", numRecords(opCtx));
+            dataSizeTotal += static_cast<long long>(dataSize);
         }
+
+        if (results->valid) {
+            long long storedNumRecords = numRecords(opCtx);
+            long long storedDataSize = dataSize(opCtx);
+
+            if (nrecords != storedNumRecords || dataSizeTotal != storedDataSize) {
+                warning() << redact(_ident) << ": Existing record and data size counters ("
+                          << storedNumRecords << " records " << storedDataSize << " bytes) "
+                          << "are inconsistent with full validation results (" << nrecords
+                          << " records " << dataSizeTotal << " bytes). "
+                          << "Updating counters with new values.";
+                if (nrecords != storedNumRecords) {
+                    _changeNumRecords(opCtx, nrecords - storedNumRecords);
+                    _increaseDataSize(opCtx, dataSizeTotal - storedDataSize);
+                }
+            }
+        }
+        output->appendNumber("nrecords", nrecords);
 
         return Status::OK();
     }
@@ -1047,7 +1046,8 @@ namespace mongo {
             std::string prefix,
             std::shared_ptr<CappedVisibilityManager> cappedVisibilityManager,
             bool forward,
-            bool isCapped)
+            bool isCapped,
+            RecordId startIterator)
         : _opCtx(opCtx),
           _db(db),
           _prefix(std::move(prefix)),
@@ -1057,14 +1057,27 @@ namespace mongo {
           _readUntilForOplog(RocksRecoveryUnit::getRocksRecoveryUnit(opCtx)->getOplogReadTill()) {
         _currentSequenceNumber =
           RocksRecoveryUnit::getRocksRecoveryUnit(opCtx)->snapshot()->GetSequenceNumber();
+
+        if (!startIterator.isNull()) {
+            // This is a hack to speed up first/last record retrieval from the oplog
+            _needFirstSeek = false;
+            _lastLoc = startIterator;
+            iterator();
+            _skipNextAdvance = true;
+        }
     }
 
     // requires !_eof
     void RocksRecordStore::Cursor::positionIterator() {
         _skipNextAdvance = false;
         int64_t locStorage;
-        _iterator->Seek(RocksRecordStore::_makeKey(_lastLoc, &locStorage));
-        invariantRocksOK(_iterator->status());
+        auto seekTarget = RocksRecordStore::_makeKey(_lastLoc, &locStorage);
+        if (!_iterator->Valid() || _iterator->key() != seekTarget) {
+            _iterator->Seek(seekTarget);
+            if (!_iterator->Valid()) {
+                invariantRocksOK(_iterator->status());
+            }
+        }
 
         if (_forward) {
             // If _skipNextAdvance is true we landed after where we were. Return our new location on
@@ -1190,8 +1203,8 @@ namespace mongo {
     }
 
     boost::optional<Record> RocksRecordStore::Cursor::curr() {
-        invariantRocksOK(_iterator->status());
         if (!_iterator->Valid()) {
+            invariantRocksOK(_iterator->status());
             _eof = true;
             return {};
         }

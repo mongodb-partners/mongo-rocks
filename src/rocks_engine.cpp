@@ -36,8 +36,6 @@
 #include <algorithm>
 #include <mutex>
 
-#include <boost/filesystem/operations.hpp>
-
 #include <rocksdb/version.h>
 #include <rocksdb/cache.h>
 #include <rocksdb/compaction_filter.h>
