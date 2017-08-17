@@ -67,6 +67,10 @@
 
 namespace mongo {
 
+    static int64_t cappedMaxSizeSlackFromSize(int64_t cappedMaxSize) {
+        return std::min(cappedMaxSize / 10, int64_t(16 * 1024 * 1024));
+    }
+
     class RocksRecordStore::CappedInsertChange : public RecoveryUnit::Change {
     public:
         CappedInsertChange(CappedVisibilityManager* cappedVisibilityManager, RocksRecordStore* rs,
@@ -291,7 +295,7 @@ namespace mongo {
           _prefix(std::move(prefix)),
           _isCapped(isCapped),
           _cappedMaxSize(cappedMaxSize),
-          _cappedMaxSizeSlack(std::min(cappedMaxSize / 10, int64_t(16 * 1024 * 1024))),
+          _cappedMaxSizeSlack(cappedMaxSizeSlackFromSize(cappedMaxSize)),
           _cappedMaxDocs(cappedMaxDocs),
           _cappedCallback(cappedCallback),
           _cappedDeleteCheckCount(0),
@@ -1232,4 +1236,14 @@ namespace mongo {
         auto dataSlice = _iterator->value();
         return {{_lastLoc, {dataSlice.data(), static_cast<int>(dataSlice.size())}}};
     }
+
+    Status RocksRecordStore::updateCappedSize(OperationContext* opCtx, long long cappedSize) {
+        if (_cappedMaxSize == cappedSize) {
+            return Status::OK();
+        }
+        _cappedMaxSize = cappedSize;
+        _cappedMaxSizeSlack = cappedMaxSizeSlackFromSize(cappedSize);
+        return Status::OK();
+    }
+
 }
