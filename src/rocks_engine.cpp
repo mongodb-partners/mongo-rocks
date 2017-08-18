@@ -93,7 +93,7 @@ namespace mongo {
             while (!_shuttingDown.load()) {
                 try {
                     _durabilityManager->waitUntilDurable(false);
-                } catch (const UserException& e) {
+                } catch (const AssertionException& e) {
                     invariant(e.getCode() == ErrorCodes::ShutdownInProgress);
                 }
 
