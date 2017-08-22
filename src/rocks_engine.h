@@ -168,6 +168,7 @@ namespace mongo {
     private:
         Status _createIdent(StringData ident, BSONObjBuilder* configBuilder);
         BSONObj _getIdentConfig(StringData ident);
+        BSONObj _tryGetIdentConfig(StringData ident);
         std::string _extractPrefix(const BSONObj& config);
 
         rocksdb::Options _options() const;
