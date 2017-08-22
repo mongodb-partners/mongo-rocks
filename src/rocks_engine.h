@@ -163,6 +163,7 @@ namespace mongo {
     private:
         Status _createIdentPrefix(StringData ident);
         std::string _getIdentPrefix(StringData ident);
+        std::string _tryGetIdentPrefix(StringData ident);
 
         rocksdb::Options _options() const;
 
