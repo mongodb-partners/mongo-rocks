@@ -53,7 +53,7 @@ namespace mongo {
         return Status::OK();
     }
 
-    void RocksSnapshotManager::setCommittedSnapshot(const SnapshotName& name) {
+    void RocksSnapshotManager::setCommittedSnapshot(const SnapshotName& name, Timestamp ts) {
         stdx::lock_guard<stdx::mutex> lock(_mutex);
 
         uint64_t nameU64 = name.asU64();
