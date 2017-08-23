@@ -94,7 +94,7 @@ namespace mongo {
                 try {
                     _durabilityManager->waitUntilDurable(false);
                 } catch (const AssertionException& e) {
-                    invariant(e.getCode() == ErrorCodes::ShutdownInProgress);
+                    invariant(e.code() == ErrorCodes::ShutdownInProgress);
                 }
 
                 int ms = storageGlobalParams.journalCommitIntervalMs.load();
