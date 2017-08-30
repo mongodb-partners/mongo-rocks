@@ -30,6 +30,7 @@
 #include <memory>
 #include <regex>
 #include <sstream>
+#include <vector>
 
 #include "mongo/platform/basic.h"
 
@@ -467,6 +468,41 @@ namespace mongo {
             // pointer to current parsing member function
             void (RocksStatsParser::*_current_parser_fn)(const std::string& line);
         };
+
+        typedef std::vector<std::pair<rocksdb::Tickers, std::string>> TickersToNamesMap;
+        TickersToNamesMap initTickersToNames() {
+            const std::map<rocksdb::Tickers, std::string> counterNameMap = {
+                {rocksdb::NUMBER_KEYS_WRITTEN, "num-keys-written"},
+                {rocksdb::NUMBER_KEYS_READ, "num-keys-read"},
+                {rocksdb::NUMBER_DB_SEEK, "num-seeks"},
+                {rocksdb::NUMBER_DB_NEXT, "num-forward-iterations"},
+                {rocksdb::NUMBER_DB_PREV, "num-backward-iterations"},
+                {rocksdb::BLOCK_CACHE_MISS, "block-cache-misses"},
+                {rocksdb::BLOCK_CACHE_HIT, "block-cache-hits"},
+                {rocksdb::BLOOM_FILTER_USEFUL, "bloom-filter-useful"},
+                {rocksdb::BYTES_WRITTEN, "bytes-written"},
+                {rocksdb::BYTES_READ, "bytes-read-point-lookup"},
+                {rocksdb::ITER_BYTES_READ, "bytes-read-iteration"},
+                {rocksdb::FLUSH_WRITE_BYTES, "flush-bytes-written"},
+                {rocksdb::COMPACT_READ_BYTES, "compaction-bytes-read"},
+                {rocksdb::COMPACT_WRITE_BYTES, "compaction-bytes-written"}
+            };
+
+            TickersToNamesMap tickersToNames;
+            tickersToNames.reserve(rocksdb::TickersNameMap.size());
+            for (const auto& ticker : rocksdb::TickersNameMap) {
+                invariant(ticker.second.compare(0, 8, "rocksdb.") == 0);
+                std::string name(ticker.second, 8);
+                auto alt = counterNameMap.find(ticker.first);
+                if (alt != counterNameMap.end()) {
+                    name = alt->second;
+                } else {
+                    std::replace(name.begin(), name.end(), '.', '-');
+                }
+                tickersToNames.emplace_back(std::make_pair(ticker.first, std::move(name)));
+            }
+            return tickersToNames;
+        }
     }  // namespace
 
     RocksServerStatusSection::RocksServerStatusSection(RocksEngine* engine)
@@ -587,38 +623,13 @@ namespace mongo {
         // add counters
         auto stats = _engine->getStatistics();
         if (stats) {
+            static const TickersToNamesMap tickersToNames = initTickersToNames();
+
             BSONObjBuilder countersObjBuilder;
-            const std::map<rocksdb::Tickers, std::string> counterNameMap = {
-                {rocksdb::NUMBER_KEYS_WRITTEN, "num-keys-written"},
-                {rocksdb::NUMBER_KEYS_READ, "num-keys-read"},
-                {rocksdb::NUMBER_DB_SEEK, "num-seeks"},
-                {rocksdb::NUMBER_DB_NEXT, "num-forward-iterations"},
-                {rocksdb::NUMBER_DB_PREV, "num-backward-iterations"},
-                {rocksdb::BLOCK_CACHE_MISS, "block-cache-misses"},
-                {rocksdb::BLOCK_CACHE_HIT, "block-cache-hits"},
-                {rocksdb::BLOOM_FILTER_USEFUL, "bloom-filter-useful"},
-                {rocksdb::BYTES_WRITTEN, "bytes-written"},
-                {rocksdb::BYTES_READ, "bytes-read-point-lookup"},
-                {rocksdb::ITER_BYTES_READ, "bytes-read-iteration"},
-                {rocksdb::FLUSH_WRITE_BYTES, "flush-bytes-written"},
-                {rocksdb::COMPACT_READ_BYTES, "compaction-bytes-read"},
-                {rocksdb::COMPACT_WRITE_BYTES, "compaction-bytes-written"}
-            };
-
-            for (const auto& ticker: rocksdb::TickersNameMap) {
-                invariant(ticker.second.compare(0, 8, "rocksdb.") == 0);
-                std::string name(ticker.second, 8);
-                auto alt = counterNameMap.find(ticker.first);
-                if (alt != counterNameMap.end()) {
-                    name = alt->second;
-                }
-                else {
-                    std::replace(name.begin(), name.end(), '.', '-');
-                }
-                countersObjBuilder.append(name,
-                    static_cast<long long>(stats->getTickerCount(ticker.first)));
+            for (const auto& ticker : tickersToNames) {
+                countersObjBuilder.append(
+                    ticker.second, static_cast<long long>(stats->getTickerCount(ticker.first)));
             }
-
             bob.append("counters", countersObjBuilder.obj());
         }
 
