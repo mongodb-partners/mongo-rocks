@@ -633,12 +633,12 @@ namespace mongo {
                 _oplogSinceLastCompaction.reset();
                 // schedule compaction for oplog
                 std::string oldestAliveKey(_makePrefixedKey(_prefix, _cappedOldestKeyHint));
-                _compactionScheduler->compactRange(_prefix, oldestAliveKey).ignore();
+                _compactionScheduler->compactOplog(_prefix, oldestAliveKey);
 
                 // schedule compaction for oplog tracker
                 std::string oplogKeyTrackerPrefix(rocksGetNextPrefix(_prefix));
                 oldestAliveKey = _makePrefixedKey(oplogKeyTrackerPrefix, _cappedOldestKeyHint);
-                _compactionScheduler->compactRange(oplogKeyTrackerPrefix, oldestAliveKey).ignore();
+                _compactionScheduler->compactOplog(oplogKeyTrackerPrefix, oldestAliveKey);
 
                 _oplogKeyTracker->resetDeletedSinceCompaction();
             }
