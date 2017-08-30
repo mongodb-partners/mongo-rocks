@@ -134,11 +134,11 @@ namespace mongo {
             {
                 WriteUnitOfWork uow( opCtx.get() );
 
-                StatusWith<RecordId> res = rs->insertRecord( opCtx.get(), "a", 2, false );
+                StatusWith<RecordId> res = rs->insertRecord( opCtx.get(), "a", 2, Timestamp(), false );
                 ASSERT_OK( res.getStatus() );
                 loc1 = res.getValue();
 
-                res = rs->insertRecord( opCtx.get(), "a", 2, false );
+                res = rs->insertRecord( opCtx.get(), "a", 2, Timestamp(), false );
                 ASSERT_OK( res.getStatus() );
                 loc2 = res.getValue();
 
@@ -161,7 +161,7 @@ namespace mongo {
             ASSERT_OK( rs->updateRecord( t1.get(), loc2, "B", 2, false, NULL ) );
 
             // this should throw
-            ASSERT_THROWS(rs->updateRecord(t2.get(), loc1, "c", 2, false, NULL),
+            ASSERT_THROWS(rs->updateRecord(t2.get(), loc1, "c", 2, false, NULL).ignore(),
                           WriteConflictException);
 
             w1->commit(); // this should succeed
@@ -180,11 +180,11 @@ namespace mongo {
             {
                 WriteUnitOfWork uow( opCtx.get() );
 
-                StatusWith<RecordId> res = rs->insertRecord( opCtx.get(), "a", 2, false );
+                StatusWith<RecordId> res = rs->insertRecord( opCtx.get(), "a", 2, Timestamp(), false );
                 ASSERT_OK( res.getStatus() );
                 loc1 = res.getValue();
 
-                res = rs->insertRecord( opCtx.get(), "a", 2, false );
+                res = rs->insertRecord( opCtx.get(), "a", 2, Timestamp(), false );
                 ASSERT_OK( res.getStatus() );
                 loc2 = res.getValue();
 
@@ -211,7 +211,7 @@ namespace mongo {
                 WriteUnitOfWork w( t2.get() );
                 ASSERT_EQUALS(string("a"), rs->dataFor(t2.get(), loc1).data());
                 // this should fail as our version of loc1 is too old
-                ASSERT_THROWS(rs->updateRecord(t2.get(), loc1, "c", 2, false, NULL),
+                ASSERT_THROWS(rs->updateRecord(t2.get(), loc1, "c", 2, false, NULL).ignore(),
                               WriteConflictException);
             }
         }
@@ -230,6 +230,7 @@ namespace mongo {
         StatusWith<RecordId> res = rs->insertRecord(opCtx.get(),
                                                    obj.objdata(),
                                                    obj.objsize(),
+                                                   Timestamp(),
                                                    false);
         if (res.isOK())
             wuow.commit();
@@ -249,12 +250,12 @@ namespace mongo {
             {
                 BSONObj obj = BSON("not_ts" << Timestamp(2,1));
                 ASSERT_EQ(rs->insertRecord(opCtx.get(), obj.objdata(), obj.objsize(),
-                                           false ).getStatus(),
+                                           Timestamp(), false ).getStatus(),
                           ErrorCodes::BadValue);
 
                 obj = BSON( "ts" << "not an Timestamp" );
                 ASSERT_EQ(rs->insertRecord(opCtx.get(), obj.objdata(), obj.objsize(),
-                                           false ).getStatus(),
+                                           Timestamp(), false ).getStatus(),
                           ErrorCodes::BadValue);
             }
 
@@ -385,7 +386,7 @@ namespace mongo {
         {
             WriteUnitOfWork wuow( opCtx.get() );
             ASSERT_OK(rs->insertRecord(opCtx.get(), obj.objdata(),
-                                       obj.objsize(), false ).getStatus());
+                                       obj.objsize(), Timestamp(), false ).getStatus());
             wuow.commit();
         }
         ASSERT_TRUE(rs->oplogStartHack(opCtx.get(), RecordId(0,1)) == boost::none);
@@ -402,7 +403,7 @@ namespace mongo {
             ServiceContext::UniqueOperationContext opCtx( harnessHelper->newOperationContext() );
             {
                 WriteUnitOfWork uow( opCtx.get() );
-                StatusWith<RecordId> res = rs->insertRecord( opCtx.get(), "a", 2, false );
+                StatusWith<RecordId> res = rs->insertRecord( opCtx.get(), "a", 2, Timestamp(), false );
                 ASSERT_OK( res.getStatus() );
                 loc1 = res.getValue();
                 uow.commit();
@@ -423,7 +424,7 @@ namespace mongo {
             // we make sure we can't find the 2nd until the first is commited
             ServiceContext::UniqueOperationContext t1( harnessHelper->newOperationContext() );
             std::unique_ptr<WriteUnitOfWork> w1( new WriteUnitOfWork( t1.get() ) );
-            rs->insertRecord( t1.get(), "b", 2, false );
+            ASSERT_OK(rs->insertRecord( t1.get(), "b", 2, Timestamp(), false ));
             // do not commit yet
 
             { // create 2nd doc
@@ -431,7 +432,7 @@ namespace mongo {
                 auto t2 = harnessHelper->newOperationContext(client2.get());
                 {
                     WriteUnitOfWork w2( t2.get() );
-                    rs->insertRecord( t2.get(), "c", 2, false );
+                    ASSERT_OK(rs->insertRecord( t2.get(), "c", 2, Timestamp(), false ));
                     w2.commit();
                 }
             }
@@ -469,7 +470,7 @@ namespace mongo {
         Status status = rrs->oplogDiskLocRegister( opCtx, opTime );
         ASSERT_OK( status );
         BSONObj obj = BSON( "ts" << opTime );
-        StatusWith<RecordId> res = rs->insertRecord( opCtx, obj.objdata(), obj.objsize(), false );
+        StatusWith<RecordId> res = rs->insertRecord( opCtx, obj.objdata(), obj.objsize(), Timestamp(), false );
         ASSERT_OK( res.getStatus() );
         return res.getValue();
     }

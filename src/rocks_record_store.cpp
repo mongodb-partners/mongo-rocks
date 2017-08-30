@@ -633,12 +633,12 @@ namespace mongo {
                 _oplogSinceLastCompaction.reset();
                 // schedule compaction for oplog
                 std::string oldestAliveKey(_makePrefixedKey(_prefix, _cappedOldestKeyHint));
-                _compactionScheduler->compactRange(_prefix, oldestAliveKey);
+                _compactionScheduler->compactRange(_prefix, oldestAliveKey).ignore();
 
                 // schedule compaction for oplog tracker
                 std::string oplogKeyTrackerPrefix(rocksGetNextPrefix(_prefix));
                 oldestAliveKey = _makePrefixedKey(oplogKeyTrackerPrefix, _cappedOldestKeyHint);
-                _compactionScheduler->compactRange(oplogKeyTrackerPrefix, oldestAliveKey);
+                _compactionScheduler->compactRange(oplogKeyTrackerPrefix, oldestAliveKey).ignore();
 
                 _oplogKeyTracker->resetDeletedSinceCompaction();
             }
@@ -650,6 +650,7 @@ namespace mongo {
     StatusWith<RecordId> RocksRecordStore::insertRecord( OperationContext* opCtx,
                                                         const char* data,
                                                         int len,
+                                                        Timestamp timestamp,
                                                         bool enforceQuota ) {
 
         if ( _isCapped && len > _cappedMaxSize ) {
@@ -690,7 +691,9 @@ namespace mongo {
     }
 
     Status RocksRecordStore::insertRecordsWithDocWriter(OperationContext* opCtx,
-                                                        const DocWriter* const* docs, size_t nDocs,
+                                                        const DocWriter* const* docs,
+                                                        const Timestamp* timestamps,
+                                                        size_t nDocs,
                                                         RecordId* idsOut) {
         std::unique_ptr<Record[]> records(new Record[nDocs]);
 
@@ -712,7 +715,7 @@ namespace mongo {
         invariant(pos == (buffer.get() + totalSize));
 
         for (size_t i = 0; i < nDocs; ++i) {
-            auto s = insertRecord(opCtx, records[i].data.data(), records[i].data.size(), true);
+            auto s = insertRecord(opCtx, records[i].data.data(), records[i].data.size(), Timestamp(), true);
             if (!s.isOK())
                 return s.getStatus();
             if (idsOut)

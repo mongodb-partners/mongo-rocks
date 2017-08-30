@@ -208,7 +208,7 @@ namespace mongo {
             log() << "Scheduling compaction to clean up tombstones for prefix "
                   << rocksdb::Slice(prefix).ToString(true);
             // we schedule compaction now (ignoring error)
-            compactPrefix(prefix);
+            compactPrefix(prefix).ignore();
         }
     }
 

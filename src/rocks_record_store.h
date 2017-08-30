@@ -139,10 +139,12 @@ namespace mongo {
         virtual StatusWith<RecordId> insertRecord( OperationContext* opCtx,
                                                   const char* data,
                                                   int len,
+                                                  Timestamp timestamp,
                                                   bool enforceQuota );
 
         virtual Status insertRecordsWithDocWriter(OperationContext* opCtx,
                                                   const DocWriter* const* docs,
+                                                  const Timestamp* timestamps,
                                                   size_t nDocs,
                                                   RecordId* idsOut);
 
