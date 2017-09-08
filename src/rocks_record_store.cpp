@@ -67,6 +67,10 @@
 
 namespace mongo {
 
+    static int64_t cappedMaxSizeSlackFromSize(int64_t cappedMaxSize) {
+        return std::min(cappedMaxSize / 10, int64_t(16 * 1024 * 1024));
+    }
+
     class RocksRecordStore::CappedInsertChange : public RecoveryUnit::Change {
     public:
         CappedInsertChange(CappedVisibilityManager* cappedVisibilityManager, RocksRecordStore* rs,
@@ -291,7 +295,7 @@ namespace mongo {
           _prefix(std::move(prefix)),
           _isCapped(isCapped),
           _cappedMaxSize(cappedMaxSize),
-          _cappedMaxSizeSlack(std::min(cappedMaxSize / 10, int64_t(16 * 1024 * 1024))),
+          _cappedMaxSizeSlack(cappedMaxSizeSlackFromSize(cappedMaxSize)),
           _cappedMaxDocs(cappedMaxDocs),
           _cappedCallback(cappedCallback),
           _cappedDeleteCheckCount(0),
@@ -812,6 +816,7 @@ namespace mongo {
                                        BSONObjBuilder* output ) {
         long long nrecords = 0;
         long long dataSizeTotal = 0;
+        long long nInvalid = 0;
 
         auto cursor = getCursor(opCtx, true);
         results->valid = true;
@@ -823,8 +828,13 @@ namespace mongo {
             size_t dataSize;
             Status status = adaptor->validate(record->id, record->data, &dataSize);
             if (!status.isOK()) {
+                if (results->valid) {
+                    // Do this only once.
+                    results->errors.push_back("detected one or more invalid documents (see logs)");
+                }
+                nInvalid++;
                 results->valid = false;
-                results->errors.push_back(str::stream() << record->id << " is corrupted");
+                log() << "document at location: " << record->id << " is corrupted";
             }
             dataSizeTotal += static_cast<long long>(dataSize);
         }
@@ -845,6 +855,7 @@ namespace mongo {
                 }
             }
         }
+        output->append("nInvalidDocuments", nInvalid);
         output->appendNumber("nrecords", nrecords);
 
         return Status::OK();
@@ -1064,6 +1075,7 @@ namespace mongo {
             _lastLoc = startIterator;
             iterator();
             _skipNextAdvance = true;
+            _eof = false;
         }
     }
 
@@ -1232,4 +1244,14 @@ namespace mongo {
         auto dataSlice = _iterator->value();
         return {{_lastLoc, {dataSlice.data(), static_cast<int>(dataSlice.size())}}};
     }
+
+    Status RocksRecordStore::updateCappedSize(OperationContext* opCtx, long long cappedSize) {
+        if (_cappedMaxSize == cappedSize) {
+            return Status::OK();
+        }
+        _cappedMaxSize = cappedSize;
+        _cappedMaxSizeSlack = cappedMaxSizeSlackFromSize(cappedSize);
+        return Status::OK();
+    }
+
 }

@@ -191,6 +191,8 @@ namespace mongo {
         virtual void updateStatsAfterRepair(OperationContext* opCtx, long long numRecords,
                                             long long dataSize);
 
+        virtual Status updateCappedSize(OperationContext* opCtx, long long cappedSize) override final;
+
         void setCappedCallback(CappedCallback* cb) {
           stdx::lock_guard<stdx::mutex> lk(_cappedCallbackMutex);
           _cappedCallback = cb;
@@ -273,8 +275,8 @@ namespace mongo {
         std::string _prefix;
 
         const bool _isCapped;
-        const int64_t _cappedMaxSize;
-        const int64_t _cappedMaxSizeSlack;  // when to start applying backpressure
+        int64_t _cappedMaxSize;
+        int64_t _cappedMaxSizeSlack;  // when to start applying backpressure
         const int64_t _cappedMaxDocs;
         CappedCallback* _cappedCallback;
         stdx::mutex _cappedCallbackMutex;  // guards _cappedCallback.
