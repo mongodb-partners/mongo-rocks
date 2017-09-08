@@ -126,6 +126,8 @@ namespace mongo {
                                      BSONObjBuilder* extraInfo = NULL,
                                      int infoLevel = 0 ) const;
 
+        virtual bool isInRecordIdOrder() const override { return true; }
+
         // CRUD related
 
         virtual RecordData dataFor( OperationContext* opCtx, const RecordId& loc ) const;
