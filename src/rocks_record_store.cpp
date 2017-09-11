@@ -814,6 +814,8 @@ namespace mongo {
                                        BSONObjBuilder* output ) {
         long long nrecords = 0;
         long long dataSizeTotal = 0;
+        long long nInvalid = 0;
+
         if (level == kValidateRecordStore || level == kValidateFull) {
             auto cursor = getCursor(txn, true);
             results->valid = true;
@@ -826,8 +828,13 @@ namespace mongo {
                     size_t dataSize;
                     Status status = adaptor->validate(record->id, record->data, &dataSize);
                     if (!status.isOK()) {
+                        if (results->valid) {
+                            // Only log once.
+                            results->errors.push_back("detected one or more invalid documents (see logs)");
+                        }
+                        ++nInvalid;
                         results->valid = false;
-                        results->errors.push_back(str::stream() << record->id << " is corrupted");
+                        log() << "document at location: " << record->id << " is corrupted";
                     }
                     dataSizeTotal += static_cast<long long>(dataSize);
                 }
@@ -853,6 +860,7 @@ namespace mongo {
         } else {
             output->appendNumber("nrecords", numRecords(txn));
         }
+        output->append("nInvalidDocuments", nInvalid);
 
         return Status::OK();
     }
