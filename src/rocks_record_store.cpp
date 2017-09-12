@@ -847,15 +847,7 @@ namespace mongo {
             long long storedDataSize = dataSize(opCtx);
 
             if (nrecords != storedNumRecords || dataSizeTotal != storedDataSize) {
-                warning() << redact(_ident) << ": Existing record and data size counters ("
-                          << storedNumRecords << " records " << storedDataSize << " bytes) "
-                          << "are inconsistent with full validation results (" << nrecords
-                          << " records " << dataSizeTotal << " bytes). "
-                          << "Updating counters with new values.";
-                if (nrecords != storedNumRecords) {
-                    _changeNumRecords(opCtx, nrecords - storedNumRecords);
-                    _increaseDataSize(opCtx, dataSizeTotal - storedDataSize);
-                }
+                updateStatsAfterRepair(opCtx, nrecords, dataSizeTotal);
             }
         }
         output->append("nInvalidDocuments", nInvalid);
