@@ -882,6 +882,8 @@ namespace mongo {
 
     void RocksRecordStore::updateStatsAfterRepair(OperationContext* opCtx, long long numRecords,
                                                   long long dataSize) {
+        RocksRecoveryUnit* ru = RocksRecoveryUnit::getRocksRecoveryUnit(opCtx);
+        ru->resetDeltaCounters();
         _numRecords.store(numRecords);
         _dataSize.store(dataSize);
         rocksdb::WriteBatch wb;
