@@ -126,6 +126,8 @@ namespace mongo {
                                      BSONObjBuilder* extraInfo = NULL,
                                      int infoLevel = 0 ) const;
 
+        virtual bool isInRecordIdOrder() const override { return true; }
+
         // CRUD related
 
         virtual RecordData dataFor( OperationContext* opCtx, const RecordId& loc ) const;
@@ -139,10 +141,12 @@ namespace mongo {
         virtual StatusWith<RecordId> insertRecord( OperationContext* opCtx,
                                                   const char* data,
                                                   int len,
+                                                  Timestamp timestamp,
                                                   bool enforceQuota );
 
         virtual Status insertRecordsWithDocWriter(OperationContext* opCtx,
                                                   const DocWriter* const* docs,
+                                                  const Timestamp* timestamps,
                                                   size_t nDocs,
                                                   RecordId* idsOut);
 
