@@ -254,6 +254,8 @@ namespace mongo {
             RecordId _lastLoc;
             std::unique_ptr<rocksdb::Iterator> _iterator;
             std::string _seekExactResult;
+            // true between oplog first record retrieval hack start and first next() call
+            bool _oplogHackRestoreBeforeNext = false;
             void positionIterator();
             rocksdb::Iterator* iterator();
         };

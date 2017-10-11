@@ -1066,13 +1066,12 @@ namespace mongo {
         _currentSequenceNumber =
           RocksRecoveryUnit::getRocksRecoveryUnit(opCtx)->snapshot()->GetSequenceNumber();
 
-        if (!startIterator.isNull() && !_readUntilForOplog.isNull()) {
+        if (!startIterator.isNull()) {
             // This is a hack to speed up first/last record retrieval from the oplog
+            _oplogHackRestoreBeforeNext = true;
             _needFirstSeek = false;
             _lastLoc = startIterator;
-            iterator();
-            _skipNextAdvance = true;
-            _eof = false;
+            restore();
         }
     }
 
@@ -1130,6 +1129,7 @@ namespace mongo {
     }
 
     boost::optional<Record> RocksRecordStore::Cursor::next() {
+        _oplogHackRestoreBeforeNext = false;
         if (_eof) {
             return {};
         }
@@ -1191,12 +1191,18 @@ namespace mongo {
             _currentSequenceNumber = ru->snapshot()->GetSequenceNumber();
         }
 
-        _skipNextAdvance = false;
+        if (_eof || _needFirstSeek) {
+            _skipNextAdvance = false;
+            return true;
+        }
 
-        if (_eof) return true;
-        if (_needFirstSeek) return true;
-
+        // _skipNextAdvance is reset by positionIterator()
+        // but in oplog first record retrieval hack case another logic is in use
         positionIterator();
+        if (_oplogHackRestoreBeforeNext) {
+            _skipNextAdvance = true;
+            _eof = false;
+        }
         // Return false if the collection is capped and we reached an EOF. Otherwise return true.
         return _cappedVisibilityManager && _eof ? false : true;
     }
