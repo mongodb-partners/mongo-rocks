@@ -1159,6 +1159,7 @@ namespace mongo {
     }
 
     boost::optional<Record> RocksRecordStore::Cursor::seekExact(const RecordId& id) {
+        _oplogHackRestoreBeforeNext = false;
         _needFirstSeek = false;
         _skipNextAdvance = false;
         _iterator.reset();
