@@ -133,6 +133,8 @@ namespace mongo {
 
         long long getDeltaCounter(const rocksdb::Slice& counterKey);
 
+        void resetDeltaCounters();
+
         void setOplogReadTill(const RecordId& loc);
         RecordId getOplogReadTill() const { return _oplogReadTill; }
 

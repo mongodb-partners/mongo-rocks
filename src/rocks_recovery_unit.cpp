@@ -468,6 +468,10 @@ namespace mongo {
         }
     }
 
+    void RocksRecoveryUnit::resetDeltaCounters() {
+        _deltaCounters.clear();
+    }
+
     RocksRecoveryUnit* RocksRecoveryUnit::getRocksRecoveryUnit(OperationContext* opCtx) {
         return checked_cast<RocksRecoveryUnit*>(opCtx->recoveryUnit());
     }

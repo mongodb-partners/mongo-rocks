@@ -847,15 +847,7 @@ namespace mongo {
             long long storedDataSize = dataSize(opCtx);
 
             if (nrecords != storedNumRecords || dataSizeTotal != storedDataSize) {
-                warning() << redact(_ident) << ": Existing record and data size counters ("
-                          << storedNumRecords << " records " << storedDataSize << " bytes) "
-                          << "are inconsistent with full validation results (" << nrecords
-                          << " records " << dataSizeTotal << " bytes). "
-                          << "Updating counters with new values.";
-                if (nrecords != storedNumRecords) {
-                    _changeNumRecords(opCtx, nrecords - storedNumRecords);
-                    _increaseDataSize(opCtx, dataSizeTotal - storedDataSize);
-                }
+                updateStatsAfterRepair(opCtx, nrecords, dataSizeTotal);
             }
         }
         output->append("nInvalidDocuments", nInvalid);
@@ -890,6 +882,8 @@ namespace mongo {
 
     void RocksRecordStore::updateStatsAfterRepair(OperationContext* opCtx, long long numRecords,
                                                   long long dataSize) {
+        RocksRecoveryUnit* ru = RocksRecoveryUnit::getRocksRecoveryUnit(opCtx);
+        ru->resetDeltaCounters();
         _numRecords.store(numRecords);
         _dataSize.store(dataSize);
         rocksdb::WriteBatch wb;
@@ -1072,7 +1066,7 @@ namespace mongo {
         _currentSequenceNumber =
           RocksRecoveryUnit::getRocksRecoveryUnit(opCtx)->snapshot()->GetSequenceNumber();
 
-        if (!startIterator.isNull()) {
+        if (!startIterator.isNull() && !_readUntilForOplog.isNull()) {
             // This is a hack to speed up first/last record retrieval from the oplog
             _needFirstSeek = false;
             _lastLoc = startIterator;

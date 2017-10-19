@@ -45,14 +45,6 @@ namespace mongo {
         return Status::OK();
     }
 
-    Status RocksSnapshotManager::createSnapshot(OperationContext* opCtx, const SnapshotName& name) {
-        stdx::lock_guard<stdx::mutex> lock(_mutex);
-        uint64_t nameU64 = name.asU64();
-        _snapshotMap[nameU64] = std::make_shared<SnapshotHolder>(opCtx, nameU64);
-        _snapshots.push_back(nameU64);
-        return Status::OK();
-    }
-
     void RocksSnapshotManager::setCommittedSnapshot(const SnapshotName& name, Timestamp ts) {
         stdx::lock_guard<stdx::mutex> lock(_mutex);
 
