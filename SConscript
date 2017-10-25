@@ -55,6 +55,7 @@ env.Library(
         'src/rocks_parameters.cpp',
         'src/rocks_record_store_mongod.cpp',
         'src/rocks_server_status.cpp',
+        'src/rocks_stats_parser.cpp',
         ],
     LIBDEPS= [
         'storage_rocks_base',
