@@ -439,7 +439,7 @@ namespace mongo {
         std::unique_ptr<rocksdb::Slice> upperBound(new rocksdb::Slice());
         rocksdb::ReadOptions options;
         options.iterate_upper_bound = upperBound.get();
-        auto iterator = db->NewIterator(rocksdb::ReadOptions());
+        auto iterator = db->NewIterator(options);
         return new PrefixStrippingIterator(std::move(prefix), iterator, nullptr,
                                            std::move(upperBound));
     }
