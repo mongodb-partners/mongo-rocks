@@ -116,6 +116,8 @@ namespace mongo {
 
         virtual void endBackup(OperationContext* opCtx) override;
 
+        virtual Status hotBackup(const std::string& path);
+
         virtual bool isDurable() const override { return _durable; }
 
         virtual bool isEphemeral() const override { return false; }
@@ -166,6 +168,7 @@ namespace mongo {
     private:
         Status _createIdent(StringData ident, BSONObjBuilder* configBuilder);
         BSONObj _getIdentConfig(StringData ident);
+        BSONObj _tryGetIdentConfig(StringData ident);
         std::string _extractPrefix(const BSONObj& config);
 
         rocksdb::Options _options() const;

@@ -453,7 +453,7 @@ namespace mongo {
         }
 
         // ensure only one thread at a time can do deletes, otherwise they'll conflict.
-       stdx::unique_lock<stdx::timed_mutex> lock(_cappedDeleterMutex, stdx::defer_lock);
+        stdx::unique_lock<stdx::timed_mutex> lock(_cappedDeleterMutex, stdx::defer_lock);
 
         if (_cappedMaxDocs != -1) {
             lock.lock(); // Max docs has to be exact, so have to check every time.

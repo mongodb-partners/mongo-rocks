@@ -379,12 +379,20 @@ namespace mongo {
 
     // cannot be rolled back
     Status RocksEngine::dropIdent(OperationContext* opCtx, StringData ident) {
+        auto config = _tryGetIdentConfig(ident);
+        // happens rarely when dropped prefix markers are persisted but metadata changes
+        // are lost due to system crash on standalone with default acknowledgement behavior
+        if (config.isEmpty()) {
+            log() << "Cannot find ident " << ident << " to drop, ignoring";
+            return Status::OK();
+        }
+
         rocksdb::WriteBatch wb;
         wb.Delete(kMetadataPrefix + ident.toString());
 
         // calculate which prefixes we need to drop
         std::vector<std::string> prefixesToDrop;
-        prefixesToDrop.push_back(_extractPrefix(_getIdentConfig(ident)));
+        prefixesToDrop.push_back(_extractPrefix(config));
         if (_oplogIdent == ident.toString()) {
             // if we're dropping oplog, we also need to drop keys from RocksOplogKeyTracker (they
             // are stored at prefix+1)
@@ -469,6 +477,11 @@ namespace mongo {
         _rateLimiter->SetBytesPerSecond(static_cast<int64_t>(_maxWriteMBPerSec) * 1024 * 1024);
     }
 
+    Status RocksEngine::hotBackup(const std::string& path) {
+        // Our files are in db/ directory to avoid collision with Mongo's files
+        return backup(path + "/db");
+    }
+
     Status RocksEngine::backup(const std::string& path) {
         rocksdb::Checkpoint* checkpoint;
         auto s = rocksdb::Checkpoint::Create(_db.get(), &checkpoint);
@@ -516,6 +529,13 @@ namespace mongo {
         auto identIter = _identMap.find(ident);
         invariant(identIter != _identMap.end());
         return identIter->second.copy();
+    }
+
+    BSONObj RocksEngine::_tryGetIdentConfig(StringData ident) {
+        stdx::lock_guard<stdx::mutex> lk(_identMapMutex);
+        auto identIter = _identMap.find(ident);
+        const bool identFound = (identIter != _identMap.end());
+        return identFound ? identIter->second.copy() : BSONObj();
     }
 
     std::string RocksEngine::_extractPrefix(const BSONObj& config) {

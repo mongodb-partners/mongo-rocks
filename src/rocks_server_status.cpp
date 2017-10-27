@@ -28,6 +28,7 @@
  */
 
 #include <sstream>
+#include <vector>
 
 #include "mongo/platform/basic.h"
 
@@ -44,6 +45,7 @@
 
 #include "rocks_recovery_unit.h"
 #include "rocks_engine.h"
+#include "rocks_stats_parser.h"
 #include "rocks_transaction.h"
 
 namespace mongo {
@@ -60,6 +62,44 @@ namespace mongo {
             } else {
                 return std::to_string(bytes >> 30) + "GB";
             }
+        }
+
+    }  // namespace
+
+    namespace {
+        typedef std::vector<std::pair<rocksdb::Tickers, std::string>> TickersToNamesMap;
+        TickersToNamesMap initTickersToNames() {
+            const std::map<rocksdb::Tickers, std::string> counterNameMap = {
+                {rocksdb::NUMBER_KEYS_WRITTEN, "num-keys-written"},
+                {rocksdb::NUMBER_KEYS_READ, "num-keys-read"},
+                {rocksdb::NUMBER_DB_SEEK, "num-seeks"},
+                {rocksdb::NUMBER_DB_NEXT, "num-forward-iterations"},
+                {rocksdb::NUMBER_DB_PREV, "num-backward-iterations"},
+                {rocksdb::BLOCK_CACHE_MISS, "block-cache-misses"},
+                {rocksdb::BLOCK_CACHE_HIT, "block-cache-hits"},
+                {rocksdb::BLOOM_FILTER_USEFUL, "bloom-filter-useful"},
+                {rocksdb::BYTES_WRITTEN, "bytes-written"},
+                {rocksdb::BYTES_READ, "bytes-read-point-lookup"},
+                {rocksdb::ITER_BYTES_READ, "bytes-read-iteration"},
+                {rocksdb::FLUSH_WRITE_BYTES, "flush-bytes-written"},
+                {rocksdb::COMPACT_READ_BYTES, "compaction-bytes-read"},
+                {rocksdb::COMPACT_WRITE_BYTES, "compaction-bytes-written"}
+            };
+
+            TickersToNamesMap tickersToNames;
+            tickersToNames.reserve(rocksdb::TickersNameMap.size());
+            for (const auto& ticker : rocksdb::TickersNameMap) {
+                invariant(ticker.second.compare(0, 8, "rocksdb.") == 0);
+                std::string name(ticker.second, 8);
+                auto alt = counterNameMap.find(ticker.first);
+                if (alt != counterNameMap.end()) {
+                    name = alt->second;
+                } else {
+                    std::replace(name.begin(), name.end(), '.', '-');
+                }
+                tickersToNames.emplace_back(std::make_pair(ticker.first, std::move(name)));
+            }
+            return tickersToNames;
         }
     }  // namespace
 
@@ -99,12 +139,15 @@ namespace mongo {
             if (property.first == "stats") {
                 // special casing because we want to turn it into array
                 BSONArrayBuilder a;
+                RocksStatsParser rsp;
                 std::stringstream ss(statsString);
                 std::string line;
                 while (std::getline(ss, line)) {
                     a.append(line);
+                    rsp.parse(line);
                 }
                 bob.appendArray(property.first, a.arr());
+                rsp.done(bob);
             } else if (property.second) {
                 bob.append(property.first, PrettyPrintBytes(std::stoll(statsString)));
             } else {
@@ -179,31 +222,14 @@ namespace mongo {
         // add counters
         auto stats = _engine->getStatistics();
         if (stats) {
-          BSONObjBuilder countersObjBuilder;
-          const std::vector<std::pair<rocksdb::Tickers, std::string>> counterNameMap = {
-            {rocksdb::NUMBER_KEYS_WRITTEN, "num-keys-written"},
-            {rocksdb::NUMBER_KEYS_READ, "num-keys-read"},
-            {rocksdb::NUMBER_DB_SEEK, "num-seeks"},
-            {rocksdb::NUMBER_DB_NEXT, "num-forward-iterations"},
-            {rocksdb::NUMBER_DB_PREV, "num-backward-iterations"},
-            {rocksdb::BLOCK_CACHE_MISS, "block-cache-misses"},
-            {rocksdb::BLOCK_CACHE_HIT, "block-cache-hits"},
-            {rocksdb::BLOOM_FILTER_USEFUL, "bloom-filter-useful"},
-            {rocksdb::BYTES_WRITTEN, "bytes-written"},
-            {rocksdb::BYTES_READ, "bytes-read-point-lookup"},
-            {rocksdb::ITER_BYTES_READ, "bytes-read-iteration"},
-            {rocksdb::FLUSH_WRITE_BYTES, "flush-bytes-written"},
-            {rocksdb::COMPACT_READ_BYTES, "compaction-bytes-read"},
-            {rocksdb::COMPACT_WRITE_BYTES, "compaction-bytes-written"}
-          };
+            static const TickersToNamesMap tickersToNames = initTickersToNames();
 
-          for (const auto& counter_name : counterNameMap) {
-            countersObjBuilder.append(
-                counter_name.second,
-                static_cast<long long>(stats->getTickerCount(counter_name.first)));
-          }
-
-          bob.append("counters", countersObjBuilder.obj());
+            BSONObjBuilder countersObjBuilder;
+            for (const auto& ticker : tickersToNames) {
+                countersObjBuilder.append(
+                    ticker.second, static_cast<long long>(stats->getTickerCount(ticker.first)));
+            }
+            bob.append("counters", countersObjBuilder.obj());
         }
 
         RocksEngine::appendGlobalStats(bob);

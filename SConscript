@@ -2,22 +2,18 @@ Import("env")
 
 env = env.Clone()
 
-dynamic_syslibdeps = []
-conf = Configure(env)
-
-if conf.CheckLibWithHeader("lz4", ["lz4.h","lz4hc.h"], "C", "LZ4_versionNumber();", autoadd=False ):
-    dynamic_syslibdeps.append("lz4")
-
-conf.Finish()
-
-env.InjectMongoIncludePaths()
+env.Library(
+    target= 'storage_rocks_global_options',
+    source= [
+        'src/rocks_global_options.cpp',
+        ],
+    )
 
 env.Library(
     target= 'storage_rocks_base',
     source= [
         'src/rocks_compaction_scheduler.cpp',
         'src/rocks_counter_manager.cpp',
-        'src/rocks_global_options.cpp',
         'src/rocks_engine.cpp',
         'src/rocks_record_store.cpp',
         'src/rocks_recovery_unit.cpp',
@@ -43,11 +39,12 @@ env.Library(
         '$BUILD_DIR/mongo/util/concurrency/ticketholder',
         '$BUILD_DIR/mongo/util/processinfo',
         '$BUILD_DIR/third_party/shim_snappy',
+        '$BUILD_DIR/third_party/shim_lz4',
+        'storage_rocks_global_options',
         ],
     SYSLIBDEPS=["rocksdb",
                 "z",
                 "bz2"] #z and bz2 are dependencies for rocks
-               + dynamic_syslibdeps
     )
 
 env.Library(
@@ -58,12 +55,25 @@ env.Library(
         'src/rocks_parameters.cpp',
         'src/rocks_record_store_mongod.cpp',
         'src/rocks_server_status.cpp',
+        'src/rocks_stats_parser.cpp',
         ],
     LIBDEPS= [
         'storage_rocks_base',
         '$BUILD_DIR/mongo/db/storage/kv/kv_engine'
         ],
     LIBDEPS_DEPENDENTS=['$BUILD_DIR/mongo/db/serveronly']
+    )
+
+# Startup output redirection, done separately to not break unittests
+env.Library(
+    target= 'rocks_opts_init_redirect',
+    source= [
+        'src/rocks_options_redirect.cpp',
+        ],
+    LIBDEPS= [
+        'storage_rocks_global_options',
+        ],
+    LIBDEPS_DEPENDENTS=['$BUILD_DIR/mongo/db/mongod_options']
     )
 
 env.Library(
