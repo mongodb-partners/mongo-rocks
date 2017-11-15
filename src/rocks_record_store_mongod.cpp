@@ -145,9 +145,9 @@ namespace mongo {
             return false;
         }
 
-        if (storageGlobalParams.repair) {
+        if (storageGlobalParams.repair || storageGlobalParams.readOnly) {
             LOG(1) << "not starting RocksRecordStoreThread for " << ns
-                   << " because we are in repair";
+                   << " because we are either in repair or read-only mode";
             return false;
         }
 
