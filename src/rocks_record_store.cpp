@@ -610,7 +610,7 @@ namespace mongo {
                 }
             }
         }
-        catch ( const WriteConflictException& wce ) {
+        catch ( const WriteConflictException& ) {
             delete opCtx->releaseRecoveryUnit();
             opCtx->setRecoveryUnit(realRecoveryUnit, realRUstate);
             log() << "got conflict truncating capped, ignoring";
