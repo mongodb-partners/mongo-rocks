@@ -360,12 +360,20 @@ namespace mongo {
 
     // cannot be rolled back
     Status RocksEngine::dropIdent(OperationContext* opCtx, StringData ident) {
+        auto identPrefix = _tryGetIdentPrefix(ident);
+        // happens rarely when dropped prefix markers are persisted but metadata changes
+        // are lost due to system crash on standalone with default acknowledgement behavior
+        if (identPrefix.empty()) {
+            log() << "Cannot find ident " << ident << " to drop, ignoring";
+            return Status::OK();
+        }
+
         rocksdb::WriteBatch wb;
         wb.Delete(kMetadataPrefix + ident.toString());
 
         // calculate which prefixes we need to drop
         std::vector<std::string> prefixesToDrop;
-        prefixesToDrop.push_back(_getIdentPrefix(ident));
+        prefixesToDrop.push_back(identPrefix);
         if (_oplogIdent == ident.toString()) {
             // if we're dropping oplog, we also need to drop keys from RocksOplogKeyTracker (they
             // are stored at prefix+1)
@@ -495,6 +503,13 @@ namespace mongo {
         auto prefixIter = _identPrefixMap.find(ident);
         invariant(prefixIter != _identPrefixMap.end());
         return encodePrefix(prefixIter->second);
+    }
+
+    std::string RocksEngine::_tryGetIdentPrefix(StringData ident) {
+        stdx::lock_guard<stdx::mutex> lk(_identPrefixMapMutex);
+        auto prefixIter = _identPrefixMap.find(ident);
+        const bool prefixFound = (prefixIter != _identPrefixMap.end());
+        return prefixFound ? encodePrefix(prefixIter->second) : std::string();
     }
 
     rocksdb::Options RocksEngine::_options() const {
