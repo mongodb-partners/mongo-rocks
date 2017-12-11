@@ -292,10 +292,10 @@ namespace mongo {
         return Status::OK();
     }
 
-    boost::optional<SnapshotName> RocksRecoveryUnit::getMajorityCommittedSnapshot() const {
+    boost::optional<Timestamp> RocksRecoveryUnit::getMajorityCommittedSnapshot() const {
         if (!_readFromMajorityCommittedSnapshot)
             return {};
-        return SnapshotName(_snapshotManager->getCommittedSnapshot().get()->name);
+        return Timestamp(_snapshotManager->getCommittedSnapshot().get()->name);
     }
 
     SnapshotId RocksRecoveryUnit::getSnapshotId() const { return SnapshotId(_mySnapshotId); }
