@@ -98,7 +98,7 @@ namespace mongo {
             return _readFromMajorityCommittedSnapshot;
         }
 
-        boost::optional<SnapshotName> getMajorityCommittedSnapshot() const final;
+        boost::optional<Timestamp> getMajorityCommittedSnapshot() const final;
 
         virtual void* writingPtr(void* data, size_t len) { invariant(!"don't call writingPtr"); }
 
