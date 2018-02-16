@@ -347,11 +347,12 @@ namespace mongo {
         return _droppedPrefixes;
     }
 
-    void RocksCompactionScheduler::loadDroppedPrefixes(rocksdb::Iterator* iter) {
+    uint32_t RocksCompactionScheduler::loadDroppedPrefixes(rocksdb::Iterator* iter) {
         invariant(iter);
         const uint32_t rocksdbSkippedDeletionsInitial =
             (uint32_t)get_internal_delete_skipped_count();
         int dropped_count = 0;
+        uint32_t int_prefix = 0;
         for (iter->Seek(kDroppedPrefix); iter->Valid() && iter->key().starts_with(kDroppedPrefix);
              iter->Next()) {
             invariantRocksOK(iter->status());
@@ -360,7 +361,6 @@ namespace mongo {
 
             // let's instruct the compaction scheduler to compact dropped prefix
             ++dropped_count;
-            uint32_t int_prefix;
             bool ok = extractPrefix(prefix, &int_prefix);
             invariant(ok);
             {
@@ -375,6 +375,7 @@ namespace mongo {
         const uint32_t skippedDroppedPrefixMarkers =
             (uint32_t)get_internal_delete_skipped_count() - rocksdbSkippedDeletionsInitial;
         _droppedPrefixesCount.fetch_add(skippedDroppedPrefixMarkers, std::memory_order_relaxed);
+        return int_prefix;
     }
 
     Status RocksCompactionScheduler::dropPrefixesAtomic(
