@@ -68,7 +68,7 @@ namespace mongo {
 
         rocksdb::CompactionFilterFactory* createCompactionFilterFactory() const;
         std::unordered_set<uint32_t> getDroppedPrefixes() const;
-        void loadDroppedPrefixes(rocksdb::Iterator* iter);
+        uint32_t loadDroppedPrefixes(rocksdb::Iterator* iter);
         Status dropPrefixesAtomic(const std::vector<std::string>& prefixesToDrop,
                                   const rocksdb::WriteOptions& syncOptions,
                                   rocksdb::WriteBatch& wb);
