@@ -93,18 +93,16 @@ namespace mongo {
 
         virtual void abandonSnapshot();
 
-        Status setReadFromMajorityCommittedSnapshot() final;
-        bool isReadingFromMajorityCommittedSnapshot() const final {
-            return _readFromMajorityCommittedSnapshot;
-        }
+        Status obtainMajorityCommittedSnapshot() final;
 
-        boost::optional<Timestamp> getMajorityCommittedSnapshot() const final;
+        boost::optional<Timestamp> getPointInTimeReadTimestamp() const final;
 
         virtual void* writingPtr(void* data, size_t len) { invariant(!"don't call writingPtr"); }
 
         virtual void registerChange(Change* change);
 
-        virtual void setRollbackWritesDisabled() {}
+        virtual void setRollbackWritesDisabled() override {}
+        virtual void setOrderedCommit(bool orderedCommit) override {};
 
         virtual SnapshotId getSnapshotId() const;
 

@@ -188,7 +188,8 @@ namespace mongo {
         virtual boost::optional<RecordId> oplogStartHack(OperationContext* opCtx,
                                                          const RecordId& startingPosition) const;
 
-        virtual Status oplogDiskLocRegister(OperationContext* opCtx, const Timestamp& opTime);
+        virtual Status oplogDiskLocRegister(OperationContext* opCtx, const Timestamp& opTime,
+                                            bool orderedCommit);
 
         void waitForAllEarlierOplogWritesToBeVisible(OperationContext* opCtx) const override;
 

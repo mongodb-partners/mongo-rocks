@@ -225,7 +225,7 @@ namespace mongo {
         WriteUnitOfWork wuow(opCtx.get());
         RocksRecordStore* rrs = dynamic_cast<RocksRecordStore*>(rs.get());
         invariant( rrs );
-        Status status = rrs->oplogDiskLocRegister( opCtx.get(), opTime );
+        Status status = rrs->oplogDiskLocRegister( opCtx.get(), opTime, false);
         if (!status.isOK())
             return StatusWith<RecordId>( status );
         StatusWith<RecordId> res = rs->insertRecord(opCtx.get(),
@@ -468,7 +468,7 @@ namespace mongo {
                                     int inc ) {
         Timestamp opTime = Timestamp(5,inc);
         RocksRecordStore* rrs = dynamic_cast<RocksRecordStore*>(rs.get());
-        Status status = rrs->oplogDiskLocRegister( opCtx, opTime );
+        Status status = rrs->oplogDiskLocRegister( opCtx, opTime, false );
         ASSERT_OK( status );
         BSONObj obj = BSON( "ts" << opTime );
         StatusWith<RecordId> res = rs->insertRecord( opCtx, obj.objdata(), obj.objsize(), Timestamp(), false );

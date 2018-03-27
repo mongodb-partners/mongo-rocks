@@ -281,7 +281,7 @@ namespace mongo {
 
     void RocksRecoveryUnit::registerChange(Change* change) { _changes.push_back(change); }
 
-    Status RocksRecoveryUnit::setReadFromMajorityCommittedSnapshot() {
+    Status RocksRecoveryUnit::obtainMajorityCommittedSnapshot() {
         if (!_snapshotManager->haveCommittedSnapshot()) {
             return {ErrorCodes::ReadConcernMajorityNotAvailableYet,
                     "Read concern majority reads are currently not possible."};
@@ -292,7 +292,7 @@ namespace mongo {
         return Status::OK();
     }
 
-    boost::optional<Timestamp> RocksRecoveryUnit::getMajorityCommittedSnapshot() const {
+    boost::optional<Timestamp> RocksRecoveryUnit::getPointInTimeReadTimestamp() const {
         if (!_readFromMajorityCommittedSnapshot)
             return {};
         return Timestamp(_snapshotManager->getCommittedSnapshot().get()->name);
