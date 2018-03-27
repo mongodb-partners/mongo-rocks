@@ -43,7 +43,7 @@ namespace rocksdb {
     class CompactionFilterFactory;
     class DB;
     class Iterator;
-    class WriteOptions;
+    struct WriteOptions;
     class WriteBatch;
 }
 
