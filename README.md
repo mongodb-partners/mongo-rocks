@@ -1,5 +1,7 @@
 ## RocksDB Storage Engine Module for MongoDB
 
+**Important:** Last stable version of MongoRocks is 3.4. MongoRocks 3.6 and later should compile, but are not yet ready to be used in production.
+
 ### TL;DR
 
 Execute this series of commands to compile MongoDB with RocksDB storage engine:
