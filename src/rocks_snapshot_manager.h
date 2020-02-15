@@ -29,8 +29,7 @@
 #include <forward_list>
 
 #include <rocksdb/db.h>
-#include <rocksdb/utilities/totransaction.h>
-#include <rocksdb/utilities/totransaction_db.h>
+
 #include "mongo/base/disallow_copying.h"
 #include "mongo/db/storage/snapshot_manager.h"
 
@@ -46,51 +45,36 @@ class RocksSnapshotManager final : public SnapshotManager {
     MONGO_DISALLOW_COPYING(RocksSnapshotManager);
 
 public:
-    RocksSnapshotManager() = default;
-    virtual ~RocksSnapshotManager() {}
+    struct SnapshotHolder {
+        uint64_t name;
+        const rocksdb::Snapshot* snapshot;
+        rocksdb::DB* db;
+        SnapshotHolder(OperationContext* opCtx, uint64_t name_);
+        ~SnapshotHolder();
+    };
+
+    RocksSnapshotManager() {}
+
+    ~RocksSnapshotManager() {
+        dropAllSnapshots();
+    }
+
     void setCommittedSnapshot(const Timestamp& ts) final;
     void dropAllSnapshots() final;
-    void setLocalSnapshot(const Timestamp& ts) final;
-    boost::optional<Timestamp> getLocalSnapshot() final;
 
     //
-    // RocksDB-specific methods
+    // Rocks-specific members
     //
 
-    /**
-     * Starts a transaction and returns the SnapshotName used.
-     *
-     * Throws if there is currently no committed snapshot.
-     */
-    Timestamp beginTransactionOnCommittedSnapshot(rocksdb::TOTransactionDB* db, rocksdb::TOTransaction* txn) const;
+    bool haveCommittedSnapshot() const;
 
-    /**
-     * Starts a transaction on the last stable local timestamp, set by setLocalSnapshot.
-     *
-     * Throws if no local snapshot has been set.
-     */
-    Timestamp beginTransactionOnLocalSnapshot(
-        rocksdb::TOTransactionDB* db, rocksdb::TOTransaction* txn) const;
-
-    /**
-     * Returns lowest SnapshotName that could possibly be used by a future call to
-     * beginTransactionOnCommittedSnapshot, or boost::none if there is currently no committed
-     * snapshot.
-     *
-     * This should not be used for starting a transaction on this SnapshotName since the named
-     * snapshot may be deleted by the time you start the transaction.
-     */
-    boost::optional<Timestamp> getMinSnapshotForNextCommittedRead() const;
+    std::shared_ptr<RocksSnapshotManager::SnapshotHolder> getCommittedSnapshot() const;
 
 private:
+    std::vector<uint64_t> _snapshots;  // sorted
+    std::unordered_map<uint64_t, std::shared_ptr<SnapshotHolder>> _snapshotMap;
+    boost::optional<uint64_t> _committedSnapshot;
+
     mutable stdx::mutex _mutex;  // Guards all members
-
-    // Snapshot to use for reads at a commit timestamp.
-    mutable stdx::mutex _committedSnapshotMutex;  // Guards _committedSnapshot.
-    boost::optional<Timestamp> _committedSnapshot;
-
-    // Snapshot to use for reads at a local stable timestamp.
-    mutable stdx::mutex _localSnapshotMutex;  // Guards _localSnapshot.
-    boost::optional<Timestamp> _localSnapshot;
 };
 } // namespace mongo

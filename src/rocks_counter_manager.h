@@ -50,7 +50,8 @@ namespace mongo {
 
         long long loadCounter(const std::string& counterKey);
 
-        void updateCounter(const std::string& counterKey, long long count);
+        void updateCounter(const std::string& counterKey, long long count,
+                           rocksdb::WriteBatch* writeBatch);
 
         void sync();
 
