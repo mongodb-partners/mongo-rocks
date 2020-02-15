@@ -65,155 +65,187 @@ namespace rocksdb {
 
 namespace mongo {
 
-    struct CollectionOptions;
-    class RocksIndexBase;
-    class RocksRecordStore;
-    class JournalListener;
+struct CollectionOptions;
+class RocksIndexBase;
+class RocksRecordStore;
+class JournalListener;
 
-    class RocksEngine final : public KVEngine {
-        MONGO_DISALLOW_COPYING( RocksEngine );
-    public:
-        RocksEngine(const std::string& path, bool durable, int formatVersion, bool readOnly);
-        virtual ~RocksEngine();
+class RocksEngine final : public KVEngine {
+    MONGO_DISALLOW_COPYING( RocksEngine );
+public:
+    RocksEngine(const std::string& path, bool durable, int formatVersion, bool readOnly);
+    virtual ~RocksEngine();
 
-        static void appendGlobalStats(BSONObjBuilder& b);
+    static void appendGlobalStats(BSONObjBuilder& b);
 
-        virtual RecoveryUnit* newRecoveryUnit() override;
+    virtual RecoveryUnit* newRecoveryUnit() override;
 
-        virtual Status createRecordStore(OperationContext* opCtx,
-                                         StringData ns,
-                                         StringData ident,
-                                         const CollectionOptions& options) override;
+    virtual Status createRecordStore(OperationContext* opCtx,
+                                     StringData ns,
+                                     StringData ident,
+                                     const CollectionOptions& options) override;
 
-        virtual std::unique_ptr<RecordStore> getRecordStore(OperationContext* opCtx, StringData ns,
-                                            StringData ident,
-                                            const CollectionOptions& options) override;
+    virtual std::unique_ptr<RecordStore> getRecordStore(OperationContext* opCtx, StringData ns,
+                                        StringData ident,
+                                        const CollectionOptions& options) override;
 
-        virtual Status createSortedDataInterface(OperationContext* opCtx, StringData ident,
-                                                 const IndexDescriptor* desc) override;
+    virtual Status createSortedDataInterface(OperationContext* opCtx, StringData ident,
+                                             const IndexDescriptor* desc) override;
 
-        virtual SortedDataInterface* getSortedDataInterface(OperationContext* opCtx,
-                                                            StringData ident,
-                                                            const IndexDescriptor* desc) override;
+    virtual SortedDataInterface* getSortedDataInterface(OperationContext* opCtx,
+                                                        StringData ident,
+                                                        const IndexDescriptor* desc) override;
 
-        virtual Status dropIdent(OperationContext* opCtx, StringData ident) override;
+    virtual Status dropIdent(OperationContext* opCtx, StringData ident) override;
 
-        virtual bool hasIdent(OperationContext* opCtx, StringData ident) const override;
+    virtual bool hasIdent(OperationContext* opCtx, StringData ident) const override;
 
-        virtual std::vector<std::string> getAllIdents( OperationContext* opCtx ) const override;
+    virtual std::vector<std::string> getAllIdents( OperationContext* opCtx ) const override;
 
-        virtual bool supportsDocLocking() const override {
-            return true;
-        }
+    virtual bool supportsDocLocking() const override {
+        return true;
+    }
 
-        virtual bool supportsDirectoryPerDB() const override {
-            return false;
-        }
+    virtual bool supportsDirectoryPerDB() const override {
+        return false;
+    }
 
-        virtual int flushAllFiles(OperationContext* opCtx, bool sync) override;
+    virtual int flushAllFiles(OperationContext* opCtx, bool sync) override;
 
-        virtual Status beginBackup(OperationContext* opCtx) override;
+    virtual Status beginBackup(OperationContext* opCtx) override;
 
-        virtual void endBackup(OperationContext* opCtx) override;
+    virtual void endBackup(OperationContext* opCtx) override;
 
-        virtual bool isDurable() const override { return _durable; }
+    virtual bool isDurable() const override { return _durable; }
 
-        virtual bool isEphemeral() const override { return false; }
+    virtual bool isEphemeral() const override { return false; }
 
-        virtual int64_t getIdentSize(OperationContext* opCtx, StringData ident);
+    virtual int64_t getIdentSize(OperationContext* opCtx, StringData ident);
 
-        virtual Status repairIdent(OperationContext* opCtx,
-                                    StringData ident) {
-            return Status::OK();
-        }
+    virtual Status repairIdent(OperationContext* opCtx,
+                                StringData ident) {
+        return Status::OK();
+    }
 
-        virtual void cleanShutdown();
+    virtual void cleanShutdown();
 
-        virtual SnapshotManager* getSnapshotManager() const final {
-            return (SnapshotManager*) &_snapshotManager;
-        }
+    virtual SnapshotManager* getSnapshotManager() const final {
+        return (SnapshotManager*) &_snapshotManager;
+    }
 
-        /**
-         * Initializes a background job to remove excess documents in the oplog collections.
-         * This applies to the capped collections in the local.oplog.* namespaces (specifically
-         * local.oplog.rs for replica sets and local.oplog.$main for master/slave replication).
-         * Returns true if a background job is running for the namespace.
-         */
-        static bool initRsOplogBackgroundThread(StringData ns);
+    virtual void setStableTimestamp(Timestamp stableTimestamp) override;
 
-        virtual void setJournalListener(JournalListener* jl);
+    virtual void setInitialDataTimestamp(Timestamp initialDataTimestamp) override;
 
-        // rocks specific api
+    /**
+     * This method will set the oldest timestamp and commit timestamp to the input value. Callers
+     * must be serialized along with `setStableTimestamp`. If force=false, this function does not
+     * set the commit timestamp and may choose to lag the oldest timestamp.
+     */
+    void setOldestTimestamp(Timestamp oldestTimestamp, bool force) override;
 
-        rocksdb::DB* getDB() { return _db.get(); }
-        const rocksdb::DB* getDB() const { return _db.get(); }
-        size_t getBlockCacheUsage() const { return _block_cache->GetUsage(); }
-        std::shared_ptr<rocksdb::Cache> getBlockCache() { return _block_cache; }
+    virtual bool supportsRecoverToStableTimestamp() const override;
 
-        RocksTransactionEngine* getTransactionEngine() { return &_transactionEngine; }
+    virtual bool supportsRecoveryTimestamp() const override;
 
-        RocksCompactionScheduler* getCompactionScheduler() const { return _compactionScheduler.get(); }
+    virtual StatusWith<Timestamp> recoverToStableTimestamp(OperationContext* opCtx) override;
 
-        int getMaxWriteMBPerSec() const { return _maxWriteMBPerSec; }
-        void setMaxWriteMBPerSec(int maxWriteMBPerSec);
+    virtual boost::optional<Timestamp> getRecoveryTimestamp() const override;
 
-        Status backup(const std::string& path);
+    /**
+     * Returns a timestamp value that is at or before the last checkpoint. Everything before this
+     * value is guaranteed to be persisted on disk and replication recovery will not need to
+     * replay documents with an earlier time.
+     */
+    virtual boost::optional<Timestamp> getLastStableCheckpointTimestamp() const override;
 
-        rocksdb::Statistics* getStatistics() const {
-          return _statistics.get();
-        }
+    virtual Timestamp getAllCommittedTimestamp() const override;
 
-    private:
-        Status _createIdent(StringData ident, BSONObjBuilder* configBuilder);
-        BSONObj _getIdentConfig(StringData ident);
-        BSONObj _tryGetIdentConfig(StringData ident);
-        std::string _extractPrefix(const BSONObj& config);
+    bool supportsReadConcernSnapshot() const final;
 
-        rocksdb::Options _options() const;
+    bool supportsReadConcernMajority() const final;
 
-        std::string _path;
-        std::unique_ptr<rocksdb::DB> _db;
-        std::shared_ptr<rocksdb::Cache> _block_cache;
-        int _maxWriteMBPerSec;
-        std::shared_ptr<rocksdb::RateLimiter> _rateLimiter;
-        // can be nullptr
-        std::shared_ptr<rocksdb::Statistics> _statistics;
+    /**
+     * Initializes a background job to remove excess documents in the oplog collections.
+     * This applies to the capped collections in the local.oplog.* namespaces (specifically
+     * local.oplog.rs for replica sets and local.oplog.$main for master/slave replication).
+     * Returns true if a background job is running for the namespace.
+     */
+    static bool initRsOplogBackgroundThread(StringData ns);
 
-        const bool _durable;
-        const int _formatVersion;
+    virtual void setJournalListener(JournalListener* jl);
 
-        // ident map stores mapping from ident to a BSON config
-        mutable stdx::mutex _identMapMutex;
-        typedef StringMap<BSONObj> IdentMap;
-        IdentMap _identMap;
-        std::string _oplogIdent;
+    // rocks specific api
 
-        // protected by _identMapMutex
-        uint32_t _maxPrefix;
+    rocksdb::DB* getDB() { return _db.get(); }
+    const rocksdb::DB* getDB() const { return _db.get(); }
+    size_t getBlockCacheUsage() const { return _block_cache->GetUsage(); }
+    std::shared_ptr<rocksdb::Cache> getBlockCache() { return _block_cache; }
 
-        // _identObjectMapMutex protects both _identIndexMap and _identCollectionMap. It should
-        // never be locked together with _identMapMutex
-        mutable stdx::mutex _identObjectMapMutex;
-        // mapping from ident --> index object. we don't own the object
-        StringMap<RocksIndexBase*> _identIndexMap;
-        // mapping from ident --> collection object
-        StringMap<RocksRecordStore*> _identCollectionMap;
+    RocksTransactionEngine* getTransactionEngine() { return &_transactionEngine; }
 
-        // This is for concurrency control
-        RocksTransactionEngine _transactionEngine;
+    RocksCompactionScheduler* getCompactionScheduler() const { return _compactionScheduler.get(); }
 
-        RocksSnapshotManager _snapshotManager;
+    int getMaxWriteMBPerSec() const { return _maxWriteMBPerSec; }
+    void setMaxWriteMBPerSec(int maxWriteMBPerSec);
 
-        // CounterManages manages counters like numRecords and dataSize for record stores
-        std::unique_ptr<RocksCounterManager> _counterManager;
+    Status backup(const std::string& path);
 
-        std::unique_ptr<RocksCompactionScheduler> _compactionScheduler;
+    rocksdb::Statistics* getStatistics() const {
+      return _statistics.get();
+    }
 
-        static const std::string kMetadataPrefix;
+private:
+    Status _createIdent(StringData ident, BSONObjBuilder* configBuilder);
+    BSONObj _getIdentConfig(StringData ident);
+    BSONObj _tryGetIdentConfig(StringData ident);
+    std::string _extractPrefix(const BSONObj& config);
 
-        std::unique_ptr<RocksDurabilityManager> _durabilityManager;
-        class RocksJournalFlusher;
-        std::unique_ptr<RocksJournalFlusher> _journalFlusher;  // Depends on _durabilityManager
-    };
+    rocksdb::Options _options() const;
+
+    std::string _path;
+    std::unique_ptr<rocksdb::DB> _db;
+    std::shared_ptr<rocksdb::Cache> _block_cache;
+    int _maxWriteMBPerSec;
+    std::shared_ptr<rocksdb::RateLimiter> _rateLimiter;
+    // can be nullptr
+    std::shared_ptr<rocksdb::Statistics> _statistics;
+
+    const bool _durable;
+    const int _formatVersion;
+
+    // ident map stores mapping from ident to a BSON config
+    mutable stdx::mutex _identMapMutex;
+    typedef StringMap<BSONObj> IdentMap;
+    IdentMap _identMap;
+    std::string _oplogIdent;
+
+    // protected by _identMapMutex
+    uint32_t _maxPrefix;
+
+    // _identObjectMapMutex protects both _identIndexMap and _identCollectionMap. It should
+    // never be locked together with _identMapMutex
+    mutable stdx::mutex _identObjectMapMutex;
+    // mapping from ident --> index object. we don't own the object
+    StringMap<RocksIndexBase*> _identIndexMap;
+    // mapping from ident --> collection object
+    StringMap<RocksRecordStore*> _identCollectionMap;
+
+    // This is for concurrency control
+    RocksTransactionEngine _transactionEngine;
+
+    RocksSnapshotManager _snapshotManager;
+
+    // CounterManages manages counters like numRecords and dataSize for record stores
+    std::unique_ptr<RocksCounterManager> _counterManager;
+
+    std::unique_ptr<RocksCompactionScheduler> _compactionScheduler;
+
+    static const std::string kMetadataPrefix;
+
+    std::unique_ptr<RocksDurabilityManager> _durabilityManager;
+    class RocksJournalFlusher;
+    std::unique_ptr<RocksJournalFlusher> _journalFlusher;  // Depends on _durabilityManager
+};
 
 }
