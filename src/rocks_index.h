@@ -136,6 +136,7 @@ namespace mongo {
                                    const RecordId& loc) {
             // dupKeyCheck shouldn't be called for non-unique indexes
             invariant(false);
+            return Status::OK();
         }
 
         virtual SortedDataBuilderInterface* getBulkBuilder(OperationContext* opCtx,

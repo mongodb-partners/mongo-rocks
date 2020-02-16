@@ -117,10 +117,7 @@ namespace mongo {
                   _key(keyStringVersion),
                   _typeBits(keyStringVersion),
                   _query(keyStringVersion),
-                  _opCtx(opCtx) {
-                _currentSequenceNumber =
-                    RocksRecoveryUnit::getRocksRecoveryUnit(opCtx)->snapshot()->GetSequenceNumber();
-            }
+                  _opCtx(opCtx) {}
 
             boost::optional<IndexKeyEntry> next(RequestedInfo parts) override {
                 // Advance on a cursor at the end is a no-op
@@ -180,23 +177,31 @@ namespace mongo {
             }
 
             void save() override {
+                try {
+                    if (_iterator) {
+                        _iterator.reset();
+                    }
+                } catch (const WriteConflictException&) {
+                }
                 if (!_lastMoveWasRestore) {
                     _savedEOF = _eof;
                 }
             }
 
-            void saveUnpositioned() override { _savedEOF = true; }
+            void saveUnpositioned() override {
+                save();
+                _savedEOF = true;
+            }
 
             void restore() override {
-                auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(_opCtx);
-                if (!_iterator.get() ||
-                    _currentSequenceNumber != ru->snapshot()->GetSequenceNumber()) {
+                if (!_iterator) {
+                    auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(_opCtx);
+                    invariant(ru);
                     _iterator.reset(ru->NewIterator(_prefix));
-                    _currentSequenceNumber = ru->snapshot()->GetSequenceNumber();
-
-                    if (!_savedEOF) {
-                        _lastMoveWasRestore = !seekCursor(_key);
-                    }
+                    invariant(_iterator);
+                }
+                if (!_savedEOF) {
+                    _lastMoveWasRestore = !seekCursor(_key);
                 }
             }
 
@@ -342,7 +347,6 @@ namespace mongo {
             // These are for storing savePosition/restorePosition state
             bool _savedEOF = false;
             RecordId _savedRecordId;
-            rocksdb::SequenceNumber _currentSequenceNumber;
 
             KeyString::Version _keyStringVersion;
             KeyString _key;
@@ -650,10 +654,8 @@ namespace mongo {
         std::string prefixedKey(_makePrefixedKey(_prefix, encodedKey));
 
         auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(opCtx);
-        if (!ru->transaction()->registerWrite(prefixedKey)) {
-            throw WriteConflictException();
-        }
-
+        invariant(ru);
+        invariant(ru->getTransaction());
         _indexStorageSize.fetch_add(static_cast<long long>(prefixedKey.size()),
                                     std::memory_order_relaxed);
 
@@ -668,7 +670,7 @@ namespace mongo {
                 value.appendTypeBits(encodedKey.getTypeBits());
             }
             rocksdb::Slice valueSlice(value.getBuffer(), value.getSize());
-            ru->writeBatch()->Put(prefixedKey, valueSlice);
+            invariantRocksOK(ru->getTransaction()->Put(prefixedKey, valueSlice));
             return Status::OK();
         }
 
@@ -709,7 +711,9 @@ namespace mongo {
         }
 
         rocksdb::Slice valueVectorSlice(valueVector.getBuffer(), valueVector.getSize());
-        ru->writeBatch()->Put(prefixedKey, valueVectorSlice);
+        auto txn = ru->getTransaction();
+        invariant(txn);
+        invariantRocksOK(txn->Put(prefixedKey, valueSlice));
         return Status::OK();
     }
 
@@ -732,10 +736,9 @@ namespace mongo {
         std::string prefixedKey(_makePrefixedKey(_prefix, encodedKey));
 
         auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(opCtx);
-        // We can't let two threads unindex the same key
-        if (!ru->transaction()->registerWrite(prefixedKey)) {
-            throw WriteConflictException();
-        }
+        invariant(ru);
+        auto transaction = ru->getTransaction();
+        invariant(transaction);
 
         if (!dupsAllowed) {
             if (_partial) {
@@ -755,9 +758,9 @@ namespace mongo {
                 KeyString::TypeBits::fromBuffer(_keyStringVersion, &br);
                 fassert(90417, !br.remaining());
             }
+            invariantRocksOK(transaction->Delete(prefixedKey));
             _indexStorageSize.fetch_sub(static_cast<long long>(prefixedKey.size()),
                                         std::memory_order_relaxed);
-            ru->writeBatch()->Delete(prefixedKey);
             return;
         }
 
@@ -781,9 +784,9 @@ namespace mongo {
                 if (records.empty() && !br.remaining()) {
                     // This is the common case: we are removing the only loc for this key.
                     // Remove the whole entry.
+                    invariantRocksOK(transaction->Delete(prefixedKey));
                     _indexStorageSize.fetch_sub(static_cast<long long>(prefixedKey.size()),
                                                 std::memory_order_relaxed);
-                    ru->writeBatch()->Delete(prefixedKey);
                     return;
                 }
 
@@ -812,7 +815,7 @@ namespace mongo {
         }
 
         rocksdb::Slice newValueSlice(newValue.getBuffer(), newValue.getSize());
-        ru->writeBatch()->Put(prefixedKey, newValueSlice);
+        invariantRocksOK(transaction->Put(prefixedKey, newValueSlice));
         _indexStorageSize.fetch_sub(static_cast<long long>(prefixedKey.size()),
                                     std::memory_order_relaxed);
     }
@@ -875,9 +878,8 @@ namespace mongo {
         KeyString encodedKey(_keyStringVersion, key, _order, loc);
         std::string prefixedKey(_makePrefixedKey(_prefix, encodedKey));
         auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(opCtx);
-        if (!ru->transaction()->registerWrite(prefixedKey)) {
-            throw WriteConflictException();
-        }
+        invariant(ru);
+        auto transaction = ru->getTransaction();
 
         rocksdb::Slice value;
         if (!encodedKey.getTypeBits().isAllZeros()) {
@@ -886,10 +888,9 @@ namespace mongo {
                                encodedKey.getTypeBits().getSize());
         }
 
+        invariantRocksOK(transaction->put(prefixedKey, value));
         _indexStorageSize.fetch_add(static_cast<long long>(prefixedKey.size()),
                                     std::memory_order_relaxed);
-
-        ru->writeBatch()->Put(prefixedKey, value);
 
         return Status::OK();
     }
@@ -914,17 +915,16 @@ namespace mongo {
         std::string prefixedKey(_makePrefixedKey(_prefix, encodedKey));
 
         auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(opCtx);
-        if (!ru->transaction()->registerWrite(prefixedKey)) {
-            throw WriteConflictException();
-        }
+        invariant(ru);
+        auto transaction = ru->getTransaction();
+        invariant(transaction);
 
+        if (useSingleDelete) {
+            warning() << "mongoRocks4.0+ nolonger supports singleDelete, fallback to Delete";
+        }
+        invariantRocksOK(transaction->Delete(prefixedKey));
         _indexStorageSize.fetch_sub(static_cast<long long>(prefixedKey.size()),
                                     std::memory_order_relaxed);
-        if (useSingleDelete) {
-            ru->writeBatch()->SingleDelete(prefixedKey);
-        } else {
-            ru->writeBatch()->Delete(prefixedKey);
-        }
     }
 
     std::unique_ptr<SortedDataInterface::Cursor> RocksStandardIndex::newCursor(

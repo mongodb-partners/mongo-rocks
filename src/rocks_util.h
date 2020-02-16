@@ -73,4 +73,6 @@ namespace mongo {
         }                                                                                          \
     } while (false)
 
+#define checkRocks
+
 }  // namespace mongo

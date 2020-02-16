@@ -29,54 +29,55 @@
 
 #pragma once
 
-#include "mongo/base/status.h"
-#include "mongo/bson/timestamp.h"
 #include <rocksdb/utilities/totransaction.h>
 #include <rocksdb/utilities/totransaction_db.h>
+#include "mongo/base/status.h"
+#include "mongo/bson/timestamp.h"
 
 namespace mongo {
 
-/**
- * When constructed, this object begins a Rocks transaction on the provided session. The
- * transaction will be rolled back if done() is not called before the object is destructed.
- */
-class RocksBeginTxnBlock {
-public:
-    // Whether or not to ignore prepared transactions.
-    enum class IgnorePrepared {
-        kNoIgnore,  // Do not ignore prepared transactions and return prepare conflicts.
-        kIgnore     // Ignore prepared transactions and show prepared, but uncommitted data.
-    };
-
-    // Whether or not to round up to the oldest timestamp when the read timestamp is behind it.
-    enum class RoundToOldest {
-        kNoRound,  // Do not round to the oldest timestamp. BadValue error may be returned.
-        kRound     // Round the read timestamp up to the oldest timestamp when it is behind.
-    };
-
-    RocksBeginTxnBlock(rocksdb::TOTransactionDB* db,
-                       std::unique_ptr<rocksdb::TOTransaction>* txn);
-    ~RocksBeginTxnBlock();
-
     /**
-     * Sets the read timestamp on the opened transaction. Cannot be called after a call to done().
+     * When constructed, this object begins a Rocks transaction on the provided session. The
+     * transaction will be rolled back if done() is not called before the object is destructed.
      */
-    Status setTimestamp(Timestamp, RoundToOldest roundToOldest = RoundToOldest::kNoRound);
+    class RocksBeginTxnBlock {
+    public:
+        // Whether or not to ignore prepared transactions.
+        enum class IgnorePrepared {
+            kNoIgnore,  // Do not ignore prepared transactions and return prepare conflicts.
+            kIgnore     // Ignore prepared transactions and show prepared, but uncommitted data.
+        };
 
-    /* Get the read timestamp on the opened transaction */
-    Timestamp getTimestamp() const;
+        // Whether or not to round up to the oldest timestamp when the read timestamp is behind it.
+        enum class RoundToOldest {
+            kNoRound,  // Do not round to the oldest timestamp. BadValue error may be returned.
+            kRound     // Round the read timestamp up to the oldest timestamp when it is behind.
+        };
 
-    /**
-     * End the begin transaction block. Must be called to ensure the opened transaction
-     * is not be rolled back.
-     */
-    void done();
+        RocksBeginTxnBlock(rocksdb::TOTransactionDB* db,
+                           std::unique_ptr<rocksdb::TOTransaction>* txn);
+        ~RocksBeginTxnBlock();
 
-private:
-    rocksdb::TOTransactionDB* _db;
-    rocksdb::TOTransaction* _transaction;
-    bool _rollback;
-    Timestamp _readTimestamp;
-};
+        /**
+         * Sets the read timestamp on the opened transaction. Cannot be called after a call to
+         * done().
+         */
+        Status setTimestamp(Timestamp, RoundToOldest roundToOldest = RoundToOldest::kNoRound);
+
+        /* Get the read timestamp on the opened transaction */
+        Timestamp getTimestamp() const;
+
+        /**
+         * End the begin transaction block. Must be called to ensure the opened transaction
+         * is not be rolled back.
+         */
+        void done();
+
+    private:
+        rocksdb::TOTransactionDB* _db;
+        rocksdb::TOTransaction* _transaction;
+        bool _rollback;
+        Timestamp _readTimestamp;
+    };
 
 }  // namespace mongo

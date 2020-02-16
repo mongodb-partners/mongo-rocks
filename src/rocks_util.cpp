@@ -67,6 +67,10 @@ namespace mongo {
             return Status::OK();
         }
 
+        if (status.IsBusy()) {
+            throw WriteConflictException();
+        }
+
         if (status.IsCorruption()) {
             return Status(ErrorCodes::BadValue, status.ToString());
         }
