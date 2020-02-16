@@ -40,57 +40,58 @@
 
 namespace mongo {
 
-class RocksRecoveryUnit;
+    class RocksRecoveryUnit;
 
-class RocksSnapshotManager final : public SnapshotManager {
-    MONGO_DISALLOW_COPYING(RocksSnapshotManager);
+    class RocksSnapshotManager final : public SnapshotManager {
+        MONGO_DISALLOW_COPYING(RocksSnapshotManager);
 
-public:
-    RocksSnapshotManager() = default;
-    virtual ~RocksSnapshotManager() {}
-    void setCommittedSnapshot(const Timestamp& ts) final;
-    void dropAllSnapshots() final;
-    void setLocalSnapshot(const Timestamp& ts) final;
-    boost::optional<Timestamp> getLocalSnapshot() final;
+    public:
+        RocksSnapshotManager() = default;
+        virtual ~RocksSnapshotManager() {}
+        void setCommittedSnapshot(const Timestamp& ts) final;
+        void dropAllSnapshots() final;
+        void setLocalSnapshot(const Timestamp& ts) final;
+        boost::optional<Timestamp> getLocalSnapshot() final;
 
-    //
-    // RocksDB-specific methods
-    //
+        //
+        // RocksDB-specific methods
+        //
 
-    /**
-     * Starts a transaction and returns the SnapshotName used.
-     *
-     * Throws if there is currently no committed snapshot.
-     */
-    Timestamp beginTransactionOnCommittedSnapshot(rocksdb::TOTransactionDB* db, rocksdb::TOTransaction* txn) const;
+        /**
+         * Starts a transaction and returns the SnapshotName used.
+         *
+         * Throws if there is currently no committed snapshot.
+         */
+        Timestamp beginTransactionOnCommittedSnapshot(
+            rocksdb::TOTransactionDB* db, std::unique_ptr<rocksdb::TOTransaction>* txn) const;
 
-    /**
-     * Starts a transaction on the last stable local timestamp, set by setLocalSnapshot.
-     *
-     * Throws if no local snapshot has been set.
-     */
-    Timestamp beginTransactionOnLocalSnapshot(
-        rocksdb::TOTransactionDB* db, rocksdb::TOTransaction* txn) const;
+        /**
+         * Starts a transaction on the last stable local timestamp, set by setLocalSnapshot.
+         *
+         * Throws if no local snapshot has been set.
+         */
+        Timestamp beginTransactionOnLocalSnapshot(
+            rocksdb::TOTransactionDB* db, std::unique_ptr<rocksdb::TOTransaction>* txn) const;
 
-    /**
-     * Returns lowest SnapshotName that could possibly be used by a future call to
-     * beginTransactionOnCommittedSnapshot, or boost::none if there is currently no committed
-     * snapshot.
-     *
-     * This should not be used for starting a transaction on this SnapshotName since the named
-     * snapshot may be deleted by the time you start the transaction.
-     */
-    boost::optional<Timestamp> getMinSnapshotForNextCommittedRead() const;
+        /**
+         * Returns lowest SnapshotName that could possibly be used by a future call to
+         * beginTransactionOnCommittedSnapshot, or boost::none if there is currently no committed
+         * snapshot.
+         *
+         * This should not be used for starting a transaction on this SnapshotName since the named
+         * snapshot may be deleted by the time you start the transaction.
+         */
+        boost::optional<Timestamp> getMinSnapshotForNextCommittedRead() const;
 
-private:
-    mutable stdx::mutex _mutex;  // Guards all members
+    private:
+        mutable stdx::mutex _mutex;  // Guards all members
 
-    // Snapshot to use for reads at a commit timestamp.
-    mutable stdx::mutex _committedSnapshotMutex;  // Guards _committedSnapshot.
-    boost::optional<Timestamp> _committedSnapshot;
+        // Snapshot to use for reads at a commit timestamp.
+        mutable stdx::mutex _committedSnapshotMutex;  // Guards _committedSnapshot.
+        boost::optional<Timestamp> _committedSnapshot;
 
-    // Snapshot to use for reads at a local stable timestamp.
-    mutable stdx::mutex _localSnapshotMutex;  // Guards _localSnapshot.
-    boost::optional<Timestamp> _localSnapshot;
-};
-} // namespace mongo
+        // Snapshot to use for reads at a local stable timestamp.
+        mutable stdx::mutex _localSnapshotMutex;  // Guards _localSnapshot.
+        boost::optional<Timestamp> _localSnapshot;
+    };
+}  // namespace mongo

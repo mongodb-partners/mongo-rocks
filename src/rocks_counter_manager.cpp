@@ -37,8 +37,8 @@
 #include <string>
 
 // for invariant()
-#include "mongo/util/assert_util.h"
 #include "mongo/stdx/mutex.h"
+#include "mongo/util/assert_util.h"
 
 #include <rocksdb/db.h>
 
@@ -70,7 +70,6 @@ namespace mongo {
 
     void RocksCounterManager::updateCounter(const std::string& counterKey, long long count,
                                             rocksdb::WriteBatch* writeBatch) {
-
         if (_crashSafe) {
             int64_t storage;
             writeBatch->Put(counterKey, _encodeCounter(count, &storage));

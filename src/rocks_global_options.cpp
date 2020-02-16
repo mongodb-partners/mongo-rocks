@@ -43,47 +43,49 @@ namespace mongo {
     Status RocksGlobalOptions::add(moe::OptionSection* options) {
         moe::OptionSection rocksOptions("RocksDB options");
 
-        rocksOptions.addOptionChaining("storage.rocksdb.cacheSizeGB", "rocksdbCacheSizeGB",
-                                       moe::Int,
-                                       "maximum amount of memory to allocate for cache; "
-                                       "defaults to 30%% of physical RAM").validRange(1, 10000);
-        rocksOptions.addOptionChaining("storage.rocksdb.compression", "rocksdbCompression",
-                                       moe::String,
-                                       "block compression algorithm for collection data "
-                                       "[none|snappy|zlib|lz4|lz4hc]")
-            .format("(:?none)|(:?snappy)|(:?zlib)|(:?lz4)|(:?lz4hc)", "(none/snappy/zlib/lz4/lz4hc)")
+        rocksOptions
+            .addOptionChaining("storage.rocksdb.cacheSizeGB", "rocksdbCacheSizeGB", moe::Int,
+                               "maximum amount of memory to allocate for cache; "
+                               "defaults to 30%% of physical RAM")
+            .validRange(1, 10000);
+        rocksOptions
+            .addOptionChaining("storage.rocksdb.compression", "rocksdbCompression", moe::String,
+                               "block compression algorithm for collection data "
+                               "[none|snappy|zlib|lz4|lz4hc]")
+            .format("(:?none)|(:?snappy)|(:?zlib)|(:?lz4)|(:?lz4hc)",
+                    "(none/snappy/zlib/lz4/lz4hc)")
             .setDefault(moe::Value(std::string("snappy")));
         rocksOptions
             .addOptionChaining(
-                 "storage.rocksdb.maxWriteMBPerSec", "rocksdbMaxWriteMBPerSec", moe::Int,
-                 "Maximum speed that RocksDB will write to storage. Reducing this can "
-                 "help reduce read latency spikes during compactions. However, reducing this "
-                 "below a certain point might slow down writes. Defaults to 1GB/sec")
+                "storage.rocksdb.maxWriteMBPerSec", "rocksdbMaxWriteMBPerSec", moe::Int,
+                "Maximum speed that RocksDB will write to storage. Reducing this can "
+                "help reduce read latency spikes during compactions. However, reducing this "
+                "below a certain point might slow down writes. Defaults to 1GB/sec")
             .validRange(1, 1024)
             .setDefault(moe::Value(1024));
-        rocksOptions.addOptionChaining("storage.rocksdb.configString", "rocksdbConfigString",
-                                       moe::String,
-                                       "RocksDB storage engine custom "
-                                       "configuration settings").hidden();
-        rocksOptions.addOptionChaining("storage.rocksdb.crashSafeCounters",
-                                       "rocksdbCrashSafeCounters", moe::Bool,
-                                       "If true, numRecord and dataSize counter will be consistent "
-                                       "even after power failure. If false, numRecord and dataSize "
-                                       "might be a bit inconsistent after power failure, but "
-                                       "should be correct under normal conditions. Setting this to "
-                                       "true will make database inserts a bit slower.")
+        rocksOptions
+            .addOptionChaining("storage.rocksdb.configString", "rocksdbConfigString", moe::String,
+                               "RocksDB storage engine custom "
+                               "configuration settings")
+            .hidden();
+        rocksOptions
+            .addOptionChaining("storage.rocksdb.crashSafeCounters", "rocksdbCrashSafeCounters",
+                               moe::Bool,
+                               "If true, numRecord and dataSize counter will be consistent "
+                               "even after power failure. If false, numRecord and dataSize "
+                               "might be a bit inconsistent after power failure, but "
+                               "should be correct under normal conditions. Setting this to "
+                               "true will make database inserts a bit slower.")
             .setDefault(moe::Value(false))
             .hidden();
 
         rocksOptions
-            .addOptionChaining("storage.rocksdb.counters",
-                               "rocksdbCounters",
-                               moe::Bool,
+            .addOptionChaining("storage.rocksdb.counters", "rocksdbCounters", moe::Bool,
                                "If true, we will turn on RocksDB's advanced counters")
             .setDefault(moe::Value(true));
         rocksOptions
-            .addOptionChaining("storage.rocksdb.singleDeleteIndex",
-                               "rocksdbSingleDeleteIndex", moe::Bool,
+            .addOptionChaining("storage.rocksdb.singleDeleteIndex", "rocksdbSingleDeleteIndex",
+                               moe::Bool,
                                "This is still experimental. "
                                "Use this only if you know what you're doing")
             .setDefault(moe::Value(false));
@@ -118,13 +120,12 @@ namespace mongo {
             log() << "Crash safe counters: " << rocksGlobalOptions.crashSafeCounters;
         }
         if (params.count("storage.rocksdb.counters")) {
-            rocksGlobalOptions.counters =
-              params["storage.rocksdb.counters"].as<bool>();
+            rocksGlobalOptions.counters = params["storage.rocksdb.counters"].as<bool>();
             log() << "Counters: " << rocksGlobalOptions.counters;
         }
         if (params.count("storage.rocksdb.singleDeleteIndex")) {
             rocksGlobalOptions.singleDeleteIndex =
-              params["storage.rocksdb.singleDeleteIndex"].as<bool>();
+                params["storage.rocksdb.singleDeleteIndex"].as<bool>();
             log() << "Use SingleDelete in index: " << rocksGlobalOptions.singleDeleteIndex;
         }
 

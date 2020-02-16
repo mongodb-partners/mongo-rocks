@@ -33,8 +33,8 @@
 #include <atomic>
 #include <map>
 #include <memory>
-#include <string>
 #include <mutex>
+#include <string>
 
 // for invariant()
 #include "mongo/util/assert_util.h"
@@ -73,8 +73,8 @@ namespace mongo {
             _keyInfo.erase(iter);
         }
 
-        auto listIter = _keysSortedBySnapshot.insert(_keysSortedBySnapshot.end(),
-                                                     {key, newSnapshotId});
+        auto listIter =
+            _keysSortedBySnapshot.insert(_keysSortedBySnapshot.end(), {key, newSnapshotId});
         _keyInfo.insert({StringData(listIter->first), {newSnapshotId, listIter}});
     }
 

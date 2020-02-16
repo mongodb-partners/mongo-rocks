@@ -45,37 +45,37 @@
 #include "rocks_engine.h"
 
 namespace mongo {
-namespace {
-    class RocksEngineHarnessHelper : public KVHarnessHelper {
-    public:
-        RocksEngineHarnessHelper() : _dbpath("mongo-rocks-engine-test") {
-            boost::filesystem::remove_all(_dbpath.path());
-            restartEngine();
+    namespace {
+        class RocksEngineHarnessHelper : public KVHarnessHelper {
+        public:
+            RocksEngineHarnessHelper() : _dbpath("mongo-rocks-engine-test") {
+                boost::filesystem::remove_all(_dbpath.path());
+                restartEngine();
+            }
+
+            virtual ~RocksEngineHarnessHelper() = default;
+
+            virtual KVEngine* getEngine() { return _engine.get(); }
+
+            virtual KVEngine* restartEngine() {
+                _engine.reset(nullptr);
+                _engine.reset(new RocksEngine(_dbpath.path(), false, 3, false));
+                return _engine.get();
+            }
+
+        private:
+            unittest::TempDir _dbpath;
+
+            std::unique_ptr<RocksEngine> _engine;
+        };
+
+        std::unique_ptr<KVHarnessHelper> makeHelper() {
+            return stdx::make_unique<RocksEngineHarnessHelper>();
         }
 
-        virtual ~RocksEngineHarnessHelper() = default;
-
-        virtual KVEngine* getEngine() { return _engine.get(); }
-
-        virtual KVEngine* restartEngine() {
-            _engine.reset(nullptr);
-            _engine.reset(new RocksEngine(_dbpath.path(), false, 3, false));
-            return _engine.get();
+        MONGO_INITIALIZER(RegisterKVHarnessFactory)(InitializerContext*) {
+            KVHarnessHelper::registerFactory(makeHelper);
+            return Status::OK();
         }
-
-    private:
-        unittest::TempDir _dbpath;
-
-        std::unique_ptr<RocksEngine> _engine;
-    };
-
-    std::unique_ptr<KVHarnessHelper> makeHelper() {
-        return stdx::make_unique<RocksEngineHarnessHelper>();
     }
-
-    MONGO_INITIALIZER(RegisterKVHarnessFactory)(InitializerContext*) {
-        KVHarnessHelper::registerFactory(makeHelper);
-        return Status::OK();
-    }
-}
 }

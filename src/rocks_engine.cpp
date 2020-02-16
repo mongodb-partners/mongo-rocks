@@ -36,20 +36,20 @@
 #include <algorithm>
 #include <mutex>
 
-#include <rocksdb/version.h>
 #include <rocksdb/cache.h>
 #include <rocksdb/compaction_filter.h>
 #include <rocksdb/comparator.h>
+#include <rocksdb/convenience.h>
 #include <rocksdb/db.h>
 #include <rocksdb/experimental.h>
-#include <rocksdb/slice.h>
+#include <rocksdb/filter_policy.h>
 #include <rocksdb/options.h>
 #include <rocksdb/rate_limiter.h>
+#include <rocksdb/slice.h>
 #include <rocksdb/table.h>
-#include <rocksdb/convenience.h>
-#include <rocksdb/filter_policy.h>
-#include <rocksdb/utilities/write_batch_with_index.h>
 #include <rocksdb/utilities/checkpoint.h>
+#include <rocksdb/utilities/write_batch_with_index.h>
+#include <rocksdb/version.h>
 
 #include "mongo/db/catalog/collection_options.h"
 #include "mongo/db/client.h"
@@ -68,9 +68,9 @@
 
 #include "rocks_counter_manager.h"
 #include "rocks_global_options.h"
+#include "rocks_index.h"
 #include "rocks_record_store.h"
 #include "rocks_recovery_unit.h"
-#include "rocks_index.h"
 #include "rocks_util.h"
 
 #define ROCKS_TRACE log()
@@ -125,27 +125,30 @@ namespace mongo {
 
         public:
             RocksTicketServerParameter(TicketHolder* holder, const std::string& name)
-                : ServerParameter(ServerParameterSet::getGlobal(), name, true, true), _holder(holder) {};
-            virtual void append(OperationContext* opCtx, BSONObjBuilder& b, const std::string& name) {
+                : ServerParameter(ServerParameterSet::getGlobal(), name, true, true),
+                  _holder(holder){};
+            virtual void append(OperationContext* opCtx, BSONObjBuilder& b,
+                                const std::string& name) {
                 b.append(name, _holder->outof());
             }
             virtual Status set(const BSONElement& newValueElement) {
                 if (!newValueElement.isNumber())
-                    return Status(ErrorCodes::BadValue, str::stream() << name() << " has to be a number");
+                    return Status(ErrorCodes::BadValue, str::stream() << name()
+                                                                      << " has to be a number");
                 return _set(newValueElement.numberInt());
             }
             virtual Status setFromString(const std::string& str) {
                 int num = 0;
                 Status status = parseNumberFromString(str, &num);
-                if (!status.isOK())
-                    return status;
+                if (!status.isOK()) return status;
                 return _set(num);
             }
 
         private:
             Status _set(int newNum) {
                 if (newNum <= 0) {
-                    return Status(ErrorCodes::BadValue, str::stream() << name() << " has to be > 0");
+                    return Status(ErrorCodes::BadValue, str::stream() << name()
+                                                                      << " has to be > 0");
                 }
 
                 return _holder->resize(newNum);
@@ -156,16 +159,18 @@ namespace mongo {
 
         TicketHolder openWriteTransaction(128);
         RocksTicketServerParameter openWriteTransactionParam(&openWriteTransaction,
-                                                        "rocksdbConcurrentWriteTransactions");
+                                                             "rocksdbConcurrentWriteTransactions");
 
         TicketHolder openReadTransaction(128);
         RocksTicketServerParameter openReadTransactionParam(&openReadTransaction,
-                                                       "rocksdbConcurrentReadTransactions");
+                                                            "rocksdbConcurrentReadTransactions");
 
     }  // anonymous namespace
 
     // first four bytes are the default prefix 0
-    const std::string RocksEngine::kMetadataPrefix("\0\0\0\0metadata-", 12);
+    const std::string RocksEngine::kMetadataPrefix("\0\0\0\0metadata-", 13);
+
+    const int RocksEngine::kDefaultJournalDelayMillis = 100;
 
     RocksEngine::RocksEngine(const std::string& path, bool durable, int formatVersion,
                              bool readOnly)
@@ -242,8 +247,7 @@ namespace mongo {
                 }
                 uint32_t identPrefix = static_cast<uint32_t>(element.numberInt());
 
-                _identMap[StringData(ident.data(), ident.size())] =
-                    identConfig.getOwned();
+                _identMap[StringData(ident.data(), ident.size())] = identConfig.getOwned();
 
                 _maxPrefix = std::max(_maxPrefix, identPrefix);
             }
@@ -317,7 +321,8 @@ namespace mongo {
     }
 
     std::unique_ptr<RecordStore> RocksEngine::getRecordStore(OperationContext* opCtx, StringData ns,
-                                             StringData ident, const CollectionOptions& options) {
+                                                             StringData ident,
+                                                             const CollectionOptions& options) {
         if (NamespaceString::oplog(ns)) {
             _oplogIdent = ident.toString();
         }
@@ -326,15 +331,14 @@ namespace mongo {
         std::string prefix = _extractPrefix(config);
 
         std::unique_ptr<RocksRecordStore> recordStore =
-            options.capped
-                ? stdx::make_unique<RocksRecordStore>(
-                      ns, ident, _db.get(), _counterManager.get(), _durabilityManager.get(),
-                      _compactionScheduler.get(), prefix,
-                      true, options.cappedSize ? options.cappedSize : 4096,  // default size
-                      options.cappedMaxDocs ? options.cappedMaxDocs : -1)
-                : stdx::make_unique<RocksRecordStore>(ns, ident, _db.get(), _counterManager.get(),
-                                                      _durabilityManager.get(), _compactionScheduler.get(),
-                                                      prefix);
+            options.capped ? stdx::make_unique<RocksRecordStore>(
+                                 ns, ident, _db.get(), _counterManager.get(),
+                                 _durabilityManager.get(), _compactionScheduler.get(), prefix, true,
+                                 options.cappedSize ? options.cappedSize : 4096,  // default size
+                                 options.cappedMaxDocs ? options.cappedMaxDocs : -1)
+                           : stdx::make_unique<RocksRecordStore>(
+                                 ns, ident, _db.get(), _counterManager.get(),
+                                 _durabilityManager.get(), _compactionScheduler.get(), prefix);
 
         {
             stdx::lock_guard<stdx::mutex> lk(_identObjectMapMutex);
@@ -354,7 +358,6 @@ namespace mongo {
     SortedDataInterface* RocksEngine::getSortedDataInterface(OperationContext* opCtx,
                                                              StringData ident,
                                                              const IndexDescriptor* desc) {
-
         auto config = _getIdentConfig(ident);
         std::string prefix = _extractPrefix(config);
 
@@ -545,7 +548,7 @@ namespace mongo {
         rocksdb::BlockBasedTableOptions table_options;
         table_options.block_cache = _block_cache;
         table_options.filter_policy.reset(rocksdb::NewBloomFilterPolicy(10, false));
-        table_options.block_size = 16 * 1024; // 16KB
+        table_options.block_size = 16 * 1024;  // 16KB
         table_options.format_version = 2;
         options.table_factory.reset(rocksdb::NewBlockBasedTableFactory(table_options));
 
@@ -554,7 +557,7 @@ namespace mongo {
         options.max_write_buffer_number = 4;
         options.max_background_compactions = 8;
         options.max_background_flushes = 2;
-        options.target_file_size_base = 64 * 1024 * 1024; // 64MB
+        options.target_file_size_base = 64 * 1024 * 1024;  // 64MB
         options.soft_rate_limit = 2.5;
         options.hard_rate_limit = 3;
         options.level_compaction_dynamic_level_bytes = true;

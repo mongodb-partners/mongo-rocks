@@ -39,14 +39,14 @@
 
 namespace mongo {
 
-// static
-bool RocksEngine::initRsOplogBackgroundThread(StringData ns) {
-    return NamespaceString::oplog(ns);
-}
+    // static
+    bool RocksEngine::initRsOplogBackgroundThread(StringData ns) {
+        return NamespaceString::oplog(ns);
+    }
 
-MONGO_INITIALIZER(SetGlobalEnvironment)(InitializerContext* context) {
-    setGlobalServiceContext(stdx::make_unique<ServiceContextNoop>());
-    return Status::OK();
-}
+    MONGO_INITIALIZER(SetGlobalEnvironment)(InitializerContext* context) {
+        setGlobalServiceContext(stdx::make_unique<ServiceContextNoop>());
+        return Status::OK();
+    }
 
 }  // namespace mongo

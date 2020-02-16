@@ -1,9 +1,10 @@
 /**
- *    Copyright (C) 2014 MongoDB Inc.
+ *    Copyright (C) 2018 MongoDB Inc.
  *
  *    This program is free software: you can redistribute it and/or  modify
  *    it under the terms of the GNU Affero General Public License, version 3,
  *    as published by the Free Software Foundation.
+ *
  *
  *    This program is distributed in the hope that it will be useful,
  *    but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -26,37 +27,52 @@
  *    it in the license file.
  */
 
+#define MONGO_LOG_DEFAULT_COMPONENT ::mongo::logger::LogComponent::kStorage
+
+#include <cstdio>
 #include "mongo/platform/basic.h"
-
-#pragma once
-
-#include "mongo/base/disallow_copying.h"
-
-namespace rocksdb {
-    class DB;
-}
+#include "mongo/util/log.h"
+#include "rocks_begin_transaction_block.h"
+#include "rocks_util.h"
 
 namespace mongo {
+RocksBeginTxnBlock::RocksBeginTxnBlock(rocksdb::TOTransactionDB* db,
+                                       std::unique_ptr<rocksdb::TOTransaction>* txn)
+    : _db(db) {
+    invariant(!_rollback);
+    rocksdb::WriteOptions wOpts;
+    rocksdb::TOTransactionOptions txnOpts;
+    _transaction = _db->BeginTransaction(wOpts, txnOpts);
+    invariant(_transaction);
+    txn->reset(_transaction);
+    _rollback = true;
+}
 
-    class JournalListener;
+Status RocksBeginTxnBlock::setTimestamp(Timestamp readTs, RoundToOldest roundToOldest) {
+    invariant(_rollback);
+    rocksdb::RocksTimeStamp ts(readTs.asULL());
+    auto status = 
+        _transaction->SetReadTimeStamp(ts, roundToOldest == RoundToOldest::kRound ? 1 : 0);
+    if (!status.ok()) {
+        return rocksToMongoStatus(status);
+    }
+    status = _transaction->GetReadTimeStamp(&ts);
+    invariant(status.ok(), status.ToString());
+    if (roundToOldest != RoundToOldest::kRound) {
+        invariant(readTs == Timestamp(ts));
+    }
+    _readTimestamp = Timestamp(ts);
+    return Status::OK();
+}
 
-    class RocksDurabilityManager {
-        MONGO_DISALLOW_COPYING(RocksDurabilityManager);
+void RocksBeginTxnBlock::done() {
+    invariant(_rollback);
+    _rollback = false;
+}
 
-    public:
-        RocksDurabilityManager(rocksdb::DB* db, bool durable);
-
-        void setJournalListener(JournalListener* jl);
-
-        void waitUntilDurable(bool forceFlush);
-
-    private:
-        rocksdb::DB* _db;  // not owned
-        bool _durable;
-        // Notified when we commit to the journal.
-        JournalListener* _journalListener;
-        // Protects _journalListener.
-        stdx::mutex _journalListenerMutex;
-    };
-
+RocksBeginTxnBlock::~RocksBeginTxnBlock() {
+    if (_rollback) {
+        invariant(_transaction->Rollback().ok());
+    }
+}
 }  // namespace mongo

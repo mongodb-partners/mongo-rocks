@@ -31,8 +31,8 @@
 
 #include "mongo/platform/basic.h"
 
-#include <set>
 #include <mutex>
+#include <set>
 
 #include "mongo/base/checked_cast.h"
 #include "mongo/db/catalog/collection.h"
@@ -40,9 +40,9 @@
 #include "mongo/db/client.h"
 #include "mongo/db/concurrency/d_concurrency.h"
 #include "mongo/db/db_raii.h"
-#include "mongo/db/service_context.h"
 #include "mongo/db/namespace_string.h"
 #include "mongo/db/operation_context.h"
+#include "mongo/db/service_context.h"
 #include "mongo/util/background.h"
 #include "mongo/util/exit.h"
 #include "mongo/util/log.h"
@@ -65,9 +65,7 @@ namespace mongo {
                 _name = std::string("RocksRecordStoreThread for ") + _ns.toString();
             }
 
-            virtual std::string name() const {
-                return _name;
-            }
+            virtual std::string name() const { return _name; }
 
             /**
              * @return Number of documents deleted.
@@ -103,12 +101,10 @@ namespace mongo {
                     int64_t removed = rs->cappedDeleteAsNeeded_inlock(opCtx.get(), RecordId::max());
                     wuow.commit();
                     return removed;
-                }
-                catch (const std::exception& e) {
+                } catch (const std::exception& e) {
                     severe() << "error in RocksRecordStoreThread: " << redact(e.what());
                     fassertFailedNoTrace(!"error in RocksRecordStoreThread");
-                }
-                catch (...) {
+                } catch (...) {
                     fassertFailedNoTrace(!"unknown error in RocksRecordStoreThread");
                 }
             }
@@ -155,8 +151,7 @@ namespace mongo {
         NamespaceString nss(ns);
         if (_backgroundThreadNamespaces.count(nss)) {
             log() << "RocksRecordStoreThread " << ns << " already started";
-        }
-        else {
+        } else {
             log() << "Starting RocksRecordStoreThread " << ns;
             BackgroundJob* backgroundThread = new RocksRecordStoreThread(nss);
             backgroundThread->go();
