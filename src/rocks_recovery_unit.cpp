@@ -410,12 +410,12 @@ namespace mongo {
 
     Status RocksRecoveryUnit::obtainMajorityCommittedSnapshot() {
         invariant(_timestampReadSource == ReadSource::kMajorityCommitted);
-        auto snapshotName = Timestamp(_snapshotManager->getMinSnapshotForNextCommittedRead());
+        auto snapshotName = _snapshotManager->getMinSnapshotForNextCommittedRead();
         if (!snapshotName) {
             return {ErrorCodes::ReadConcernMajorityNotAvailableYet,
                     "Read concern majority reads are currently not possible."};
         }
-        _majorityCommittedSnapshot = *snapshotName;
+        _majorityCommittedSnapshot = Timestamp(*snapshotName);
         return Status::OK();
     }
 
@@ -608,6 +608,16 @@ namespace mongo {
         auto it = _transaction->GetIterator(options);
         return new PrefixStrippingIterator(
             std::move(prefix), it, isOplog ? nullptr : _compactionScheduler, std::move(upperBound));
+    }
+
+    RocksIterator* RocksRecoveryUnit::NewIteratorWithTxn(rocksdb::TOTransaction* txn,
+                                                         std::string prefix) {
+        invariant(txn);
+        std::unique_ptr<rocksdb::Slice> upperBound(new rocksdb::Slice());
+        rocksdb::ReadOptions options;
+        options.iterate_upper_bound = upperBound.get();
+        auto it = txn->GetIterator(options);
+        return new PrefixStrippingIterator(std::move(prefix), it, nullptr, std::move(upperBound));
     }
 
     void RocksRecoveryUnit::incrementCounter(const rocksdb::Slice& counterKey,

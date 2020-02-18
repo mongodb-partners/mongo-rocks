@@ -36,6 +36,7 @@
 #include <rocksdb/perf_context.h>
 #include <rocksdb/version.h>
 
+#include "mongo/db/concurrency/write_conflict_exception.h"
 #include "mongo/platform/endian.h"
 
 namespace mongo {

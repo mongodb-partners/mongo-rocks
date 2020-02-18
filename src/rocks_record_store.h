@@ -47,7 +47,7 @@
 #include "mongo/util/timer.h"
 
 namespace rocksdb {
-    class DB;
+    class TOTransactionDB;
     class Iterator;
     class Slice;
 }
@@ -60,52 +60,15 @@ namespace mongo {
     class RocksRecoveryUnit;
     class RocksOplogKeyTracker;
     class RocksRecordStore;
+    class RocksOplogManager;
 
     typedef std::list<RecordId> SortedRecordIds;
 
-    class CappedVisibilityManager {
-    public:
-        CappedVisibilityManager(RocksRecordStore* rs, RocksDurabilityManager* durabilityManager);
-        void dealtWithCappedRecord(SortedRecordIds::iterator it, bool didCommit);
-        void updateHighestSeen(const RecordId& record);
-        void setHighestSeen(const RecordId& record);
-        void addUncommittedRecord(OperationContext* opCtx, const RecordId& record);
-
-        // a bit hacky function, but does the job
-        RecordId getNextAndAddUncommittedRecord(OperationContext* opCtx,
-                                                std::function<RecordId()> nextId);
-
-        bool isCappedHidden(const RecordId& record) const;
-        RecordId oplogStartHack() const;
-
-        RecordId lowestCappedHiddenRecord() const;
-
-        void waitForAllEarlierOplogWritesToBeVisible(OperationContext* opCtx) const;
-        void oplogJournalThreadLoop(RocksDurabilityManager* durabilityManager);
-        void joinOplogJournalThreadLoop();
-
-    private:
-        void _addUncommittedRecord_inlock(OperationContext* opCtx, const RecordId& record);
-
-        // protects the state
-        mutable stdx::mutex _uncommittedRecordIdsMutex;
-        RocksRecordStore* const _rs;
-        SortedRecordIds _uncommittedRecords;
-        RecordId _oplog_highestSeen;
-        bool _shuttingDown;
-
-        // These use the _uncommittedRecordIdsMutex and are only used when _isOplog is true.
-        stdx::condition_variable _opsWaitingForJournalCV;
-        mutable stdx::condition_variable _opsBecameVisibleCV;
-        std::vector<SortedRecordIds::iterator> _opsWaitingForJournal;
-        stdx::thread _oplogJournalThread;
-    };
-
     class RocksRecordStore : public RecordStore {
     public:
-        RocksRecordStore(StringData ns, StringData id, rocksdb::DB* db,
+        RocksRecordStore(OperationContext* opCtx, StringData ns, StringData id,
+                         rocksdb::TOTransactionDB* db, RocksOplogManager* oplogManager,
                          RocksCounterManager* counterManager,
-                         RocksDurabilityManager* durabilityManager,
                          RocksCompactionScheduler* compactionScheduler, std::string prefix,
                          bool isCapped = false, int64_t cappedMaxSize = -1,
                          int64_t cappedMaxDocs = -1, CappedCallback* cappedDeleteCallback = NULL);
@@ -125,6 +88,8 @@ namespace mongo {
                                     int infoLevel = 0) const;
 
         virtual bool isInRecordIdOrder() const override { return true; }
+
+        const std::string& getIdent() const override { return _ident; }
 
         // CRUD related
 
@@ -205,6 +170,10 @@ namespace mongo {
 
         int64_t cappedDeleteAsNeeded(OperationContext* opCtx, const RecordId& justInserted);
         int64_t cappedDeleteAsNeeded_inlock(OperationContext* opCtx, const RecordId& justInserted);
+        bool haveCappedWaiters();
+
+        void notifyCappedWaitersIfNeeded();
+
         stdx::timed_mutex& cappedDeleterMutex() { return _cappedDeleterMutex; }
 
         static rocksdb::Comparator* newRocksCollectionComparator();
@@ -212,16 +181,14 @@ namespace mongo {
         class CappedInsertChange;
 
     private:
-        friend class CappedVisibilityManager;
         // we just need to expose _makePrefixedKey to RocksOplogKeyTracker
         friend class RocksOplogKeyTracker;
         // NOTE: Cursor might outlive the RecordStore. That's why we use all those
         // shared_ptrs
         class Cursor : public SeekableRecordCursor {
         public:
-            Cursor(OperationContext* opCtx, rocksdb::DB* db, std::string prefix,
-                   std::shared_ptr<CappedVisibilityManager> cappedVisibilityManager, bool forward,
-                   bool _isCapped, RecordId startIterator);
+            Cursor(OperationContext* opCtx, rocksdb::TOTransactionDB* db, std::string prefix,
+                   bool forward, bool isCapped, bool isOplog, RecordId startIterator);
 
             boost::optional<Record> next() final;
             boost::optional<Record> seekExact(const RecordId& id) final;
@@ -240,16 +207,14 @@ namespace mongo {
             boost::optional<Record> curr();
 
             OperationContext* _opCtx;
-            rocksdb::DB* _db;  // not owned
+            rocksdb::TOTransactionDB* _db;  // not owned
             std::string _prefix;
-            std::shared_ptr<CappedVisibilityManager> _cappedVisibilityManager;
             bool _forward;
             bool _isCapped;
+            bool _isOplog;
             bool _eof = false;
             bool _needFirstSeek = true;
             bool _skipNextAdvance = false;
-            rocksdb::SequenceNumber _currentSequenceNumber;
-            const RecordId _readUntilForOplog;
             RecordId _lastLoc;
             std::unique_ptr<rocksdb::Iterator> _iterator;
             std::string _seekExactResult;
@@ -259,7 +224,7 @@ namespace mongo {
 
         static RecordId _makeRecordId(const rocksdb::Slice& slice);
 
-        static RecordData _getDataFor(rocksdb::DB* db, const std::string& prefix,
+        static RecordData _getDataFor(rocksdb::TOTransactionDB* db, const std::string& prefix,
                                       OperationContext* opCtx, const RecordId& loc);
 
         RecordId _nextId();
@@ -272,7 +237,8 @@ namespace mongo {
         void _changeNumRecords(OperationContext* opCtx, int64_t amount);
         void _increaseDataSize(OperationContext* opCtx, int64_t amount);
 
-        rocksdb::DB* _db;                                // not owned
+        rocksdb::TOTransactionDB* _db;                   // not owned
+        RocksOplogManager* _oplogManager;                // not owned
         RocksCounterManager* _counterManager;            // not owned
         RocksCompactionScheduler* _compactionScheduler;  // not owned
         std::string _prefix;
@@ -306,8 +272,6 @@ namespace mongo {
         // _cappedOldestKeyHint. However, we prevent this from happening by using
         // _cappedVisibilityManager and checking isCappedHidden() during deletions
         RecordId _cappedOldestKeyHint;
-
-        std::shared_ptr<CappedVisibilityManager> _cappedVisibilityManager;
 
         std::string _ident;
         AtomicUInt64 _nextIdNum;

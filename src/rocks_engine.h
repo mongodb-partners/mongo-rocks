@@ -49,6 +49,7 @@
 #include "rocks_compaction_scheduler.h"
 #include "rocks_counter_manager.h"
 #include "rocks_durability_manager.h"
+#include "rocks_oplog_manager.h"
 #include "rocks_snapshot_manager.h"
 #include "rocks_transaction.h"
 
@@ -175,12 +176,10 @@ namespace mongo {
 
         // rocks specific api
 
-        rocksdb::DB* getDB() { return _db.get(); }
-        const rocksdb::DB* getDB() const { return _db.get(); }
+        rocksdb::TOTransactionDB* getDB() { return _db.get(); }
+        const rocksdb::TOTransactionDB* getDB() const { return _db.get(); }
         size_t getBlockCacheUsage() const { return _block_cache->GetUsage(); }
         std::shared_ptr<rocksdb::Cache> getBlockCache() { return _block_cache; }
-
-        RocksTransactionEngine* getTransactionEngine() { return &_transactionEngine; }
 
         RocksCompactionScheduler* getCompactionScheduler() const {
             return _compactionScheduler.get();
@@ -202,7 +201,7 @@ namespace mongo {
         rocksdb::Options _options() const;
 
         std::string _path;
-        std::unique_ptr<rocksdb::DB> _db;
+        std::unique_ptr<rocksdb::TOTransactionDB> _db;
         std::shared_ptr<rocksdb::Cache> _block_cache;
         int _maxWriteMBPerSec;
         std::shared_ptr<rocksdb::RateLimiter> _rateLimiter;
@@ -229,15 +228,14 @@ namespace mongo {
         // mapping from ident --> collection object
         StringMap<RocksRecordStore*> _identCollectionMap;
 
-        // This is for concurrency control
-        RocksTransactionEngine _transactionEngine;
-
         RocksSnapshotManager _snapshotManager;
 
         // CounterManages manages counters like numRecords and dataSize for record stores
         std::unique_ptr<RocksCounterManager> _counterManager;
 
         std::unique_ptr<RocksCompactionScheduler> _compactionScheduler;
+
+        std::unique_ptr<RocksOplogManager> _oplogManager;
 
         static const std::string kMetadataPrefix;
 

@@ -70,7 +70,7 @@ namespace mongo {
 
     BSONObj RocksServerStatusSection::generateSection(OperationContext* opCtx,
                                                       const BSONElement& configElement) const {
-        Lock::GlobalLock lk(opCtx, LockMode::MODE_IS, Milliseconds::max());
+        Lock::GlobalLock lk(opCtx, LockMode::MODE_IS);
 
         BSONObjBuilder bob;
 
@@ -113,10 +113,6 @@ namespace mongo {
         }
         bob.append("total-live-recovery-units", RocksRecoveryUnit::getTotalLiveRecoveryUnits());
         bob.append("block-cache-usage", PrettyPrintBytes(_engine->getBlockCacheUsage()));
-        bob.append("transaction-engine-keys",
-                   static_cast<long long>(_engine->getTransactionEngine()->numKeysTracked()));
-        bob.append("transaction-engine-snapshots",
-                   static_cast<long long>(_engine->getTransactionEngine()->numActiveSnapshots()));
 
         std::vector<rocksdb::ThreadStatus> threadList;
         auto s = rocksdb::Env::Default()->GetThreadList(&threadList);
@@ -206,6 +202,7 @@ namespace mongo {
             bob.append("counters", countersObjBuilder.obj());
         }
 
+        // TODO(wolfkdy): add t/o transaction stats here
         RocksEngine::appendGlobalStats(bob);
 
         return bob.obj();

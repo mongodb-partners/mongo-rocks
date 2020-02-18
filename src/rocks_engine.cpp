@@ -202,13 +202,14 @@ namespace mongo {
         _compactionScheduler.reset(new RocksCompactionScheduler());
 
         // open DB
-        rocksdb::DB* db;
+        rocksdb::TOTransactionDB* db;
         rocksdb::Status s;
-        if (readOnly) {
-            s = rocksdb::DB::OpenForReadOnly(_options(), path, &db);
-        } else {
-            s = rocksdb::DB::Open(_options(), path, &db);
-        }
+
+        // TODO(wolfkdy): support readOnly mode
+        invariant(!readOnly);
+
+        s = rocksdb::TOTransactionDB::Open(_options(), rocksdb::TOTransactionDBOptions(), path,
+                                           &db);
         invariantRocksOK(s);
         _db.reset(db);
 
@@ -216,7 +217,11 @@ namespace mongo {
             new RocksCounterManager(_db.get(), rocksGlobalOptions.crashSafeCounters));
 
         // open iterator
-        std::unique_ptr<rocksdb::Iterator> iter(_db->NewIterator(rocksdb::ReadOptions()));
+        auto txn = std::unique_ptr<rocksdb::TOTransaction>(
+            _db->BeginTransaction(rocksdb::WriteOptions(), rocksdb::TOTransactionOptions()));
+        // metadata is write no-timestamped, so read no-timestamped
+        rocksdb::ReadOptions readOpts;
+        auto iter = std::unique_ptr<rocksdb::Iterator>(txn->GetIterator(readOpts));
 
         // find maxPrefix
         iter->SeekToLast();
@@ -294,7 +299,7 @@ namespace mongo {
     }
 
     RecoveryUnit* RocksEngine::newRecoveryUnit() {
-        return new RocksRecoveryUnit(&_transactionEngine, &_snapshotManager, _db.get(),
+        return new RocksRecoveryUnit(_db.get(), _oplogManager.get(), &_snapshotManager,
                                      _counterManager.get(), _compactionScheduler.get(),
                                      _durabilityManager.get(), _durable);
     }
@@ -332,13 +337,13 @@ namespace mongo {
 
         std::unique_ptr<RocksRecordStore> recordStore =
             options.capped ? stdx::make_unique<RocksRecordStore>(
-                                 ns, ident, _db.get(), _counterManager.get(),
-                                 _durabilityManager.get(), _compactionScheduler.get(), prefix, true,
+                                 opCtx, ns, ident, _db.get(), _oplogManager.get(),
+                                 _counterManager.get(), _compactionScheduler.get(), prefix, true,
                                  options.cappedSize ? options.cappedSize : 4096,  // default size
                                  options.cappedMaxDocs ? options.cappedMaxDocs : -1)
                            : stdx::make_unique<RocksRecordStore>(
-                                 ns, ident, _db.get(), _counterManager.get(),
-                                 _durabilityManager.get(), _compactionScheduler.get(), prefix);
+                                 opCtx, ns, ident, _db.get(), _oplogManager.get(),
+                                 _counterManager.get(), _compactionScheduler.get(), prefix);
 
         {
             stdx::lock_guard<stdx::mutex> lk(_identObjectMapMutex);

@@ -534,7 +534,10 @@ namespace mongo {
             rocksdb::Slice valueSlice(value.getBuffer(), value.getSize());
 
             auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(_opCtx);
-            ru->writeBatch()->Put(prefixedKey, valueSlice);
+            invariant(ru);
+            auto transaction = ru->getTransaction();
+            invariant(transaction);
+            invariantRocksOK(transaction->Put(prefixedKey, valueSlice));
 
             _records.clear();
         }
@@ -713,7 +716,7 @@ namespace mongo {
         rocksdb::Slice valueVectorSlice(valueVector.getBuffer(), valueVector.getSize());
         auto txn = ru->getTransaction();
         invariant(txn);
-        invariantRocksOK(txn->Put(prefixedKey, valueSlice));
+        invariantRocksOK(txn->Put(prefixedKey, valueVectorSlice));
         return Status::OK();
     }
 
@@ -888,7 +891,7 @@ namespace mongo {
                                encodedKey.getTypeBits().getSize());
         }
 
-        invariantRocksOK(transaction->put(prefixedKey, value));
+        invariantRocksOK(transaction->Put(prefixedKey, value));
         _indexStorageSize.fetch_add(static_cast<long long>(prefixedKey.size()),
                                     std::memory_order_relaxed);
 

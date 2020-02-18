@@ -71,7 +71,7 @@ namespace mongo {
              * @return Number of documents deleted.
              */
             int64_t _deleteExcessDocuments() {
-                if (!getGlobalServiceContext()->getGlobalStorageEngine()) {
+                if (!getGlobalServiceContext()->getStorageEngine()) {
                     LOG(1) << "no global storage engine yet";
                     return 0;
                 }

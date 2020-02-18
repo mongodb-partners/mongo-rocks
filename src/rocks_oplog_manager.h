@@ -42,6 +42,8 @@ namespace rocksdb {
 }  // namespace rocksdb
 
 namespace mongo {
+    class RocksEngine;
+
     // Manages oplog visibility, by periodically querying RocksDB's all_committed timestamp value
     // and
     // then using that timestamp for all transactions that read the oplog collection.

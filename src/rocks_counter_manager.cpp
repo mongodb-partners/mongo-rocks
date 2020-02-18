@@ -68,8 +68,9 @@ namespace mongo {
         return static_cast<long long>(endian::littleToNative(ret));
     }
 
-    void RocksCounterManager::updateCounter(const std::string& counterKey, long long count,
-                                            rocksdb::WriteBatch* writeBatch) {
+    void RocksCounterManager::updateCounter(const std::string& counterKey, long long count) {
+        // TODO(wolfkdy): rewrite with TOTDB api
+        /*
         if (_crashSafe) {
             int64_t storage;
             writeBatch->Put(counterKey, _encodeCounter(count, &storage));
@@ -87,9 +88,12 @@ namespace mongo {
                 _syncCounter = 0;
             }
         }
+        */
     }
 
     void RocksCounterManager::sync() {
+        // TODO(wolfkdy): rewrite with TOTDB api
+        /*
         rocksdb::WriteBatch wb;
         {
             stdx::lock_guard<stdx::mutex> lk(_lock);
@@ -110,6 +114,7 @@ namespace mongo {
             stdx::lock_guard<stdx::mutex> lk(_lock);
             _syncing = false;
         }
+        */
     }
 
     rocksdb::Slice RocksCounterManager::_encodeCounter(long long counter, int64_t* storage) {
