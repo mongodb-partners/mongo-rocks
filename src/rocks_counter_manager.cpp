@@ -69,11 +69,11 @@ namespace mongo {
     }
 
     void RocksCounterManager::updateCounter(const std::string& counterKey, long long count) {
-        // TODO(wolfkdy): rewrite with TOTDB api
-        /*
         if (_crashSafe) {
             int64_t storage;
-            writeBatch->Put(counterKey, _encodeCounter(count, &storage));
+            auto txn = _makeTxn();
+            invariantRocksOK(txn->Put(counterKey, _encodeCounter(count, &storage)));
+            invariantRocksOK(txn->Commit());
         } else {
             stdx::lock_guard<stdx::mutex> lk(_lock);
             _counters[counterKey] = count;
@@ -81,20 +81,20 @@ namespace mongo {
             if (!_syncing && _syncCounter >= kSyncEvery) {
                 // let's sync this now. piggyback on writeBatch
                 int64_t storage;
+                auto txn = _makeTxn();
                 for (const auto& counter : _counters) {
-                    writeBatch->Put(counter.first, _encodeCounter(counter.second, &storage));
+                    invariantRocksOK(
+                        txn->Put(counter.first, _encodeCounter(counter.second, &storage)));
                 }
                 _counters.clear();
                 _syncCounter = 0;
+                invariantRocksOK(txn->Commit());
             }
         }
-        */
     }
 
     void RocksCounterManager::sync() {
-        // TODO(wolfkdy): rewrite with TOTDB api
-        /*
-        rocksdb::WriteBatch wb;
+        auto txn = _makeTxn();
         {
             stdx::lock_guard<stdx::mutex> lk(_lock);
             if (_syncing || _counters.size() == 0) {
@@ -102,23 +102,27 @@ namespace mongo {
             }
             int64_t storage;
             for (const auto& counter : _counters) {
-                wb.Put(counter.first, _encodeCounter(counter.second, &storage));
+                invariantRocksOK(txn->Put(counter.first, _encodeCounter(counter.second, &storage)));
             }
             _counters.clear();
             _syncCounter = 0;
             _syncing = true;
         }
-        auto s = _db->Write(rocksdb::WriteOptions(), &wb);
-        invariantRocksOK(s);
+        invariantRocksOK(txn->Commit());
         {
             stdx::lock_guard<stdx::mutex> lk(_lock);
             _syncing = false;
         }
-        */
     }
 
     rocksdb::Slice RocksCounterManager::_encodeCounter(long long counter, int64_t* storage) {
         *storage = static_cast<int64_t>(endian::littleToNative(counter));
         return rocksdb::Slice(reinterpret_cast<const char*>(storage), sizeof(*storage));
     }
-}
+
+    std::unique_ptr<rocksdb::TOTransaction> RocksCounterManager::_makeTxn() {
+        rocksdb::WriteOptions options;
+        rocksdb::TOTransactionOptions txnOptions;
+        return std::unique_ptr<rocksdb::TOTransaction>(_db->BeginTransaction(options, txnOptions));
+    }
+}  // namespace mongo
