@@ -44,7 +44,6 @@
 
 #include "rocks_engine.h"
 #include "rocks_recovery_unit.h"
-#include "rocks_transaction.h"
 
 namespace mongo {
     using std::string;

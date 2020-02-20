@@ -48,7 +48,6 @@
 #include "mongo/db/storage/journal_listener.h"
 #include "mongo/util/log.h"
 
-#include "rocks_transaction.h"
 #include "rocks_util.h"
 
 #include "rocks_begin_transaction_block.h"
@@ -574,6 +573,10 @@ namespace mongo {
         invariant(_commitTimestamp.isNull());
 
         invariant(0, "RocksRecoveryUnit::setPrepareTimestamp should not be called");
+    }
+
+    void RocksRecoveryUnit::setIgnorePrepared(bool ignore) {
+        invariant(0, "RocksRecoveryUnit::setIgnorePrepared should not be called");
     }
 
     void RocksRecoveryUnit::setTimestampReadSource(ReadSource readSource,

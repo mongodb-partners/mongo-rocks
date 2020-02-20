@@ -47,7 +47,6 @@
 #include "rocks_index.h"
 #include "rocks_recovery_unit.h"
 #include "rocks_snapshot_manager.h"
-#include "rocks_transaction.h"
 
 namespace mongo {
     namespace {

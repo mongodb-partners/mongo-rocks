@@ -51,7 +51,6 @@
 #include "rocks_durability_manager.h"
 #include "rocks_oplog_manager.h"
 #include "rocks_snapshot_manager.h"
-#include "rocks_transaction.h"
 
 namespace rocksdb {
     class ColumnFamilyHandle;
@@ -181,9 +180,15 @@ namespace mongo {
         size_t getBlockCacheUsage() const { return _block_cache->GetUsage(); }
         std::shared_ptr<rocksdb::Cache> getBlockCache() { return _block_cache; }
 
+        RocksCounterManager* getCounterManager() const { return _counterManager.get(); }
+
         RocksCompactionScheduler* getCompactionScheduler() const {
             return _compactionScheduler.get();
         }
+
+        RocksOplogManager* getOplogManager() const { return _oplogManager.get(); }
+
+        RocksDurabilityManager* getDurabilityManager() const { return _durabilityManager.get(); }
 
         int getMaxWriteMBPerSec() const { return _maxWriteMBPerSec; }
         void setMaxWriteMBPerSec(int maxWriteMBPerSec);

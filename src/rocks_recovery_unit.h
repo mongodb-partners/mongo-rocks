@@ -35,7 +35,10 @@
 #include <unordered_map>
 #include <vector>
 
+#include <rocksdb/iterator.h>
 #include <rocksdb/slice.h>
+#include <rocksdb/utilities/totransaction.h>
+#include <rocksdb/utilities/totransaction_db.h>
 #include <rocksdb/utilities/write_batch_with_index.h>
 #include <rocksdb/write_batch.h>
 
@@ -49,7 +52,6 @@
 #include "rocks_counter_manager.h"
 #include "rocks_durability_manager.h"
 #include "rocks_snapshot_manager.h"
-#include "rocks_transaction.h"
 
 namespace rocksdb {
     class DB;

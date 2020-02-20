@@ -63,6 +63,8 @@
 #include "mongo/util/background.h"
 #include "mongo/util/concurrency/idle_thread_block.h"
 #include "mongo/util/concurrency/ticketholder.h"
+#include "mongo/util/fail_point.h"
+#include "mongo/util/fail_point_service.h"
 #include "mongo/util/log.h"
 #include "mongo/util/processinfo.h"
 
@@ -616,4 +618,87 @@ namespace mongo {
 
         return options;
     }
-}
+
+    namespace {
+
+        MONGO_FAIL_POINT_DEFINE(RocksPreserveSnapshotHistoryIndefinitely);
+
+    }  // namespace
+
+    void RocksEngine::setStableTimestamp(Timestamp stableTimestamp) { invariant(0); }
+
+    void RocksEngine::setInitialDataTimestamp(Timestamp initialDataTimestamp) { invariant(0); }
+
+    void RocksEngine::setOldestTimestamp(Timestamp oldestTimestamp, bool force) {
+        if (MONGO_FAIL_POINT(RocksPreserveSnapshotHistoryIndefinitely)) {
+            return;
+        }
+
+        if (oldestTimestamp == Timestamp()) {
+            // Nothing to set yet.
+            return;
+        }
+        const auto oplogReadTimestamp = Timestamp(_oplogManager->getOplogReadTimestamp());
+        if (!force && !oplogReadTimestamp.isNull() && oldestTimestamp > oplogReadTimestamp) {
+            // Oplog visibility is updated asynchronously from replication updating the commit
+            // point.
+            // When force is not set, lag the `oldest_timestamp` to the possibly stale oplog read
+            // timestamp value. This guarantees an oplog reader's `read_timestamp` can always
+            // be serviced. When force is set, we respect the caller's request and do not lag the
+            // oldest timestamp.
+            oldestTimestamp = oplogReadTimestamp;
+        }
+        const auto localSnapshotTimestamp = _snapshotManager.getLocalSnapshot();
+        if (!force && localSnapshotTimestamp && oldestTimestamp > *localSnapshotTimestamp) {
+            // When force is not set, lag the `oldest timestamp` to the local snapshot timestamp.
+            // Secondary reads are performed at the local snapshot timestamp, so advancing the
+            // oldest
+            // timestamp beyond the local snapshot timestamp could cause secondary reads to fail.
+            // This
+            // is not a problem when majority read concern is enabled, since the replication system
+            // will
+            // not set the stable timestamp ahead of the local snapshot timestamp. However, when
+            // majority read concern is disabled and the oldest timestamp is set by the oplog
+            // manager,
+            // the oplog manager can set the oldest timestamp ahead of the local snapshot timestamp.
+            oldestTimestamp = *localSnapshotTimestamp;
+        }
+
+        rocksdb::RocksTimeStamp ts(oldestTimestamp.asULL());
+        invariantRocksOK(_db->SetTimeStamp(rocksdb::TimeStampType::kOldest, ts));
+
+        if (force) {
+            LOG(2) << "oldest_timestamp and commit_timestamp force set to " << oldestTimestamp;
+        } else {
+            LOG(2) << "oldest_timestamp set to " << oldestTimestamp;
+        }
+    }
+
+    bool RocksEngine::supportsRecoverToStableTimestamp() const { return false; }
+
+    bool RocksEngine::supportsRecoveryTimestamp() const { return false; }
+
+    StatusWith<Timestamp> RocksEngine::recoverToStableTimestamp(OperationContext* opCtx) {
+        MONGO_UNREACHABLE
+    }
+
+    boost::optional<Timestamp> RocksEngine::getRecoveryTimestamp() const { MONGO_UNREACHABLE }
+
+    /**
+     * Returns a timestamp value that is at or before the last checkpoint. Everything before
+     * this
+     * value is guaranteed to be persisted on disk and replication recovery will not need to
+     * replay documents with an earlier time.
+     */
+    boost::optional<Timestamp> RocksEngine::getLastStableCheckpointTimestamp() const {
+        MONGO_UNREACHABLE
+    }
+
+    Timestamp RocksEngine::getAllCommittedTimestamp() const {
+        return _oplogManager->fetchAllCommittedValue();
+    }
+
+    bool RocksEngine::supportsReadConcernSnapshot() const { return true; }
+
+    bool RocksEngine::supportsReadConcernMajority() const { return true; }
+}  // namespace mongo

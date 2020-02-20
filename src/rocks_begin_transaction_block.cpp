@@ -70,6 +70,11 @@ namespace mongo {
         _rollback = false;
     }
 
+    Timestamp RocksBeginTxnBlock::getTimestamp() const {
+        invariant(!_readTimestamp.isNull());
+        return _readTimestamp;
+    }
+
     RocksBeginTxnBlock::~RocksBeginTxnBlock() {
         if (_rollback) {
             invariant(_transaction->Rollback().ok());
