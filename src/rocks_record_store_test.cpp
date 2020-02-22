@@ -75,7 +75,6 @@ namespace mongo {
             : _dbpath("rocks_test"),
               _engine(_dbpath.path(), true /* durable */, 3 /* kRocksFormatVersion */,
                       false /* readOnly */) {
-            boost::filesystem::remove_all(_dbpath.path());
             repl::ReplicationCoordinator::set(serviceContext(),
                                               std::make_unique<repl::ReplicationCoordinatorMock>(
                                                   serviceContext(), repl::ReplSettings()));
@@ -112,11 +111,7 @@ namespace mongo {
         }
 
         std::unique_ptr<RecoveryUnit> newRecoveryUnit() final {
-            return stdx::make_unique<RocksRecoveryUnit>(
-                _engine.getDB(), _engine.getOplogManager(),
-                checked_cast<RocksSnapshotManager*>(_engine.getSnapshotManager()),
-                _engine.getCounterManager(), _engine.getCompactionScheduler(),
-                _engine.getDurabilityManager(), true /* durale */);
+            return std::unique_ptr<RecoveryUnit>(_engine.newRecoveryUnit());
         }
 
         bool supportsDocLocking() final { return true; }
