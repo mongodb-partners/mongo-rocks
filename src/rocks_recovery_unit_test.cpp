@@ -183,7 +183,7 @@ TEST_F(RocksRecoveryUnitTestFixture, ChangeIsPassedLastTimestampSetOnCommit) {
         ASSERT(!commitTs);
         ASSERT_OK(opCtx->recoveryUnit()->setTimestamp(ts2));
         ASSERT(!commitTs);
-        // NOTE(deyukong): totdb only support setting monotonic commit-ts
+        // NOTE(wolfkdy): totdb only support setting monotonic commit-ts
         // ASSERT_OK(opCtx->recoveryUnit()->setTimestamp(ts1));
         // ASSERT(!commitTs);
         wuow.commit();
