@@ -75,12 +75,13 @@ namespace mongo {
             : _dbpath("rocks_test"),
               _engine(_dbpath.path(), true /* durable */, 3 /* kRocksFormatVersion */,
                       false /* readOnly */) {
+            boost::filesystem::remove_all(_dbpath.path());
             repl::ReplicationCoordinator::set(serviceContext(),
                                               std::make_unique<repl::ReplicationCoordinatorMock>(
                                                   serviceContext(), repl::ReplSettings()));
         }
 
-        ~RocksHarnessHelper() {}
+        virtual ~RocksHarnessHelper() {}
 
         virtual std::unique_ptr<RecordStore> newNonCappedRecordStore() {
             return newNonCappedRecordStore("a.b");
@@ -142,10 +143,6 @@ namespace mongo {
         std::unique_ptr<RocksHarnessHelper> harnessHelper(new RocksHarnessHelper());
         std::unique_ptr<RecordStore> rs(harnessHelper->newNonCappedRecordStore());
 
-        RocksCounterManager cm(harnessHelper->getEngine()->getDB(), false /* crashSafe */);
-
-        checked_cast<RocksRecordStore*>(rs.get())->setCounterManager_ForTest(&cm);
-
         int N = 12;
 
         {
@@ -166,6 +163,11 @@ namespace mongo {
             ASSERT_EQUALS(N, rs->numRecords(opCtx.get()));
         }
 
+        {
+            ServiceContext::UniqueOperationContext opCtx(harnessHelper->newOperationContext());
+            rs = harnessHelper->newNonCappedRecordStore();
+            ASSERT_EQUALS(N, rs->numRecords(opCtx.get()));
+        }
         rs.reset(nullptr);  // this has to be deleted before ss
     }
 

@@ -81,15 +81,15 @@ env.Library(
     )
 
 
-# env.CppUnitTest(
-#    target='storage_rocks_index_test',
-#    source=['src/rocks_index_test.cpp'
-#            ],
-#    LIBDEPS=[
-#         'storage_rocks_mock',
-#         '$BUILD_DIR/mongo/db/storage/sorted_data_interface_test_harness'
-#         ]
-#    )
+env.CppUnitTest(
+   target='storage_rocks_index_test',
+   source=['src/rocks_index_test.cpp'
+           ],
+   LIBDEPS=[
+        'storage_rocks_mock',
+        '$BUILD_DIR/mongo/db/storage/sorted_data_interface_test_harness'
+        ]
+   )
 
 
 env.CppUnitTest(

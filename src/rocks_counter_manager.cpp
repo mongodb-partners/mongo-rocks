@@ -26,6 +26,8 @@
  *    it in the license file.
  */
 
+#define MONGO_LOG_DEFAULT_COMPONENT ::mongo::logger::LogComponent::kStorage
+
 #include "mongo/platform/basic.h"
 #include "mongo/platform/endian.h"
 
@@ -37,10 +39,10 @@
 #include <string>
 
 // for invariant()
+#include <rocksdb/db.h>
 #include "mongo/stdx/mutex.h"
 #include "mongo/util/assert_util.h"
-
-#include <rocksdb/db.h>
+#include "mongo/util/log.h"
 
 #include "rocks_util.h"
 
