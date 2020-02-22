@@ -76,7 +76,7 @@ namespace mongo {
     private:
         rocksdb::TOTransactionDB* _db;
         rocksdb::TOTransaction* _transaction;
-        bool _rollback;
+        bool _rollback = false;
         Timestamp _readTimestamp;
     };
 

@@ -368,6 +368,7 @@ namespace mongo {
                 invariant(status.ok(), status.ToString());
                 _isTimestamped = true;
             }
+            status = _transaction->Commit();
             LOG(3) << "Rocks commit_transaction for snapshot id " << _mySnapshotId;
         } else {
             status = _transaction->Rollback();
@@ -598,7 +599,7 @@ namespace mongo {
     }
 
     rocksdb::Status RocksRecoveryUnit::Get(const rocksdb::Slice& key, std::string* value) {
-        invariant(_transaction.get());
+        invariant(getTransaction());
         rocksdb::ReadOptions options;
         return _transaction->Get(options, key, value);
     }

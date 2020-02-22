@@ -69,9 +69,9 @@ namespace mongo {
 
     using std::string;
 
-    class RocksRecordStoreHarnessHelper final : public RecordStoreHarnessHelper {
+    class RocksHarnessHelper final : public RecordStoreHarnessHelper {
     public:
-        RocksRecordStoreHarnessHelper()
+        RocksHarnessHelper()
             : _dbpath("rocks_test"),
               _engine(_dbpath.path(), true /* durable */, 3 /* kRocksFormatVersion */,
                       false /* readOnly */) {
@@ -80,7 +80,7 @@ namespace mongo {
                                                   serviceContext(), repl::ReplSettings()));
         }
 
-        ~RocksRecordStoreHarnessHelper() {}
+        ~RocksHarnessHelper() {}
 
         virtual std::unique_ptr<RecordStore> newNonCappedRecordStore() {
             return newNonCappedRecordStore("a.b");
@@ -107,7 +107,7 @@ namespace mongo {
             return stdx::make_unique<RocksRecordStore>(
                 &opCtx, ns, "1", _engine.getDB(), _engine.getOplogManager(),
                 _engine.getCounterManager(), _engine.getCompactionScheduler(), "prefix",
-                cappedMaxSize, cappedMaxDocs);
+                true /* isCapped */, cappedMaxSize, cappedMaxDocs);
         }
 
         std::unique_ptr<RecoveryUnit> newRecoveryUnit() final {
@@ -120,6 +120,8 @@ namespace mongo {
 
         bool supportsDocLocking() final { return true; }
 
+        RocksEngine* getEngine() { return &_engine; }
+
     private:
         unittest::TempDir _dbpath;
         ClockSourceMock _cs;
@@ -128,12 +130,43 @@ namespace mongo {
     };
 
     std::unique_ptr<HarnessHelper> makeHarnessHelper() {
-        return stdx::make_unique<RocksRecordStoreHarnessHelper>();
+        return stdx::make_unique<RocksHarnessHelper>();
     }
 
     MONGO_INITIALIZER(RegisterHarnessFactory)(InitializerContext* const) {
         mongo::registerHarnessHelperFactory(makeHarnessHelper);
         return Status::OK();
+    }
+
+    TEST(RocksRecordStoreTest, CounterManager1) {
+        std::unique_ptr<RocksHarnessHelper> harnessHelper(new RocksHarnessHelper());
+        std::unique_ptr<RecordStore> rs(harnessHelper->newNonCappedRecordStore());
+
+        RocksCounterManager cm(harnessHelper->getEngine()->getDB(), false /* crashSafe */);
+
+        checked_cast<RocksRecordStore*>(rs.get())->setCounterManager_ForTest(&cm);
+
+        int N = 12;
+
+        {
+            ServiceContext::UniqueOperationContext opCtx(harnessHelper->newOperationContext());
+            {
+                WriteUnitOfWork uow(opCtx.get());
+                for (int i = 0; i < N; i++) {
+                    StatusWith<RecordId> res =
+                        rs->insertRecord(opCtx.get(), "a", 2, Timestamp(), false);
+                    ASSERT_OK(res.getStatus());
+                }
+                uow.commit();
+            }
+        }
+
+        {
+            ServiceContext::UniqueOperationContext opCtx(harnessHelper->newOperationContext());
+            ASSERT_EQUALS(N, rs->numRecords(opCtx.get()));
+        }
+
+        rs.reset(nullptr);  // this has to be deleted before ss
     }
 
 }  // namespace mongo

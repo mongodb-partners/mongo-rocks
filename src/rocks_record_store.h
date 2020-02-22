@@ -176,6 +176,8 @@ namespace mongo {
 
         stdx::timed_mutex& cappedDeleterMutex() { return _cappedDeleterMutex; }
 
+        void setCounterManager_ForTest(RocksCounterManager* m) { _counterManager = m; }
+
         static rocksdb::Comparator* newRocksCollectionComparator();
 
         class CappedInsertChange;

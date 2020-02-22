@@ -214,6 +214,7 @@ namespace mongo {
     }
 
     RecordData RocksRecordStore::dataFor(OperationContext* opCtx, const RecordId& loc) const {
+        dassert(opCtx->lockState()->isReadLocked());
         RecordData rd = _getDataFor(_db, _prefix, opCtx, loc);
         massert(28605, "Didn't find RecordId in RocksRecordStore", (rd.data() != nullptr));
         return rd;

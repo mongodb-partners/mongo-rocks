@@ -69,6 +69,7 @@ namespace mongo {
     class RocksIndexBase;
     class RocksRecordStore;
     class JournalListener;
+    class RocksOplogManager;
 
     class RocksEngine final : public KVEngine {
         MONGO_DISALLOW_COPYING(RocksEngine);
