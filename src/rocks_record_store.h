@@ -61,16 +61,14 @@ namespace mongo {
     class RocksOplogKeyTracker;
     class RocksRecordStore;
     class RocksOplogManager;
+    class RocksEngine;
 
     typedef std::list<RecordId> SortedRecordIds;
 
     class RocksRecordStore : public RecordStore {
     public:
-        RocksRecordStore(OperationContext* opCtx, StringData ns, StringData id,
-                         rocksdb::TOTransactionDB* db, RocksOplogManager* oplogManager,
-                         RocksCounterManager* counterManager,
-                         RocksCompactionScheduler* compactionScheduler, std::string prefix,
-                         bool isCapped = false, int64_t cappedMaxSize = -1,
+        RocksRecordStore(RocksEngine* engine, OperationContext* opCtx, StringData ns, StringData id,
+                         std::string prefix, bool isCapped = false, int64_t cappedMaxSize = -1,
                          int64_t cappedMaxDocs = -1, CappedCallback* cappedDeleteCallback = NULL);
 
         virtual ~RocksRecordStore();
@@ -239,6 +237,7 @@ namespace mongo {
         void _changeNumRecords(OperationContext* opCtx, int64_t amount);
         void _increaseDataSize(OperationContext* opCtx, int64_t amount);
 
+        RocksEngine* _engine;                            // not owned
         rocksdb::TOTransactionDB* _db;                   // not owned
         RocksOplogManager* _oplogManager;                // not owned
         RocksCounterManager* _counterManager;            // not owned
@@ -286,4 +285,4 @@ namespace mongo {
         bool _shuttingDown;
         bool _hasBackgroundThread;
     };
-}
+}  // namespace mongo

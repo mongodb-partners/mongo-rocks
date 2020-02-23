@@ -187,7 +187,17 @@ namespace mongo {
             return _compactionScheduler.get();
         }
 
+        void startOplogManager(OperationContext* opCtx, RocksRecordStore* oplogRecordStore);
+
+        void haltOplogManager();
+
         RocksOplogManager* getOplogManager() const { return _oplogManager.get(); }
+
+        /*
+         * This function is called when replication has completed a batch.  In this function, we
+         * refresh our oplog visiblity read-at-timestamp value.
+         */
+        void replicationBatchIsComplete() const override;
 
         RocksDurabilityManager* getDurabilityManager() const { return _durabilityManager.get(); }
 
@@ -226,6 +236,14 @@ namespace mongo {
         // protected by _identMapMutex
         uint32_t _maxPrefix;
 
+        // If _keepDataHistory is true, then the storage engine keeps all history after the stable
+        // timestamp, and WiredTigerKVEngine is responsible for advancing the oldest timestamp. If
+        // _keepDataHistory is false (i.e. majority reads are disabled), then we only keep history
+        // after
+        // the "no holes point", and WiredTigerOplogManager is responsible for advancing the oldest
+        // timestamp.
+        const bool _keepDataHistory = true;
+
         // _identObjectMapMutex protects both _identIndexMap and _identCollectionMap. It should
         // never be locked together with _identMapMutex
         mutable stdx::mutex _identObjectMapMutex;
@@ -241,6 +259,9 @@ namespace mongo {
 
         std::unique_ptr<RocksCompactionScheduler> _compactionScheduler;
 
+        // Mutex to protect use of _oplogManagerCount by this instance of KV engine.
+        mutable stdx::mutex _oplogManagerMutex;
+        std::size_t _oplogManagerCount = 0;
         std::unique_ptr<RocksOplogManager> _oplogManager;
 
         static const std::string kMetadataPrefix;

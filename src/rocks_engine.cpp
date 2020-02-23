@@ -57,6 +57,7 @@
 #include "mongo/db/index/index_descriptor.h"
 #include "mongo/db/namespace_string.h"
 #include "mongo/db/operation_context.h"
+#include "mongo/db/server_options.h"
 #include "mongo/db/server_parameters.h"
 #include "mongo/db/storage/journal_listener.h"
 #include "mongo/stdx/memory.h"
@@ -176,7 +177,11 @@ namespace mongo {
 
     RocksEngine::RocksEngine(const std::string& path, bool durable, int formatVersion,
                              bool readOnly)
-        : _path(path), _durable(durable), _formatVersion(formatVersion), _maxPrefix(0) {
+        : _path(path),
+          _durable(durable),
+          _formatVersion(formatVersion),
+          _maxPrefix(0),
+          _keepDataHistory(serverGlobalParams.enableMajorityReadConcern) {
         {  // create block cache
             uint64_t cacheSizeGB = rocksGlobalOptions.cacheSizeGB;
             if (cacheSizeGB == 0) {
@@ -339,13 +344,10 @@ namespace mongo {
 
         std::unique_ptr<RocksRecordStore> recordStore =
             options.capped ? stdx::make_unique<RocksRecordStore>(
-                                 opCtx, ns, ident, _db.get(), _oplogManager.get(),
-                                 _counterManager.get(), _compactionScheduler.get(), prefix, true,
+                                 this, opCtx, ns, ident, prefix, true,
                                  options.cappedSize ? options.cappedSize : 4096,  // default size
                                  options.cappedMaxDocs ? options.cappedMaxDocs : -1)
-                           : stdx::make_unique<RocksRecordStore>(
-                                 opCtx, ns, ident, _db.get(), _oplogManager.get(),
-                                 _counterManager.get(), _compactionScheduler.get(), prefix);
+                           : stdx::make_unique<RocksRecordStore>(this, opCtx, ns, ident, prefix);
 
         {
             stdx::lock_guard<stdx::mutex> lk(_identObjectMapMutex);
@@ -594,8 +596,9 @@ namespace mongo {
         } else if (rocksGlobalOptions.compression == "lz4hc") {
             options.compression_per_level[2] = rocksdb::kLZ4HCCompression;
         } else {
-            log() << "Unknown compression, will use default (snappy)";
-            options.compression_per_level[2] = rocksdb::kSnappyCompression;
+            // TODO(wolfkdy): replace none with snappy, only for compile
+            log() << "Unknown compression, will use default (none)";
+            options.compression_per_level[2] = rocksdb::kNoCompression;
         }
 
         options.statistics = _statistics;
@@ -701,4 +704,23 @@ namespace mongo {
     bool RocksEngine::supportsReadConcernSnapshot() const { return true; }
 
     bool RocksEngine::supportsReadConcernMajority() const { return true; }
+
+    void RocksEngine::startOplogManager(OperationContext* opCtx,
+                                        RocksRecordStore* oplogRecordStore) {
+        stdx::lock_guard<stdx::mutex> lock(_oplogManagerMutex);
+        if (_oplogManagerCount == 0)
+            _oplogManager->start(opCtx, oplogRecordStore, !_keepDataHistory);
+        _oplogManagerCount++;
+    }
+
+    void RocksEngine::haltOplogManager() {
+        stdx::unique_lock<stdx::mutex> lock(_oplogManagerMutex);
+        invariant(_oplogManagerCount > 0);
+        _oplogManagerCount--;
+        if (_oplogManagerCount == 0) {
+            _oplogManager->halt();
+        }
+    }
+
+    void RocksEngine::replicationBatchIsComplete() const { _oplogManager->triggerJournalFlush(); }
 }  // namespace mongo

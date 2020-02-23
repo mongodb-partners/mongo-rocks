@@ -115,18 +115,16 @@ namespace mongo {
         std::string _prefix;
     };
 
-    RocksRecordStore::RocksRecordStore(OperationContext* opCtx, StringData ns, StringData id,
-                                       rocksdb::TOTransactionDB* db,
-                                       RocksOplogManager* oplogManager,
-                                       RocksCounterManager* counterManager,
-                                       RocksCompactionScheduler* compactionScheduler,
-                                       std::string prefix, bool isCapped, int64_t cappedMaxSize,
-                                       int64_t cappedMaxDocs, CappedCallback* cappedCallback)
+    RocksRecordStore::RocksRecordStore(RocksEngine* engine, OperationContext* opCtx, StringData ns,
+                                       StringData id, std::string prefix, bool isCapped,
+                                       int64_t cappedMaxSize, int64_t cappedMaxDocs,
+                                       CappedCallback* cappedCallback)
         : RecordStore(ns),
-          _db(db),
-          _oplogManager(oplogManager),
-          _counterManager(counterManager),
-          _compactionScheduler(compactionScheduler),
+          _engine(engine),
+          _db(engine->getDB()),
+          _oplogManager(NamespaceString::oplog(ns) ? engine->getOplogManager() : nullptr),
+          _counterManager(engine->getCounterManager()),
+          _compactionScheduler(engine->getCompactionScheduler()),
           _prefix(std::move(prefix)),
           _isCapped(isCapped),
           _cappedMaxSize(cappedMaxSize),
@@ -188,7 +186,7 @@ namespace mongo {
         _hasBackgroundThread = RocksEngine::initRsOplogBackgroundThread(ns);
         invariant(_isOplog == (_oplogManager != nullptr));
         if (_isOplog) {
-            _oplogManager->start(opCtx, this, true /* update oldestTimestamp */);
+            _engine->startOplogManager(opCtx, this);
         }
     }
 
@@ -201,7 +199,7 @@ namespace mongo {
 
         invariant(_isOplog == (_oplogManager != nullptr));
         if (_isOplog) {
-            _oplogManager->halt();
+            _engine->haltOplogManager();
         }
     }
 
