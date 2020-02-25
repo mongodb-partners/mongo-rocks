@@ -281,6 +281,8 @@ namespace mongo {
             _journalFlusher->go();
         }
 
+        _oplogManager.reset(new RocksOplogManager(_db.get(), this, _durabilityManager.get()));
+
         Locker::setGlobalThrottling(&openReadTransaction, &openWriteTransaction);
     }
 
@@ -628,9 +630,9 @@ namespace mongo {
 
     }  // namespace
 
-    void RocksEngine::setStableTimestamp(Timestamp stableTimestamp) { invariant(0); }
+    void RocksEngine::setStableTimestamp(Timestamp stableTimestamp) {}
 
-    void RocksEngine::setInitialDataTimestamp(Timestamp initialDataTimestamp) { invariant(0); }
+    void RocksEngine::setInitialDataTimestamp(Timestamp initialDataTimestamp) {}
 
     void RocksEngine::setOldestTimestamp(Timestamp oldestTimestamp, bool force) {
         if (MONGO_FAIL_POINT(RocksPreserveSnapshotHistoryIndefinitely)) {
@@ -668,8 +670,10 @@ namespace mongo {
         }
 
         rocksdb::RocksTimeStamp ts(oldestTimestamp.asULL());
-        invariantRocksOK(_db->SetTimeStamp(rocksdb::TimeStampType::kOldest, ts));
-
+        invariantRocksOK(_db->SetTimeStamp(rocksdb::TimeStampType::kOldest, ts, force));
+        if (force) {
+            invariantRocksOK(_db->SetTimeStamp(rocksdb::TimeStampType::kCommitted, ts, force));
+        }
         if (force) {
             LOG(2) << "oldest_timestamp and commit_timestamp force set to " << oldestTimestamp;
         } else {

@@ -780,7 +780,89 @@ namespace mongo {
 
     void RocksRecordStore::cappedTruncateAfter(OperationContext* opCtx, RecordId end,
                                                bool inclusive) {
-        // TODO(wolfkdy): totdb support set commit timestamp
+        // Only log messages at a lower level here for testing.
+        int logLevel = getTestCommandsEnabled() ? 0 : 2;
+
+        std::unique_ptr<SeekableRecordCursor> cursor = getCursor(opCtx, true);
+        LOG(logLevel) << "Truncating capped collection '" << _ns
+                      << "' in WiredTiger record store, (inclusive=" << inclusive << ")";
+
+        auto record = cursor->seekExact(end);
+        invariant(record, str::stream() << "Failed to seek to the record located at " << end);
+
+        int64_t recordsRemoved = 0;
+        RecordId lastKeptId;
+        RecordId firstRemovedId;
+
+        if (inclusive) {
+            std::unique_ptr<SeekableRecordCursor> reverseCursor = getCursor(opCtx, false);
+            invariant(reverseCursor->seekExact(end));
+            auto prev = reverseCursor->next();
+            lastKeptId = prev ? prev->id : RecordId();
+            firstRemovedId = end;
+        } else {
+            // If not deleting the record located at 'end', then advance the cursor to the first
+            // record
+            // that is being deleted.
+            record = cursor->next();
+            if (!record) {
+                LOG(logLevel) << "No records to delete for truncation";
+                return;  // No records to delete.
+            }
+            lastKeptId = end;
+            firstRemovedId = record->id;
+        }
+
+        // Compute the number and associated sizes of the records to delete.
+        // Truncate the collection starting from the record located at 'firstRemovedId' to the end
+        // of
+        // the collection.
+        LOG(logLevel) << "Truncating collection '" << _ns << "' from " << firstRemovedId << " ("
+                      << Timestamp(firstRemovedId.repr()) << ")"
+                      << " to the end. Number of records to delete: " << recordsRemoved;
+        WriteUnitOfWork wuow(opCtx);
+        auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(opCtx);
+        // NOTE(wolfkdy): truncate del should have no commit-ts
+        invariant(ru->getCommitTimestamp() == Timestamp());
+        {
+            stdx::lock_guard<stdx::mutex> cappedCallbackLock(_cappedCallbackMutex);
+            do {
+                if (_cappedCallback) {
+                    uassertStatusOK(
+                        _cappedCallback->aboutToDeleteCapped(opCtx, record->id, record->data));
+                }
+                deleteRecord(opCtx, record->id);
+                recordsRemoved++;
+                LOG(logLevel) << "Record id to delete for truncation of '" << _ns
+                              << "': " << record->id << " (" << Timestamp(record->id.repr()) << ")";
+            } while ((record = cursor->next()));
+        }
+        wuow.commit();
+
+        if (_isOplog) {
+            // Immediately rewind visibility to our truncation point, to prevent new
+            // transactions from appearing.
+            Timestamp truncTs(lastKeptId.repr());
+            LOG(logLevel) << "Rewinding oplog visibility point to " << truncTs
+                          << " after truncation.";
+
+            if (!serverGlobalParams.enableMajorityReadConcern) {
+                // If majority read concern is disabled, we must set the oldest timestamp along with
+                // the
+                // commit timestamp. Otherwise, the commit timestamp might be set behind the oldest
+                // timestamp.
+                const bool force = true;
+                _engine->setOldestTimestamp(truncTs, force);
+            } else {
+                const bool force = false;
+                invariantRocksOK(_engine->getDB()->SetTimeStamp(
+                    rocksdb::TimeStampType::kCommitted, rocksdb::RocksTimeStamp(truncTs.asULL()),
+                    force));
+            }
+
+            _oplogManager->setOplogReadTimestamp(truncTs);
+            LOG(1) << "truncation new read timestamp: " << truncTs;
+        }
     }
 
     RecordId RocksRecordStore::_nextId() {
