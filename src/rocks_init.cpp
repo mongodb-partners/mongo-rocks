@@ -116,7 +116,7 @@ namespace mongo {
                 return builder.obj();
             }
 
-            bool supportsReadOnly() const final { return true; }
+            bool supportsReadOnly() const final { return false; }
 
         private:
             // Current disk format. We bump this number when we change the disk format. MongoDB will

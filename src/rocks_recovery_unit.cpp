@@ -577,7 +577,9 @@ namespace mongo {
     }
 
     void RocksRecoveryUnit::setIgnorePrepared(bool ignore) {
-        invariant(0, "RocksRecoveryUnit::setIgnorePrepared should not be called");
+        if (!ignore) {
+            invariant(0, "RocksRecoveryUnit::setIgnorePrepared should not be called");
+        }
     }
 
     void RocksRecoveryUnit::setTimestampReadSource(ReadSource readSource,
