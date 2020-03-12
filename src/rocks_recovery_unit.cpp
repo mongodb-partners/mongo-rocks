@@ -35,11 +35,11 @@
 #include <rocksdb/comparator.h>
 #include <rocksdb/db.h>
 #include <rocksdb/iterator.h>
-#include <rocksdb/slice.h>
 #include <rocksdb/options.h>
 #include <rocksdb/perf_context.h>
-#include <rocksdb/write_batch.h>
+#include <rocksdb/slice.h>
 #include <rocksdb/utilities/write_batch_with_index.h>
+#include <rocksdb/write_batch.h>
 
 #include "mongo/base/checked_cast.h"
 #include "mongo/db/concurrency/write_conflict_exception.h"
@@ -48,15 +48,17 @@
 #include "mongo/db/storage/journal_listener.h"
 #include "mongo/util/log.h"
 
-#include "rocks_transaction.h"
 #include "rocks_util.h"
 
+#include "rocks_begin_transaction_block.h"
+#include "rocks_oplog_manager.h"
 #include "rocks_snapshot_manager.h"
 
 namespace mongo {
     namespace {
         // SnapshotIds need to be globally unique, as they are used in a WorkingSetMember to
-        // determine if documents changed, but a different recovery unit may be used across a getMore,
+        // determine if documents changed, but a different recovery unit may be used across a
+        // getMore,
         // so there is a chance the snapshot ID will be reused.
         AtomicUInt64 nextSnapshotId{1};
 
@@ -130,8 +132,7 @@ namespace mongo {
             }
 
             virtual void SeekForPrev(const rocksdb::Slice& target) {
-              // noop since we don't use it and it's only available in
-              // RocksDB 4.12 and higher
+                // TODO(wolfkdy): impl
             }
 
             virtual rocksdb::Slice key() const {
@@ -180,8 +181,8 @@ namespace mongo {
                 if (_compactionScheduler == nullptr) {
                     return;
                 }
-                int skippedDeletionsOp = get_internal_delete_skipped_count() -
-                                         _rocksdbSkippedDeletionsInitial;
+                int skippedDeletionsOp =
+                    get_internal_delete_skipped_count() - _rocksdbSkippedDeletionsInitial;
                 if (skippedDeletionsOp >=
                     RocksCompactionScheduler::getSkippedDeletionsThreshold()) {
                     _compactionScheduler->reportSkippedDeletionsAboveThreshold(_prefix);
@@ -207,241 +208,422 @@ namespace mongo {
 
     std::atomic<int> RocksRecoveryUnit::_totalLiveRecoveryUnits(0);
 
-    RocksRecoveryUnit::RocksRecoveryUnit(RocksTransactionEngine* transactionEngine,
-                                         RocksSnapshotManager* snapshotManager, rocksdb::DB* db,
+    RocksRecoveryUnit::RocksRecoveryUnit(rocksdb::TOTransactionDB* db,
+                                         RocksOplogManager* oplogManager,
+                                         RocksSnapshotManager* snapshotManager,
                                          RocksCounterManager* counterManager,
                                          RocksCompactionScheduler* compactionScheduler,
-                                         RocksDurabilityManager* durabilityManager,
-                                         bool durable)
-        : _transactionEngine(transactionEngine),
+                                         RocksDurabilityManager* durabilityManager, bool durable)
+        : _db(db),
+          _oplogManager(oplogManager),
           _snapshotManager(snapshotManager),
-          _db(db),
           _counterManager(counterManager),
           _compactionScheduler(compactionScheduler),
           _durabilityManager(durabilityManager),
           _durable(durable),
-          _transaction(transactionEngine),
-          _writeBatch(rocksdb::BytewiseComparator(), 0, true),
-          _snapshot(nullptr),
-          _preparedSnapshot(nullptr),
-          _mySnapshotId(nextSnapshotId.fetchAndAdd(1)) {
+          _areWriteUnitOfWorksBanned(false),
+          _inUnitOfWork(false),
+          _active(false),
+          _isTimestamped(false),
+          _timestampReadSource(ReadSource::kUnset),
+          _orderedCommit(true),
+          _mySnapshotId(nextSnapshotId.fetchAndAdd(1)),
+          _isOplogReader(false) {
         RocksRecoveryUnit::_totalLiveRecoveryUnits.fetch_add(1, std::memory_order_relaxed);
     }
 
     RocksRecoveryUnit::~RocksRecoveryUnit() {
-        if (_preparedSnapshot) {
-            // somebody didn't call getPreparedSnapshot() after prepareForCreateSnapshot()
-            _db->ReleaseSnapshot(_preparedSnapshot);
-            _preparedSnapshot = nullptr;
-        }
-        _abort();
-        RocksRecoveryUnit::_totalLiveRecoveryUnits.fetch_sub(1, std::memory_order_relaxed);
-    }
-
-    void RocksRecoveryUnit::beginUnitOfWork(OperationContext* opCtx) {
-        invariant(!_areWriteUnitOfWorksBanned);
-    }
-
-    void RocksRecoveryUnit::commitUnitOfWork() {
-        _commit();
-
-        try {
-            for (Changes::const_iterator it = _changes.begin(), end = _changes.end(); it != end;
-                    ++it) {
-                (*it)->commit();
-            }
-            _changes.clear();
-        }
-        catch (...) {
-            std::terminate();
-        }
-
-        _releaseSnapshot();
-    }
-
-    void RocksRecoveryUnit::abortUnitOfWork() {
+        invariant(!_inUnitOfWork);
         _abort();
     }
 
-    bool RocksRecoveryUnit::waitUntilDurable() {
-        _durabilityManager->waitUntilDurable(false);
-        return true;
-    }
-
-    void RocksRecoveryUnit::abandonSnapshot() {
-        _deltaCounters.clear();
-        _writeBatch.Clear();
-        _releaseSnapshot();
-        _areWriteUnitOfWorksBanned = false;
-    }
-
-    rocksdb::WriteBatchWithIndex* RocksRecoveryUnit::writeBatch() { return &_writeBatch; }
-
-    void RocksRecoveryUnit::setOplogReadTill(const RecordId& record) { _oplogReadTill = record; }
-
-    void RocksRecoveryUnit::registerChange(Change* change) { _changes.push_back(change); }
-
-    Status RocksRecoveryUnit::obtainMajorityCommittedSnapshot() {
-        if (!_snapshotManager->haveCommittedSnapshot()) {
-            return {ErrorCodes::ReadConcernMajorityNotAvailableYet,
-                    "Read concern majority reads are currently not possible."};
-        }
-        invariant(_snapshot == nullptr);
-
-        _readFromMajorityCommittedSnapshot = true;
-        return Status::OK();
-    }
-
-    boost::optional<Timestamp> RocksRecoveryUnit::getPointInTimeReadTimestamp() const {
-        if (!_readFromMajorityCommittedSnapshot)
-            return {};
-        return Timestamp(_snapshotManager->getCommittedSnapshot().get()->name);
-    }
-
-    SnapshotId RocksRecoveryUnit::getSnapshotId() const { return SnapshotId(_mySnapshotId); }
-
-    void RocksRecoveryUnit::_releaseSnapshot() {
-        if (_timer) {
-            const int transactionTime = _timer->millis();
-            _timer.reset();
-            if (transactionTime >= serverGlobalParams.slowMS) {
-                LOG(kSlowTransactionSeverity) << "Slow transaction. Lifetime of SnapshotId "
-                                              << _mySnapshotId << " was " << transactionTime
-                                              << " ms";
-            }
-        }
-
-        if (_snapshot) {
-            _transaction.abort();
-            _db->ReleaseSnapshot(_snapshot);
-            _snapshot = nullptr;
-        }
-        _snapshotHolder.reset();
-
-        _mySnapshotId = nextSnapshotId.fetchAndAdd(1);
-    }
-
-    void RocksRecoveryUnit::prepareForCreateSnapshot(OperationContext* opCtx) {
-        invariant(!_readFromMajorityCommittedSnapshot);
-        _areWriteUnitOfWorksBanned = true;
-        if (_preparedSnapshot) {
-            // release old one, in case somebody calls prepareForCreateSnapshot twice in a row
-            _db->ReleaseSnapshot(_preparedSnapshot);
-        }
-        _preparedSnapshot = _db->GetSnapshot();
-    }
-
+    // TODO(wolfkdy): make _commit/commitUnitOfWork _abort/abortUnitOfWork symmetrical
     void RocksRecoveryUnit::_commit() {
-        rocksdb::WriteBatch* wb = _writeBatch.GetWriteBatch();
         for (auto pair : _deltaCounters) {
             auto& counter = pair.second;
             counter._value->fetch_add(counter._delta, std::memory_order::memory_order_relaxed);
             long long newValue = counter._value->load(std::memory_order::memory_order_relaxed);
-            _counterManager->updateCounter(pair.first, newValue, wb);
+            _counterManager->updateCounter(pair.first, newValue);
         }
 
-        if (wb->Count() != 0) {
-            // Order of operations here is important. It needs to be synchronized with
-            // _transaction.recordSnapshotId() and _db->GetSnapshot() and
-            rocksdb::WriteOptions writeOptions;
-            writeOptions.disableWAL = !_durable;
-            auto status = _db->Write(writeOptions, wb);
-            invariantRocksOK(status);
-            _transaction.commit();
+        if (_active) {
+            _txnClose(true /* commit */);
         }
+
         _deltaCounters.clear();
-        _writeBatch.Clear();
     }
 
     void RocksRecoveryUnit::_abort() {
+        if (_active) {
+            _txnClose(false /* commit */);
+        }
         try {
             for (Changes::const_reverse_iterator it = _changes.rbegin(), end = _changes.rend();
-                    it != end; ++it) {
-                Change* change = *it;
+                 it != end; ++it) {
+                const auto& change = *it;
                 LOG(2) << "CUSTOM ROLLBACK " << redact(demangleName(typeid(*change)));
                 change->rollback();
             }
             _changes.clear();
-        }
-        catch (...) {
+        } catch (...) {
             std::terminate();
         }
 
         _deltaCounters.clear();
-        _writeBatch.Clear();
-
-        _releaseSnapshot();
     }
 
-    const rocksdb::Snapshot* RocksRecoveryUnit::getPreparedSnapshot() {
-        auto ret = _preparedSnapshot;
-        _preparedSnapshot = nullptr;
-        return ret;
+    void RocksRecoveryUnit::beginUnitOfWork(OperationContext* opCtx) {
+        invariant(!_areWriteUnitOfWorksBanned);
+        invariant(!_inUnitOfWork);
+        _inUnitOfWork = true;
     }
 
-    void RocksRecoveryUnit::dbReleaseSnapshot(const rocksdb::Snapshot* snapshot) {
-        _db->ReleaseSnapshot(snapshot);
+    void RocksRecoveryUnit::prepareUnitOfWork() {
+        invariant(0, "RocksRecoveryUnit::prepareUnitOfWork should not be called");
     }
 
-    const rocksdb::Snapshot* RocksRecoveryUnit::snapshot() {
+    void RocksRecoveryUnit::commitUnitOfWork() {
+        invariant(_inUnitOfWork);
+        _inUnitOfWork = false;
+        auto commitTs = _commitTimestamp.isNull() ? _lastTimestampSet : _commitTimestamp;
+        _commit();
+
+        try {
+            for (Changes::const_iterator it = _changes.begin(), end = _changes.end(); it != end;
+                 ++it) {
+                (*it)->commit(commitTs);
+            }
+            _changes.clear();
+        } catch (...) {
+            std::terminate();
+        }
+    }
+
+    void RocksRecoveryUnit::abortUnitOfWork() {
+        invariant(_inUnitOfWork);
+        _inUnitOfWork = false;
+        _abort();
+    }
+
+    bool RocksRecoveryUnit::waitUntilDurable() {
+        invariant(!_inUnitOfWork);
+        _durabilityManager->waitUntilDurable(false);
+        return true;
+    }
+
+    bool RocksRecoveryUnit::waitUntilUnjournaledWritesDurable() {
+        waitUntilDurable();
+        return true;
+    }
+
+    void RocksRecoveryUnit::registerChange(Change* change) {
+        invariant(_inUnitOfWork);
+        _changes.push_back(std::unique_ptr<Change>{change});
+    }
+
+    void RocksRecoveryUnit::assertInActiveTxn() const {
+        invariant(_active, "WiredTigerRecoveryUnit::assertInActiveTxn failed");
+    }
+
+    rocksdb::TOTransaction* RocksRecoveryUnit::getTransaction() {
+        if (!_active) {
+            _txnOpen();
+        }
+        invariant(_active);
+        return _transaction.get();
+    }
+
+    void RocksRecoveryUnit::abandonSnapshot() {
+        invariant(!_inUnitOfWork);
+        _deltaCounters.clear();
+        if (_active) {
+            // Can't be in a WriteUnitOfWork, so safe to rollback
+            _txnClose(false);
+        }
+        _areWriteUnitOfWorksBanned = false;
+    }
+
+    void RocksRecoveryUnit::preallocateSnapshot() { getTransaction(); }
+
+    void* RocksRecoveryUnit::writingPtr(void* data, size_t len) {
+        // This API should not be used for anything other than the MMAP V1 storage engine
+        MONGO_UNREACHABLE;
+    }
+
+    void RocksRecoveryUnit::_txnClose(bool commit) {
+        invariant(_active);
+        if (_timer) {
+            const int transactionTime = _timer->millis();
+            if (transactionTime >= serverGlobalParams.slowMS) {
+                LOG(kSlowTransactionSeverity) << "Slow Rocks transaction. Lifetime of SnapshotId "
+                                              << _mySnapshotId << " was " << transactionTime
+                                              << "ms";
+            }
+        }
+        rocksdb::Status status;
+        if (commit) {
+            if (!_commitTimestamp.isNull()) {
+                status = _transaction->SetCommitTimeStamp(
+                    rocksdb::RocksTimeStamp(_commitTimestamp.asULL()));
+                invariant(status.ok(), status.ToString());
+                _isTimestamped = true;
+            }
+            status = _transaction->Commit();
+            LOG(3) << "Rocks commit_transaction for snapshot id " << _mySnapshotId;
+        } else {
+            status = _transaction->Rollback();
+            invariant(status.ok(), status.ToString());
+            LOG(3) << "Rocks rollback_transaction for snapshot id " << _mySnapshotId;
+        }
+
+        _transaction.reset(nullptr);
+
+        if (_isTimestamped) {
+            if (!_orderedCommit) {
+                _oplogManager->triggerJournalFlush();
+            }
+            _isTimestamped = false;
+        }
+        invariant(status.ok(), status.ToString());
+        invariant(!_lastTimestampSet || _commitTimestamp.isNull(),
+                  str::stream() << "Cannot have both a _lastTimestampSet and a "
+                                   "_commitTimestamp. _lastTimestampSet: "
+                                << _lastTimestampSet->toString()
+                                << ". _commitTimestamp: " << _commitTimestamp.toString());
+
+        // We reset the _lastTimestampSet between transactions. Since it is legal for one
+        // transaction on a RecoveryUnit to call setTimestamp() and another to call
+        // setCommitTimestamp().
+        _lastTimestampSet = boost::none;
+
+        _active = false;
+        _prepareTimestamp = Timestamp();
+        _mySnapshotId = nextSnapshotId.fetchAndAdd(1);
+        _isOplogReader = false;
+        _orderedCommit = true;  // Default value is true; we assume all writes are ordered.
+    }
+
+    SnapshotId RocksRecoveryUnit::getSnapshotId() const {
+        // TODO: use actual rocks snapshot id
+        return SnapshotId(_mySnapshotId);
+    }
+
+    Status RocksRecoveryUnit::obtainMajorityCommittedSnapshot() {
+        invariant(_timestampReadSource == ReadSource::kMajorityCommitted);
+        auto snapshotName = _snapshotManager->getMinSnapshotForNextCommittedRead();
+        if (!snapshotName) {
+            return {ErrorCodes::ReadConcernMajorityNotAvailableYet,
+                    "Read concern majority reads are currently not possible."};
+        }
+        _majorityCommittedSnapshot = Timestamp(*snapshotName);
+        return Status::OK();
+    }
+
+    boost::optional<Timestamp> RocksRecoveryUnit::getPointInTimeReadTimestamp() const {
+        if (_timestampReadSource == ReadSource::kProvided ||
+            _timestampReadSource == ReadSource::kLastAppliedSnapshot ||
+            _timestampReadSource == ReadSource::kAllCommittedSnapshot) {
+            invariant(!_readAtTimestamp.isNull());
+            return _readAtTimestamp;
+        }
+
+        if (_timestampReadSource == ReadSource::kLastApplied && !_readAtTimestamp.isNull()) {
+            return _readAtTimestamp;
+        }
+
+        if (_timestampReadSource == ReadSource::kMajorityCommitted) {
+            invariant(!_majorityCommittedSnapshot.isNull());
+            return _majorityCommittedSnapshot;
+        }
+
+        return boost::none;
+    }
+
+    void RocksRecoveryUnit::_txnOpen() {
+        invariant(!_active);
+
         // Only start a timer for transaction's lifetime if we're going to log it.
         if (shouldLog(kSlowTransactionSeverity)) {
             _timer.reset(new Timer());
         }
 
-        if (_readFromMajorityCommittedSnapshot) {
-            if (_snapshotHolder.get() == nullptr) {
-                _snapshotHolder = _snapshotManager->getCommittedSnapshot();
+        switch (_timestampReadSource) {
+            case ReadSource::kUnset:
+            case ReadSource::kNoTimestamp: {
+                RocksBeginTxnBlock txnOpen(_db, &_transaction);
+
+                if (_isOplogReader) {
+                    auto status =
+                        txnOpen.setTimestamp(Timestamp(_oplogManager->getOplogReadTimestamp()),
+                                             RocksBeginTxnBlock::RoundToOldest::kRound);
+                    invariant(status.isOK(), status.reason());
+                }
+                txnOpen.done();
+                break;
             }
-            return _snapshotHolder->snapshot;
+            case ReadSource::kMajorityCommitted: {
+                // We reset _majorityCommittedSnapshot to the actual read timestamp used when the
+                // transaction was started.
+                _majorityCommittedSnapshot =
+                    _snapshotManager->beginTransactionOnCommittedSnapshot(_db, &_transaction);
+                break;
+            }
+            case ReadSource::kLastApplied: {
+                if (_snapshotManager->getLocalSnapshot()) {
+                    _readAtTimestamp =
+                        _snapshotManager->beginTransactionOnLocalSnapshot(_db, &_transaction);
+                } else {
+                    RocksBeginTxnBlock(_db, &_transaction).done();
+                }
+                break;
+            }
+            case ReadSource::kAllCommittedSnapshot: {
+                if (_readAtTimestamp.isNull()) {
+                    _readAtTimestamp = _beginTransactionAtAllCommittedTimestamp();
+                    break;
+                }
+                // Intentionally continue to the next case to read at the _readAtTimestamp.
+            }
+            case ReadSource::kLastAppliedSnapshot: {
+                // Only ever read the last applied timestamp once, and continue reusing it for
+                // subsequent transactions.
+                if (_readAtTimestamp.isNull()) {
+                    _readAtTimestamp =
+                        _snapshotManager->beginTransactionOnLocalSnapshot(_db, &_transaction);
+                    break;
+                }
+                // Intentionally continue to the next case to read at the _readAtTimestamp.
+            }
+            case ReadSource::kProvided: {
+                RocksBeginTxnBlock txnOpen(_db, &_transaction);
+                auto status = txnOpen.setTimestamp(_readAtTimestamp);
+
+                if (!status.isOK() && status.code() == ErrorCodes::BadValue) {
+                    uasserted(ErrorCodes::SnapshotTooOld,
+                              str::stream() << "Read timestamp " << _readAtTimestamp.toString()
+                                            << " is older than the oldest available timestamp.");
+                }
+                uassertStatusOK(status);
+                txnOpen.done();
+                break;
+            }
         }
-        if (!_snapshot) {
-            // RecoveryUnit might be used for writing, so we need to call recordSnapshotId().
-            // Order of operations here is important. It needs to be synchronized with
-            // _db->Write() and _transaction.commit()
-            _transaction.recordSnapshotId();
-            _snapshot = _db->GetSnapshot();
+
+        LOG(3) << "Rocks begin_transaction for snapshot id " << _mySnapshotId;
+        _active = true;
+    }
+
+    Timestamp RocksRecoveryUnit::_beginTransactionAtAllCommittedTimestamp() {
+        RocksBeginTxnBlock txnOpen(_db, &_transaction);
+        Timestamp txnTimestamp = _oplogManager->fetchAllCommittedValue();
+        auto status = txnOpen.setTimestamp(txnTimestamp, RocksBeginTxnBlock::RoundToOldest::kRound);
+        invariant(status.isOK(), status.reason());
+        txnOpen.done();
+        return txnOpen.getTimestamp();
+    }
+
+    Status RocksRecoveryUnit::setTimestamp(Timestamp timestamp) {
+        LOG(3) << "Rocks set timestamp of future write operations to " << timestamp;
+        invariant(_inUnitOfWork);
+        invariant(_prepareTimestamp.isNull());
+        invariant(_commitTimestamp.isNull(),
+                  str::stream() << "Commit timestamp set to " << _commitTimestamp.toString()
+                                << " and trying to set WUOW timestamp to " << timestamp.toString());
+
+        _lastTimestampSet = timestamp;
+
+        getTransaction();
+        invariant(_transaction.get());
+        auto status = _transaction->SetCommitTimeStamp(rocksdb::RocksTimeStamp(timestamp.asULL()));
+        if (status.ok()) {
+            _isTimestamped = true;
         }
-        return _snapshot;
+        return rocksToMongoStatus(status);
+    }
+
+    void RocksRecoveryUnit::setCommitTimestamp(Timestamp timestamp) {
+        invariant(!_inUnitOfWork);
+        invariant(_commitTimestamp.isNull(),
+                  str::stream() << "Commit timestamp set to " << _commitTimestamp.toString()
+                                << " and trying to set it to " << timestamp.toString());
+        invariant(!_lastTimestampSet, str::stream() << "Last timestamp set is "
+                                                    << _lastTimestampSet->toString()
+                                                    << " and trying to set commit timestamp to "
+                                                    << timestamp.toString());
+        invariant(!_isTimestamped);
+
+        _commitTimestamp = timestamp;
+    }
+
+    Timestamp RocksRecoveryUnit::getCommitTimestamp() { return _commitTimestamp; }
+
+    void RocksRecoveryUnit::clearCommitTimestamp() {
+        invariant(!_inUnitOfWork);
+        invariant(!_commitTimestamp.isNull());
+        invariant(!_lastTimestampSet, str::stream() << "Last timestamp set is "
+                                                    << _lastTimestampSet->toString()
+                                                    << " and trying to clear commit timestamp.");
+        invariant(!_isTimestamped);
+
+        _commitTimestamp = Timestamp();
+    }
+
+    void RocksRecoveryUnit::setPrepareTimestamp(Timestamp timestamp) {
+        invariant(_inUnitOfWork);
+        invariant(_prepareTimestamp.isNull());
+        invariant(_commitTimestamp.isNull());
+
+        invariant(0, "RocksRecoveryUnit::setPrepareTimestamp should not be called");
+    }
+
+    void RocksRecoveryUnit::setIgnorePrepared(bool ignore) {
+        if (!ignore) {
+            invariant(0, "RocksRecoveryUnit::setIgnorePrepared should not be called");
+        }
+    }
+
+    void RocksRecoveryUnit::setTimestampReadSource(ReadSource readSource,
+                                                   boost::optional<Timestamp> provided) {
+        LOG(3) << "setting timestamp read source: " << static_cast<int>(readSource)
+               << ", provided timestamp: " << ((provided) ? provided->toString() : "none");
+
+        invariant(!_active || _timestampReadSource == ReadSource::kUnset ||
+                  _timestampReadSource == readSource);
+        invariant(!provided == (readSource != ReadSource::kProvided));
+        invariant(!(provided && provided->isNull()));
+
+        _timestampReadSource = readSource;
+        _readAtTimestamp = (provided) ? *provided : Timestamp();
+    }
+
+    RecoveryUnit::ReadSource RocksRecoveryUnit::getTimestampReadSource() const {
+        return _timestampReadSource;
     }
 
     rocksdb::Status RocksRecoveryUnit::Get(const rocksdb::Slice& key, std::string* value) {
-        if (_writeBatch.GetWriteBatch()->Count() > 0) {
-            std::unique_ptr<rocksdb::WBWIIterator> wb_iterator(_writeBatch.NewIterator());
-            wb_iterator->Seek(key);
-            if (wb_iterator->Valid() && wb_iterator->Entry().key == key) {
-                const auto& entry = wb_iterator->Entry();
-                if (entry.type == rocksdb::WriteType::kDeleteRecord) {
-                    return rocksdb::Status::NotFound();
-                }
-                *value = std::string(entry.value.data(), entry.value.size());
-                return rocksdb::Status::OK();
-            }
-        }
+        invariant(getTransaction());
         rocksdb::ReadOptions options;
-        options.snapshot = snapshot();
-        return _db->Get(options, key, value);
+        return _transaction->Get(options, key, value);
     }
 
     RocksIterator* RocksRecoveryUnit::NewIterator(std::string prefix, bool isOplog) {
         std::unique_ptr<rocksdb::Slice> upperBound(new rocksdb::Slice());
         rocksdb::ReadOptions options;
         options.iterate_upper_bound = upperBound.get();
-        options.snapshot = snapshot();
-        auto iterator = _writeBatch.NewIteratorWithBase(_db->NewIterator(options));
-        auto prefixIterator = new PrefixStrippingIterator(std::move(prefix), iterator,
-                                                          isOplog ? nullptr : _compactionScheduler,
-                                                          std::move(upperBound));
-        return prefixIterator;
+        invariant(getTransaction());
+        auto it = _transaction->GetIterator(options);
+        return new PrefixStrippingIterator(
+            std::move(prefix), it, isOplog ? nullptr : _compactionScheduler, std::move(upperBound));
     }
 
-    RocksIterator* RocksRecoveryUnit::NewIteratorNoSnapshot(rocksdb::DB* db, std::string prefix) {
+    RocksIterator* RocksRecoveryUnit::NewIteratorWithTxn(rocksdb::TOTransaction* txn,
+                                                         std::string prefix) {
+        invariant(txn);
         std::unique_ptr<rocksdb::Slice> upperBound(new rocksdb::Slice());
         rocksdb::ReadOptions options;
         options.iterate_upper_bound = upperBound.get();
-        auto iterator = db->NewIterator(options);
-        return new PrefixStrippingIterator(std::move(prefix), iterator, nullptr,
-                                           std::move(upperBound));
+        auto it = txn->GetIterator(options);
+        return new PrefixStrippingIterator(std::move(prefix), it, nullptr, std::move(upperBound));
     }
 
     void RocksRecoveryUnit::incrementCounter(const rocksdb::Slice& counterKey,
@@ -468,9 +650,7 @@ namespace mongo {
         }
     }
 
-    void RocksRecoveryUnit::resetDeltaCounters() {
-        _deltaCounters.clear();
-    }
+    void RocksRecoveryUnit::resetDeltaCounters() { _deltaCounters.clear(); }
 
     RocksRecoveryUnit* RocksRecoveryUnit::getRocksRecoveryUnit(OperationContext* opCtx) {
         return checked_cast<RocksRecoveryUnit*>(opCtx->recoveryUnit());

@@ -31,14 +31,15 @@
 
 #include "mongo/base/init.h"
 #include "mongo/db/service_context.h"
-#include "mongo/db/storage/storage_options.h"
 #include "mongo/db/storage/kv/kv_storage_engine.h"
+#include "mongo/db/storage/storage_engine_init.h"
 #include "mongo/db/storage/storage_engine_metadata.h"
+#include "mongo/db/storage/storage_options.h"
 #include "mongo/util/mongoutils/str.h"
 
 #include "rocks_engine.h"
-#include "rocks_server_status.h"
 #include "rocks_parameters.h"
+#include "rocks_server_status.h"
 
 namespace mongo {
     const std::string kRocksDBEngineName = "rocksdb";
@@ -47,7 +48,7 @@ namespace mongo {
 
         class RocksFactory : public StorageEngine::Factory {
         public:
-            virtual ~RocksFactory(){}
+            virtual ~RocksFactory() {}
             virtual StorageEngine* create(const StorageGlobalParams& params,
                                           const StorageEngineLockFile* lockFile) const {
                 KVStorageEngineOptions options;
@@ -72,9 +73,7 @@ namespace mongo {
                 return new KVStorageEngine(engine, options);
             }
 
-            virtual StringData getCanonicalName() const {
-                return kRocksDBEngineName;
-            }
+            virtual StringData getCanonicalName() const { return kRocksDBEngineName; }
 
             virtual Status validateMetadata(const StorageEngineMetadata& metadata,
                                             const StorageGlobalParams& params) const {
@@ -91,7 +90,8 @@ namespace mongo {
                     return Status(
                         ErrorCodes::UnsupportedFormat,
                         str::stream()
-                            << "Database was created with old format version " << element.numberInt()
+                            << "Database was created with old format version "
+                            << element.numberInt()
                             << " and this version only supports format versions from "
                             << kMinSupportedRocksFormatVersion << " to " << kRocksFormatVersion
                             << ". Please reload the database using mongodump and mongorestore");
@@ -100,8 +100,8 @@ namespace mongo {
                     return Status(
                         ErrorCodes::UnsupportedFormat,
                         str::stream()
-                            << "Database was created with newer format version " <<
-                            element.numberInt()
+                            << "Database was created with newer format version "
+                            << element.numberInt()
                             << " and this version only supports format versions from "
                             << kMinSupportedRocksFormatVersion << " to " << kRocksFormatVersion
                             << ". Please reload the database using mongodump and mongorestore");
@@ -116,9 +116,7 @@ namespace mongo {
                 return builder.obj();
             }
 
-            bool supportsReadOnly() const final {
-                return true;
-            }
+            bool supportsReadOnly() const final { return false; }
 
         private:
             // Current disk format. We bump this number when we change the disk format. MongoDB will
@@ -137,13 +135,10 @@ namespace mongo {
             const std::string kRocksFormatVersionString = "rocksFormatVersion";
             int mutable formatVersion = -1;
         };
-    } // namespace
 
-    MONGO_INITIALIZER_WITH_PREREQUISITES(RocksEngineInit,
-                                         ("SetGlobalEnvironment"))
-                                         (InitializerContext* context) {
-        getGlobalServiceContext()->registerStorageEngine(kRocksDBEngineName, new RocksFactory());
-        return Status::OK();
-    }
-
+        ServiceContext::ConstructorActionRegisterer registerRocks(
+            "RocksEngineInit", [](ServiceContext* service) {
+                registerStorageEngine(service, std::make_unique<RocksFactory>());
+            });
+    }  // namespace
 }

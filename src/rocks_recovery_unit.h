@@ -32,12 +32,15 @@
 #include <map>
 #include <stack>
 #include <string>
-#include <vector>
 #include <unordered_map>
+#include <vector>
 
+#include <rocksdb/iterator.h>
 #include <rocksdb/slice.h>
-#include <rocksdb/write_batch.h>
+#include <rocksdb/utilities/totransaction.h>
+#include <rocksdb/utilities/totransaction_db.h>
 #include <rocksdb/utilities/write_batch_with_index.h>
+#include <rocksdb/write_batch.h>
 
 #include "mongo/base/disallow_copying.h"
 #include "mongo/base/owned_pointer_vector.h"
@@ -46,10 +49,9 @@
 #include "mongo/util/timer.h"
 
 #include "rocks_compaction_scheduler.h"
-#include "rocks_transaction.h"
 #include "rocks_counter_manager.h"
-#include "rocks_snapshot_manager.h"
 #include "rocks_durability_manager.h"
+#include "rocks_snapshot_manager.h"
 
 namespace rocksdb {
     class DB;
@@ -74,70 +76,82 @@ namespace mongo {
     };
 
     class OperationContext;
+    class RocksOplogManager;
 
     class RocksRecoveryUnit : public RecoveryUnit {
         MONGO_DISALLOW_COPYING(RocksRecoveryUnit);
+
     public:
-        RocksRecoveryUnit(RocksTransactionEngine* transactionEngine,
-                          RocksSnapshotManager* snapshotManager, rocksdb::DB* db,
+        RocksRecoveryUnit(rocksdb::TOTransactionDB* db, RocksOplogManager* oplogManager,
+                          RocksSnapshotManager* snapshotManager,
                           RocksCounterManager* counterManager,
                           RocksCompactionScheduler* compactionScheduler,
                           RocksDurabilityManager* durabilityManager, bool durable);
         virtual ~RocksRecoveryUnit();
 
-        virtual void beginUnitOfWork(OperationContext* opCtx);
-        virtual void commitUnitOfWork();
-        virtual void abortUnitOfWork();
+        void beginUnitOfWork(OperationContext* opCtx) override;
+        void prepareUnitOfWork() override;
+        void commitUnitOfWork() override;
+        void abortUnitOfWork() override;
 
-        virtual bool waitUntilDurable();
+        bool waitUntilDurable() override;
 
-        virtual void abandonSnapshot();
+        bool waitUntilUnjournaledWritesDurable() override;
 
-        Status obtainMajorityCommittedSnapshot() final;
+        void registerChange(Change* change) override;
 
-        boost::optional<Timestamp> getPointInTimeReadTimestamp() const final;
+        void abandonSnapshot() override;
+        void preallocateSnapshot() override;
 
-        virtual void* writingPtr(void* data, size_t len) { invariant(!"don't call writingPtr"); }
+        Status obtainMajorityCommittedSnapshot() override;
 
-        virtual void registerChange(Change* change);
+        boost::optional<Timestamp> getPointInTimeReadTimestamp() const override;
 
-        virtual void setRollbackWritesDisabled() override {}
-        virtual void setOrderedCommit(bool orderedCommit) override {};
+        SnapshotId getSnapshotId() const override;
 
-        virtual SnapshotId getSnapshotId() const;
+        Status setTimestamp(Timestamp timestamp) override;
+
+        void setCommitTimestamp(Timestamp timestamp) override;
+
+        void clearCommitTimestamp() override;
+
+        Timestamp getCommitTimestamp() override;
+
+        void setPrepareTimestamp(Timestamp timestamp) override;
+
+        void setIgnorePrepared(bool ignore) override;
+
+        void setTimestampReadSource(ReadSource source,
+                                    boost::optional<Timestamp> provided = boost::none) override;
+
+        ReadSource getTimestampReadSource() const override;
+
+        void* writingPtr(void* data, size_t len) override;
+
+        void setRollbackWritesDisabled() override {}
+
+        virtual void setOrderedCommit(bool orderedCommit) override {
+            _orderedCommit = orderedCommit;
+        }
 
         // local api
-
-        rocksdb::WriteBatchWithIndex* writeBatch();
-
-        const rocksdb::Snapshot* getPreparedSnapshot();
-        void dbReleaseSnapshot(const rocksdb::Snapshot* snapshot);
-
-        // Returns snapshot, creating one if needed. Considers _readFromMajorityCommittedSnapshot.
-        const rocksdb::Snapshot* snapshot();
-
-        bool hasSnapshot() { return _snapshot != nullptr || _snapshotHolder.get() != nullptr; }
-
-        RocksTransaction* transaction() { return &_transaction; }
+        void setIsOplogReader() { _isOplogReader = true; }
 
         rocksdb::Status Get(const rocksdb::Slice& key, std::string* value);
 
         RocksIterator* NewIterator(std::string prefix, bool isOplog = false);
 
-        static RocksIterator* NewIteratorNoSnapshot(rocksdb::DB* db, std::string prefix);
+        static RocksIterator* NewIteratorWithTxn(rocksdb::TOTransaction* txn, std::string prefix);
 
-        void incrementCounter(const rocksdb::Slice& counterKey,
-                              std::atomic<long long>* counter, long long delta);
+        void incrementCounter(const rocksdb::Slice& counterKey, std::atomic<long long>* counter,
+                              long long delta);
 
         long long getDeltaCounter(const rocksdb::Slice& counterKey);
 
         void resetDeltaCounters();
 
-        void setOplogReadTill(const RecordId& loc);
-        RecordId getOplogReadTill() const { return _oplogReadTill; }
-
         RocksRecoveryUnit* newRocksRecoveryUnit() {
-            return new RocksRecoveryUnit(_transactionEngine, _snapshotManager, _db, _counterManager,
+            return new RocksRecoveryUnit(_db, _oplogManager, _snapshotManager, _counterManager,
                                          _compactionScheduler, _durabilityManager, _durable);
         }
 
@@ -145,8 +159,8 @@ namespace mongo {
             std::atomic<long long>* _value;
             long long _delta;
             Counter() : Counter(nullptr, 0) {}
-            Counter(std::atomic<long long>* value, long long delta) : _value(value),
-                                                                      _delta(delta) {}
+            Counter(std::atomic<long long>* value, long long delta)
+                : _value(value), _delta(delta) {}
         };
 
         typedef std::unordered_map<std::string, Counter> CounterMap;
@@ -155,56 +169,62 @@ namespace mongo {
 
         static int getTotalLiveRecoveryUnits() { return _totalLiveRecoveryUnits.load(); }
 
-        void prepareForCreateSnapshot(OperationContext* opCtx);
-
-        void setCommittedSnapshot(const rocksdb::Snapshot* committedSnapshot);
-
         rocksdb::DB* getDB() const { return _db; }
 
-    private:
-        void _releaseSnapshot();
+        rocksdb::TOTransaction* getTransaction();
 
+        bool inActiveTxn() const { return _active; }
+
+        void assertInActiveTxn() const;
+
+    private:
+        void _abort();
         void _commit();
 
-        void _abort();
-        RocksTransactionEngine* _transactionEngine;      // not owned
+        void _txnClose(bool commit);
+        void _txnOpen();
+
+        /**
+         * Starts a transaction at the current all-committed timestamp.
+         * Returns the timestamp the transaction was started at.
+         */
+        Timestamp _beginTransactionAtAllCommittedTimestamp();
+
+        rocksdb::TOTransactionDB* _db;                   // not owned
+        RocksOplogManager* _oplogManager;                // not owned
         RocksSnapshotManager* _snapshotManager;          // not owned
-        rocksdb::DB* _db;                                // not owned
         RocksCounterManager* _counterManager;            // not owned
         RocksCompactionScheduler* _compactionScheduler;  // not owned
         RocksDurabilityManager* _durabilityManager;      // not owned
 
-        const bool _durable;
+        std::unique_ptr<rocksdb::TOTransaction> _transaction;
 
-        RocksTransaction _transaction;
+        bool _durable;
+        bool _areWriteUnitOfWorksBanned;
+        bool _inUnitOfWork;
+        bool _active;
+        bool _isTimestamped;
 
-        rocksdb::WriteBatchWithIndex _writeBatch;
+        // Specifies which external source to use when setting read timestamps on transactions.
+        ReadSource _timestampReadSource;
 
-        // bare because we need to call ReleaseSnapshot when we're done with this
-        const rocksdb::Snapshot* _snapshot; // owned
+        // Commits are assumed ordered.  Unordered commits are assumed to always need to reserve a
+        // new optime, and thus always call oplogDiskLocRegister() on the record store.
+        bool _orderedCommit;
+        Timestamp _commitTimestamp;
 
-        // snapshot that got prepared in prepareForCreateSnapshot
-        // it is consumed by getPreparedSnapshot()
-        const rocksdb::Snapshot* _preparedSnapshot;  // owned
-
+        Timestamp _prepareTimestamp;
+        boost::optional<Timestamp> _lastTimestampSet;
+        uint64_t _mySnapshotId;
+        Timestamp _majorityCommittedSnapshot;
+        Timestamp _readAtTimestamp;
         std::unique_ptr<Timer> _timer;
         CounterMap _deltaCounters;
 
-        typedef OwnedPointerVector<Change> Changes;
+        bool _isOplogReader;
+        typedef std::vector<std::unique_ptr<Change>> Changes;
         Changes _changes;
 
-        uint64_t _mySnapshotId;
-
-        RecordId _oplogReadTill;
-
         static std::atomic<int> _totalLiveRecoveryUnits;
-
-        // If we read from a committed snapshot, then ownership of the snapshot
-        // should be shared here to ensure that it is not released early
-        std::shared_ptr<RocksSnapshotManager::SnapshotHolder> _snapshotHolder;
-
-        bool _readFromMajorityCommittedSnapshot = false;
-        bool _areWriteUnitOfWorksBanned = false;
     };
-
 }

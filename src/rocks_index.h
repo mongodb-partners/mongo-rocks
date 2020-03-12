@@ -70,7 +70,7 @@ namespace mongo {
 
         virtual Status initAsEmpty(OperationContext* opCtx);
 
-        virtual long long getSpaceUsedBytes( OperationContext* opCtx ) const;
+        virtual long long getSpaceUsedBytes(OperationContext* opCtx) const;
 
         static void generateConfig(BSONObjBuilder* configBuilder, int formatVersion,
                                    IndexDescriptor::IndexVersion descVersion);
@@ -78,7 +78,7 @@ namespace mongo {
     protected:
         static std::string _makePrefixedKey(const std::string& prefix, const KeyString& encodedKey);
 
-        rocksdb::DB* _db; // not owned
+        rocksdb::DB* _db;  // not owned
 
         // Each key in the index is prefixed with _prefix
         std::string _prefix;
@@ -109,10 +109,12 @@ namespace mongo {
         virtual std::unique_ptr<SortedDataInterface::Cursor> newCursor(OperationContext* opCtx,
                                                                        bool forward) const;
 
-        virtual Status dupKeyCheck(OperationContext* opCtx, const BSONObj& key, const RecordId& loc);
+        virtual Status dupKeyCheck(OperationContext* opCtx, const BSONObj& key,
+                                   const RecordId& loc);
 
         virtual SortedDataBuilderInterface* getBulkBuilder(OperationContext* opCtx,
                                                            bool dupsAllowed) override;
+
     private:
         std::string _collectionNamespace;
         std::string _indexName;
@@ -130,9 +132,11 @@ namespace mongo {
                              bool dupsAllowed);
         virtual std::unique_ptr<SortedDataInterface::Cursor> newCursor(OperationContext* opCtx,
                                                                        bool forward) const;
-        virtual Status dupKeyCheck(OperationContext* opCtx, const BSONObj& key, const RecordId& loc) {
+        virtual Status dupKeyCheck(OperationContext* opCtx, const BSONObj& key,
+                                   const RecordId& loc) {
             // dupKeyCheck shouldn't be called for non-unique indexes
             invariant(false);
+            return Status::OK();
         }
 
         virtual SortedDataBuilderInterface* getBulkBuilder(OperationContext* opCtx,
@@ -144,4 +148,4 @@ namespace mongo {
         bool useSingleDelete;
     };
 
-} // namespace mongo
+}  // namespace mongo

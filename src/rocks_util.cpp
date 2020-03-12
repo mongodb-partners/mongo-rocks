@@ -26,17 +26,17 @@
  *    it in the license file.
  */
 
-
 #include "rocks_util.h"
 
-#include <string>
 #include <rocksdb/status.h>
+#include <string>
 
 // Temporary fix for https://github.com/facebook/rocksdb/pull/2336#issuecomment-303226208
 #define ROCKSDB_SUPPORT_THREAD_LOCAL
-#include <rocksdb/version.h>
 #include <rocksdb/perf_context.h>
+#include <rocksdb/version.h>
 
+#include "mongo/db/concurrency/write_conflict_exception.h"
 #include "mongo/platform/endian.h"
 
 namespace mongo {
@@ -56,16 +56,20 @@ namespace mongo {
     }
 
     int get_internal_delete_skipped_count() {
-        #if ROCKSDB_MAJOR > 5 || (ROCKSDB_MAJOR == 5 && ROCKSDB_MINOR >= 6)
-            return rocksdb::get_perf_context()->internal_delete_skipped_count;
-        #else
-            return rocksdb::perf_context.internal_delete_skipped_count;
-        #endif
+#if ROCKSDB_MAJOR > 5 || (ROCKSDB_MAJOR == 5 && ROCKSDB_MINOR >= 6)
+        return rocksdb::get_perf_context()->internal_delete_skipped_count;
+#else
+        return rocksdb::perf_context.internal_delete_skipped_count;
+#endif
     }
 
     Status rocksToMongoStatus_slow(const rocksdb::Status& status, const char* prefix) {
         if (status.ok()) {
             return Status::OK();
+        }
+
+        if (status.IsBusy()) {
+            throw WriteConflictException();
         }
 
         if (status.IsCorruption()) {

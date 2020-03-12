@@ -99,9 +99,9 @@ namespace mongo {
         Status _set(int newNum);
         RocksEngine* _engine;
     };
-    
-    
-    // We use mongo's setParameter() API to dynamically change the RocksDB options using the SetOptions API
+
+    // We use mongo's setParameter() API to dynamically change the RocksDB options using the
+    // SetOptions API
     // To dynamically change an option, call:
     // db.adminCommand({setParameter:1, "rocksdbOptions": "someoption=1; someoption2=3"})
     class RocksOptionsParameter : public ServerParameter {

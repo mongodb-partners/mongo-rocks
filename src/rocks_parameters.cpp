@@ -36,12 +36,12 @@
 #include "mongo/util/log.h"
 #include "mongo/util/mongoutils/str.h"
 
-#include <rocksdb/status.h>
 #include <rocksdb/cache.h>
-#include <rocksdb/experimental.h>
-#include <rocksdb/db.h>
 #include <rocksdb/convenience.h>
+#include <rocksdb/db.h>
+#include <rocksdb/experimental.h>
 #include <rocksdb/options.h>
+#include <rocksdb/status.h>
 #include <rocksdb/version.h>
 
 namespace mongo {
@@ -155,64 +155,59 @@ namespace mongo {
         _engine->getBlockCache()->SetCapacity(newSizeInBytes);
 
         return Status::OK();
-    }    
-    
+    }
+
     RocksOptionsParameter::RocksOptionsParameter(RocksEngine* engine)
-        : ServerParameter(ServerParameterSet::getGlobal(), "rocksdbOptions", false,
-                          true),
+        : ServerParameter(ServerParameterSet::getGlobal(), "rocksdbOptions", false, true),
           _engine(engine) {}
 
     void RocksOptionsParameter::append(OperationContext* opCtx, BSONObjBuilder& b,
-                                         const std::string& name) {
+                                       const std::string& name) {
         std::string columnOptions;
         std::string dbOptions;
         std::string fullOptionsStr;
         rocksdb::Options fullOptions = _engine->getDB()->GetOptions();
         rocksdb::Status s = GetStringFromColumnFamilyOptions(&columnOptions, fullOptions);
-        if (!s.ok()) { // If we failed, append the error for the user to see.
-            b.append(name, s.ToString()); 
+        if (!s.ok()) {  // If we failed, append the error for the user to see.
+            b.append(name, s.ToString());
             return;
         }
-        
+
         fullOptionsStr.append(columnOptions);
-        
+
         s = GetStringFromDBOptions(&dbOptions, fullOptions);
-        if (!s.ok()) { // If we failed, append the error for the user to see.
-            b.append(name, s.ToString()); 
+        if (!s.ok()) {  // If we failed, append the error for the user to see.
+            b.append(name, s.ToString());
             return;
         }
-        
+
         fullOptionsStr.append(dbOptions);
 
         b.append(name, fullOptionsStr);
     }
 
-    Status RocksOptionsParameter::set(const BSONElement& newValueElement) {        
-        // In case the BSON element is not a string, the conversion will fail, 
+    Status RocksOptionsParameter::set(const BSONElement& newValueElement) {
+        // In case the BSON element is not a string, the conversion will fail,
         // raising an exception catched by the outer layer.
         // Which will generate an error message that looks like this:
-        // wrong type for field (rocksdbOptions) 3 != 2        
+        // wrong type for field (rocksdbOptions) 3 != 2
         return setFromString(newValueElement.String());
     }
 
     Status RocksOptionsParameter::setFromString(const std::string& str) {
-#if defined(ROCKSDB_MAJOR) && (ROCKSDB_MAJOR > 4 || (ROCKSDB_MAJOR == 4 && ROCKSDB_MINOR >= 13))        
         log() << "RocksDB: Attempting to apply settings: " << str;
-        
+
         std::unordered_map<std::string, std::string> optionsMap;
         rocksdb::Status s = rocksdb::StringToMap(str, &optionsMap);
         if (!s.ok()) {
             return Status(ErrorCodes::BadValue, s.ToString());
         }
-        
+
         s = _engine->getDB()->SetOptions(optionsMap);
         if (!s.ok()) {
             return Status(ErrorCodes::BadValue, s.ToString());
         }
-        
+
         return Status::OK();
-#else
-        return Status(ErrorCodes::BadValue, "This action is supported for RocksDB 4.13 and up");
-#endif
     }
 }

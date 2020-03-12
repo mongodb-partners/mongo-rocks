@@ -59,4 +59,4 @@ namespace mongo {
         stdx::mutex _journalListenerMutex;
     };
 
-} // namespace mongo
+}  // namespace mongo

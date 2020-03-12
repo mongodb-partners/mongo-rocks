@@ -26,6 +26,8 @@
  *    it in the license file.
  */
 
+#define MONGO_LOG_DEFAULT_COMPONENT ::mongo::logger::LogComponent::kStorage
+
 #include "mongo/platform/basic.h"
 #include "mongo/platform/endian.h"
 
@@ -37,10 +39,10 @@
 #include <string>
 
 // for invariant()
-#include "mongo/util/assert_util.h"
-#include "mongo/stdx/mutex.h"
-
 #include <rocksdb/db.h>
+#include "mongo/stdx/mutex.h"
+#include "mongo/util/assert_util.h"
+#include "mongo/util/log.h"
 
 #include "rocks_util.h"
 
@@ -68,12 +70,12 @@ namespace mongo {
         return static_cast<long long>(endian::littleToNative(ret));
     }
 
-    void RocksCounterManager::updateCounter(const std::string& counterKey, long long count,
-                                            rocksdb::WriteBatch* writeBatch) {
-
+    void RocksCounterManager::updateCounter(const std::string& counterKey, long long count) {
         if (_crashSafe) {
             int64_t storage;
-            writeBatch->Put(counterKey, _encodeCounter(count, &storage));
+            auto txn = _makeTxn();
+            invariantRocksOK(txn->Put(counterKey, _encodeCounter(count, &storage)));
+            invariantRocksOK(txn->Commit());
         } else {
             stdx::lock_guard<stdx::mutex> lk(_lock);
             _counters[counterKey] = count;
@@ -81,17 +83,20 @@ namespace mongo {
             if (!_syncing && _syncCounter >= kSyncEvery) {
                 // let's sync this now. piggyback on writeBatch
                 int64_t storage;
+                auto txn = _makeTxn();
                 for (const auto& counter : _counters) {
-                    writeBatch->Put(counter.first, _encodeCounter(counter.second, &storage));
+                    invariantRocksOK(
+                        txn->Put(counter.first, _encodeCounter(counter.second, &storage)));
                 }
                 _counters.clear();
                 _syncCounter = 0;
+                invariantRocksOK(txn->Commit());
             }
         }
     }
 
     void RocksCounterManager::sync() {
-        rocksdb::WriteBatch wb;
+        auto txn = _makeTxn();
         {
             stdx::lock_guard<stdx::mutex> lk(_lock);
             if (_syncing || _counters.size() == 0) {
@@ -99,14 +104,13 @@ namespace mongo {
             }
             int64_t storage;
             for (const auto& counter : _counters) {
-                wb.Put(counter.first, _encodeCounter(counter.second, &storage));
+                invariantRocksOK(txn->Put(counter.first, _encodeCounter(counter.second, &storage)));
             }
             _counters.clear();
             _syncCounter = 0;
             _syncing = true;
         }
-        auto s = _db->Write(rocksdb::WriteOptions(), &wb);
-        invariantRocksOK(s);
+        invariantRocksOK(txn->Commit());
         {
             stdx::lock_guard<stdx::mutex> lk(_lock);
             _syncing = false;
@@ -117,4 +121,10 @@ namespace mongo {
         *storage = static_cast<int64_t>(endian::littleToNative(counter));
         return rocksdb::Slice(reinterpret_cast<const char*>(storage), sizeof(*storage));
     }
-}
+
+    std::unique_ptr<rocksdb::TOTransaction> RocksCounterManager::_makeTxn() {
+        rocksdb::WriteOptions options;
+        rocksdb::TOTransactionOptions txnOptions;
+        return std::unique_ptr<rocksdb::TOTransaction>(_db->BeginTransaction(options, txnOptions));
+    }
+}  // namespace mongo

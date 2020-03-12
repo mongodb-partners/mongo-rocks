@@ -53,4 +53,4 @@ namespace mongo {
         _journalListener->onDurable(token);
     }
 
-} // namespace mongo
+}  // namespace mongo

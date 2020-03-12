@@ -29,14 +29,16 @@
 #pragma once
 
 #include <atomic>
-#include <set>
-#include <unordered_map>
-#include <memory>
-#include <string>
 #include <list>
+#include <memory>
+#include <set>
+#include <string>
+#include <unordered_map>
 
 #include <rocksdb/db.h>
 #include <rocksdb/slice.h>
+#include <rocksdb/utilities/totransaction.h>
+#include <rocksdb/utilities/totransaction_db.h>
 
 #include "mongo/base/string_data.h"
 #include "mongo/stdx/mutex.h"
@@ -45,13 +47,12 @@ namespace mongo {
 
     class RocksCounterManager {
     public:
-        RocksCounterManager(rocksdb::DB* db, bool crashSafe)
+        RocksCounterManager(rocksdb::TOTransactionDB* db, bool crashSafe)
             : _db(db), _crashSafe(crashSafe), _syncing(false), _syncCounter(0) {}
 
         long long loadCounter(const std::string& counterKey);
 
-        void updateCounter(const std::string& counterKey, long long count,
-                           rocksdb::WriteBatch* writeBatch);
+        void updateCounter(const std::string& counterKey, long long count);
 
         void sync();
 
@@ -60,7 +61,9 @@ namespace mongo {
     private:
         static rocksdb::Slice _encodeCounter(long long counter, int64_t* storage);
 
-        rocksdb::DB* _db; // not owned
+        std::unique_ptr<rocksdb::TOTransaction> _makeTxn();
+
+        rocksdb::TOTransactionDB* _db;  // not owned
         const bool _crashSafe;
         stdx::mutex _lock;
         // protected by _lock
@@ -72,5 +75,4 @@ namespace mongo {
 
         static const int kSyncEvery = 10000;
     };
-
 }

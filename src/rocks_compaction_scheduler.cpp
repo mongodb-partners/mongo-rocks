@@ -87,7 +87,7 @@ namespace mongo {
                 return _droppedCache;
             }
 
-            // IgnoreSnapshots is available since RocksDB 4.3
+// IgnoreSnapshots is available since RocksDB 4.3
 #if defined(ROCKSDB_MAJOR) && (ROCKSDB_MAJOR > 4 || (ROCKSDB_MAJOR == 4 && ROCKSDB_MINOR >= 3))
             virtual bool IgnoreSnapshots() const override { return true; }
 #endif
@@ -125,7 +125,7 @@ namespace mongo {
         private:
             const RocksCompactionScheduler* _compactionScheduler;
         };
-    } // end of anon namespace
+    }  // end of anon namespace
 
     class CompactionBackgroundJob : public BackgroundJob {
     public:
@@ -147,7 +147,7 @@ namespace mongo {
             bool operator>(const CompactOp& other) const { return _order > other._order; }
         };
 
-        static const char * const _name;
+        static const char* const _name;
 
         // BackgroundJob
         virtual std::string name() const override { return _name; }
@@ -155,7 +155,7 @@ namespace mongo {
 
         void compact(const CompactOp& op);
 
-        rocksdb::DB* _db;  // not owned
+        rocksdb::DB* _db;                                // not owned
         RocksCompactionScheduler* _compactionScheduler;  // not owned
 
         bool _compactionThreadRunning = true;
@@ -197,19 +197,15 @@ namespace mongo {
         template <class T>
         class unlock_guard {
         public:
-          unlock_guard(T& lk) : lk_(lk) {
-            lk_.unlock();
-          }
+            unlock_guard(T& lk) : lk_(lk) { lk_.unlock(); }
 
-          ~unlock_guard() {
-            lk_.lock();
-          }
+            ~unlock_guard() { lk_.lock(); }
 
-          unlock_guard(const unlock_guard&) = delete;
-          unlock_guard& operator=(const unlock_guard&) = delete;
+            unlock_guard(const unlock_guard&) = delete;
+            unlock_guard& operator=(const unlock_guard&) = delete;
 
         private:
-          T& lk_;
+            T& lk_;
         };
     }
 
@@ -252,10 +248,9 @@ namespace mongo {
         rocksdb::Slice* start = !op._start_str.empty() ? &start_slice : nullptr;
         rocksdb::Slice* end = !op._end_str.empty() ? &end_slice : nullptr;
 
-        LOG(1) << "Starting compaction of range: "
-              << (start ? start->ToString(true) : "<begin>") << " .. "
-              << (end ? end->ToString(true) : "<end>")
-              << " (rangeDropped is " << op._rangeDropped << ")";
+        LOG(1) << "Starting compaction of range: " << (start ? start->ToString(true) : "<begin>")
+               << " .. " << (end ? end->ToString(true) : "<end>") << " (rangeDropped is "
+               << op._rangeDropped << ")";
 
         if (op._rangeDropped) {
             auto s = rocksdb::DeleteFilesInRange(_db, _db->DefaultColumnFamily(), start, end);

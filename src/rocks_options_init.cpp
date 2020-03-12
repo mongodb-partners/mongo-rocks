@@ -26,7 +26,6 @@
  *    it in the license file.
  */
 
-
 #include <iostream>
 
 #include "mongo/util/exit_code.h"

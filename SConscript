@@ -1,3 +1,4 @@
+# -*- mode: python -*-
 Import("env")
 
 env = env.Clone()
@@ -23,10 +24,11 @@ env.Library(
         'src/rocks_recovery_unit.cpp',
         'src/rocks_index.cpp',
         'src/rocks_durability_manager.cpp',
-        'src/rocks_transaction.cpp',
         'src/rocks_snapshot_manager.cpp',
         'src/rocks_util.cpp',
-        ],
+        'src/rocks_oplog_manager.cpp',
+        'src/rocks_begin_transaction_block.cpp',
+    ],
     LIBDEPS= [
         '$BUILD_DIR/mongo/base',
         '$BUILD_DIR/mongo/db/namespace_string',
@@ -43,12 +45,12 @@ env.Library(
         '$BUILD_DIR/mongo/util/concurrency/ticketholder',
         '$BUILD_DIR/mongo/util/processinfo',
         '$BUILD_DIR/third_party/shim_snappy',
-        ],
+    ],
     SYSLIBDEPS=["rocksdb",
                 "z",
                 "bz2"] #z and bz2 are dependencies for rocks
                + dynamic_syslibdeps
-    )
+)
 
 env.Library(
     target= 'storage_rocks',
@@ -64,7 +66,7 @@ env.Library(
         '$BUILD_DIR/mongo/db/storage/kv/kv_engine'
         ],
     LIBDEPS_DEPENDENTS=['$BUILD_DIR/mongo/db/serveronly']
-    )
+)
 
 env.Library(
     target= 'storage_rocks_mock',
@@ -75,8 +77,8 @@ env.Library(
         'storage_rocks_base',
         # Temporary crutch since the ssl cleanup is hard coded in background.cpp
         '$BUILD_DIR/mongo/util/net/network',
-        ]
-    )
+    ]
+)
 
 
 env.CppUnitTest(
@@ -86,28 +88,39 @@ env.CppUnitTest(
    LIBDEPS=[
         'storage_rocks_mock',
         '$BUILD_DIR/mongo/db/storage/sorted_data_interface_test_harness'
-        ]
-   )
+   ]
+)
 
 
 env.CppUnitTest(
    target='storage_rocks_record_store_test',
-   source=['src/rocks_record_store_test.cpp'
-           ],
+   source=[
+        'src/rocks_record_store_test.cpp'
+   ],
    LIBDEPS=[
+        '$BUILD_DIR/mongo/db/auth/authmocks',
+        '$BUILD_DIR/mongo/db/storage/record_store_test_harness',
+        '$BUILD_DIR/mongo/db/repl/repl_coordinator_interface',
+        '$BUILD_DIR/mongo/db/repl/replmocks',
+        '$BUILD_DIR/mongo/util/clock_source_mock',
         'storage_rocks_mock',
-        '$BUILD_DIR/mongo/db/storage/record_store_test_harness'
-        ]
-   )
+   ]
+)
 
 env.CppUnitTest(
-   target='storage_rocks_engine_test',
-   source=['src/rocks_engine_test.cpp'
-           ],
-   LIBDEPS=[
+    target='storage_rocks_recovery_unit_test',
+    source=[
+        'src/rocks_recovery_unit_test.cpp',
+    ],
+    LIBDEPS=[
         'storage_rocks_mock',
-        '$BUILD_DIR/mongo/db/storage/kv/kv_engine_test_harness',
-        '$BUILD_DIR/mongo/db/storage/storage_options'
-        ]
-   )
-
+        '$BUILD_DIR/mongo/util/clock_source_mock',
+        '$BUILD_DIR/mongo/db/storage/test_harness_helper',
+    ],
+    LIBDEPS_PRIVATE=[
+        '$BUILD_DIR/mongo/db/auth/authmocks',
+        '$BUILD_DIR/mongo/db/index/index_access_methods',
+        '$BUILD_DIR/mongo/db/repl/repl_coordinator_interface',
+        '$BUILD_DIR/mongo/db/repl/replmocks',
+    ],
+)
