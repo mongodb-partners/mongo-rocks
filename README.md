@@ -44,7 +44,7 @@ Execute this series of commands to compile MongoDB with RocksDB storage engine:
     git checkout tags/r4.0.3 -b branch_tags_4.0.3
     # get mongorocks
     git clone https://github.com/mongodb-partners/mongo-rocks
-    git checkout v4.0
+    git checkout v4.0.3
     # add rocksdb module to mongo
     mkdir -p mongo/src/mongo/db/modules/
     ln -sf ~/mongo-rocks mongo/src/mongo/db/modules/rocks
