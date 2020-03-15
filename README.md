@@ -1,3 +1,4 @@
+![CI](https://github.com/mongodb-partners/mongo-rocks/workflows/CI/badge.svg?branch=master)
 ## RocksDB Storage Engine Module for MongoDB
 
 **Important:** Last stable version of MongoRocks is 3.4 and 4.0(.3). MongoRocks 3.6 should compile, but are not yet ready to be used in production.
