@@ -18,5 +18,3 @@ Please note we have a code of conduct, please follow it in all your interactions
 MongoRocks follows mongodb's code-style. Which is similiar with google-c++-code-style. It's highly suggested you **clang-format** your code before making the pull request. It's not forced but advised.
 
 
-
-[]: 
