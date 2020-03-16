@@ -202,6 +202,52 @@ namespace mongo {
         }
 
         // TODO(wolfkdy): add t/o transaction stats here
+        {
+            rocksdb::TOTransactionStat txnStat;
+            memset(&txnStat, 0, sizeof txnStat);
+            rocksdb::TOTransactionDB* db = _engine->getDB();
+            invariant(db->Stat(&txnStat).ok());
+            BSONObjBuilder txnObjBuilder;
+            txnObjBuilder.append("max-conflict-bytes",
+                                 static_cast<long long>(txnStat.max_conflict_bytes));
+            txnObjBuilder.append("cur-conflict-bytes",
+                                 static_cast<long long>(txnStat.cur_conflict_bytes));
+            txnObjBuilder.append("uncommitted-keys", static_cast<long long>(txnStat.uk_num));
+            txnObjBuilder.append("committed-keys", static_cast<long long>(txnStat.ck_num));
+            txnObjBuilder.append("alive-txn-num", static_cast<long long>(txnStat.alive_txns_num));
+            txnObjBuilder.append("read-queue-num", static_cast<long long>(txnStat.read_q_num));
+            txnObjBuilder.append("commit-queue-num", static_cast<long long>(txnStat.commit_q_num));
+            txnObjBuilder.append("oldest-timestamp", static_cast<long long>(txnStat.oldest_ts));
+            txnObjBuilder.append("min-read-timestamp", static_cast<long long>(txnStat.min_read_ts));
+            txnObjBuilder.append("max-commit-timestamp",
+                                 static_cast<long long>(txnStat.max_commit_ts));
+            txnObjBuilder.append("committed-max-txnid",
+                                 static_cast<long long>(txnStat.committed_max_txnid));
+            txnObjBuilder.append("min-uncommit-ts",
+                                 static_cast<long long>(txnStat.min_uncommit_ts));
+            txnObjBuilder.append("update-max-commit-ts-times",
+                                 static_cast<long long>(txnStat.update_max_commit_ts_times));
+            txnObjBuilder.append("update-max-commit-ts-retries",
+                                 static_cast<long long>(txnStat.update_max_commit_ts_retries));
+            txnObjBuilder.append("txn-commits", static_cast<long long>(txnStat.txn_commits));
+            txnObjBuilder.append("txn-aborts", static_cast<long long>(txnStat.txn_aborts));
+            txnObjBuilder.append("commit-without-ts-times",
+                                 static_cast<long long>(txnStat.commit_without_ts_times));
+            txnObjBuilder.append("read-without-ts-times",
+                                 static_cast<long long>(txnStat.read_without_ts_times));
+            txnObjBuilder.append("read-with-ts-times",
+                                 static_cast<long long>(txnStat.read_with_ts_times));
+            txnObjBuilder.append("read-queue-walk-len-sum",
+                                 static_cast<long long>(txnStat.read_q_walk_len_sum));
+            txnObjBuilder.append("read-queue-walk-times",
+                                 static_cast<long long>(txnStat.read_q_walk_times));
+            txnObjBuilder.append("commit-queue-walk-len-sum",
+                                 static_cast<long long>(txnStat.commit_q_walk_len_sum));
+            txnObjBuilder.append("commit-queue-walk-times",
+                                 static_cast<long long>(txnStat.commit_q_walk_times));
+            bob.append("transaction-stats", txnObjBuilder.obj());
+        }
+
         RocksEngine::appendGlobalStats(bob);
 
         return bob.obj();

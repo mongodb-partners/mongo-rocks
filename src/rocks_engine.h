@@ -236,7 +236,7 @@ namespace mongo {
         // protected by _identMapMutex
         uint32_t _maxPrefix;
 
-        // If _keepDataHistory is true, then the storage engine keeps all history after the oldest 
+        // If _keepDataHistory is true, then the storage engine keeps all history after the oldest
         // timestamp, and RocksEngine is responsible for advancing the oldest timestamp. If
         // _keepDataHistory is false (i.e. majority reads are disabled), then we only keep history
         // after the "no holes point", and RocksOplogManager is responsible for advancing the oldest
