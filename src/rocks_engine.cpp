@@ -630,7 +630,16 @@ namespace mongo {
 
     }  // namespace
 
-    void RocksEngine::setStableTimestamp(Timestamp stableTimestamp) {}
+    void RocksEngine::setStableTimestamp(Timestamp stableTimestamp) {
+        if (!_keepDataHistory || stableTimestamp.isNull()) {
+            return;
+        }
+        // Communicate to Rocksdb that it can clean up timestamp data earlier than the timestamp
+        // provided.  No future queries will need point-in-time reads at a timestamp prior to the one
+        // provided here.
+        const bool force = false;
+        setOldestTimestamp(stableTimestamp, force);
+    }
 
     void RocksEngine::setInitialDataTimestamp(Timestamp initialDataTimestamp) {}
 
