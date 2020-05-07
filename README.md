@@ -24,7 +24,7 @@ Execute this series of commands to compile MongoDB with RocksDB storage engine:
     cd mongo; scons
 
 #### MongoRocks4.0(.3)
-To support HLC(hyper-logical-clock) and timestamp ordering transactions, RocksDB should provide necessary transaction APIs.
+To support HLC(hyper-logical-clock) and timestamp ordering transactions([some literals](https://www.researchgate.net/publication/37423502_Generalized_Snapshot_Isolation_and_a_Prefix-Consistent_Implementation) referred as Generalized Snapshot Isolation), RocksDB should provide necessary transaction APIs.
 which can be found here: https://github.com/wolfkdy/rocksdb/tree/fb5.18_totdb. This branch is based on official RocksDB's
 branch 5.18.3, there is a merge request for timestamp transactions into official RocksDB's repo, which can be found here:
 https://github.com/facebook/rocksdb/pull/6407.
