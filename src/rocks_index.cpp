@@ -746,8 +746,8 @@ namespace mongo {
         auto triggerWriteConflictAtPoint = [&]() {
             // NOTE(wolfkdy): can only be called when a Get returns NOT_FOUND, to avoid SI's
             // write skew. this function has the semantics of GetForUpdate.
-	    // DO NOT use this if you dont know if the exists or not.
-	    invariantRocksOK(transaction->Delete(prefixedKey));
+            // DO NOT use this if you dont know if the exists or not.
+            invariantRocksOK(transaction->Delete(prefixedKey));
         };
 
         if (!dupsAllowed) {
