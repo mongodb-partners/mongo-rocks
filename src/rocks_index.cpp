@@ -743,6 +743,13 @@ namespace mongo {
         auto transaction = ru->getTransaction();
         invariant(transaction);
 
+        auto triggerWriteConflictAtPoint = [&]() {
+            // NOTE(wolfkdy): can only be called when a Get returns NOT_FOUND, to avoid SI's
+            // write skew. this function has the semantics of GetForUpdate.
+            // DO NOT use this if you dont know if the exists or not.
+            invariantRocksOK(transaction->Delete(prefixedKey));
+        };
+
         if (!dupsAllowed) {
             if (_partial) {
                 // Check that the record id matches.  We may be called to unindex records that are
@@ -750,6 +757,7 @@ namespace mongo {
                 std::string val;
                 auto s = ru->Get(prefixedKey, &val);
                 if (s.IsNotFound()) {
+                    triggerWriteConflictAtPoint();
                     return;
                 }
                 BufReader br(val.data(), val.size());
@@ -771,6 +779,7 @@ namespace mongo {
         std::string currentValue;
         auto getStatus = ru->Get(prefixedKey, &currentValue);
         if (getStatus.IsNotFound()) {
+            triggerWriteConflictAtPoint();
             return;
         }
         invariantRocksOK(getStatus);
