@@ -502,6 +502,9 @@ namespace mongo {
             invariant(s.isOK(), s.reason());
         }
         invariantRocksOK(txn->Put(_makePrefixedKey(_prefix, loc), rocksdb::Slice(data, len)));
+        if (_isOplog) {
+            _oplogKeyTracker->insertKey(ru, loc, len);
+        }
 
         _changeNumRecords(opCtx, 1);
         _increaseDataSize(opCtx, len);

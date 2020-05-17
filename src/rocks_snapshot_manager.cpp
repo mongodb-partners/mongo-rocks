@@ -42,7 +42,7 @@
 
 namespace mongo {
     void RocksSnapshotManager::setCommittedSnapshot(const Timestamp& ts) {
-        stdx::lock_guard<stdx::mutex> lock(_mutex);
+        stdx::lock_guard<stdx::mutex> lock(_committedSnapshotMutex);
 
         invariant(!_committedSnapshot || *_committedSnapshot <= ts);
         _committedSnapshot = ts;
@@ -59,7 +59,7 @@ namespace mongo {
     }
 
     void RocksSnapshotManager::dropAllSnapshots() {
-        stdx::lock_guard<stdx::mutex> lock(_mutex);
+        stdx::lock_guard<stdx::mutex> lock(_committedSnapshotMutex);
         _committedSnapshot = boost::none;
     }
 

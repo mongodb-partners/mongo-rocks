@@ -84,8 +84,6 @@ namespace mongo {
         boost::optional<Timestamp> getMinSnapshotForNextCommittedRead() const;
 
     private:
-        mutable stdx::mutex _mutex;  // Guards all members
-
         // Snapshot to use for reads at a commit timestamp.
         mutable stdx::mutex _committedSnapshotMutex;  // Guards _committedSnapshot.
         boost::optional<Timestamp> _committedSnapshot;
