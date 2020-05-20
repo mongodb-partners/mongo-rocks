@@ -1,6 +1,6 @@
 ## RocksDB Storage Engine Module for MongoDB
 
-**Important:** Last stable version of MongoRocks is 3.4 and 4.0(.3). MongoRocks 3.6 should compile, but are not yet ready to be used in production.
+**Important:** Last stable version of MongoRocks is 3.4 and 4.0(.3). MongoRocks 3.6 should compile, but are not yet ready to be used in production. MongoRocks 4.2 is under development, please refer [v4.2.5_rc1](https://github.com/mongodb-partners/mongo-rocks/tree/v4.2.5_rc1) for more details.
 
 ### TL;DR
 
