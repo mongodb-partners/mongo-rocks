@@ -41,7 +41,6 @@
 #include <rocksdb/statistics.h>
 #include <rocksdb/status.h>
 
-#include "mongo/base/disallow_copying.h"
 #include "mongo/bson/ordering.h"
 #include "mongo/db/storage/kv/kv_engine.h"
 #include "mongo/util/string_map.h"
@@ -61,7 +60,7 @@ namespace rocksdb {
     class Iterator;
     struct Options;
     struct ReadOptions;
-}
+}  // namespace rocksdb
 
 namespace mongo {
 
@@ -72,66 +71,77 @@ namespace mongo {
     class RocksOplogManager;
 
     class RocksEngine final : public KVEngine {
-        MONGO_DISALLOW_COPYING(RocksEngine);
+        RocksEngine(const RocksEngine&) = delete;
+        RocksEngine& operator=(const RocksEngine&) = delete;
 
     public:
         static const int kDefaultJournalDelayMillis;
         RocksEngine(const std::string& path, bool durable, int formatVersion, bool readOnly);
-        virtual ~RocksEngine();
-
-        static void appendGlobalStats(BSONObjBuilder& b);
-
-        virtual RecoveryUnit* newRecoveryUnit() override;
-
-        virtual Status createRecordStore(OperationContext* opCtx, StringData ns, StringData ident,
-                                         const CollectionOptions& options) override;
-
-        virtual std::unique_ptr<RecordStore> getRecordStore(
-            OperationContext* opCtx, StringData ns, StringData ident,
-            const CollectionOptions& options) override;
-
-        virtual Status createSortedDataInterface(OperationContext* opCtx, StringData ident,
-                                                 const IndexDescriptor* desc) override;
-
-        virtual SortedDataInterface* getSortedDataInterface(OperationContext* opCtx,
-                                                            StringData ident,
-                                                            const IndexDescriptor* desc) override;
-
-        virtual Status dropIdent(OperationContext* opCtx, StringData ident) override;
-
-        virtual bool hasIdent(OperationContext* opCtx, StringData ident) const override;
-
-        virtual std::vector<std::string> getAllIdents(OperationContext* opCtx) const override;
+        ~RocksEngine();
 
         virtual bool supportsDocLocking() const override { return true; }
 
         virtual bool supportsDirectoryPerDB() const override { return false; }
 
-        virtual int flushAllFiles(OperationContext* opCtx, bool sync) override;
-
-        virtual Status beginBackup(OperationContext* opCtx) override;
-
-        virtual void endBackup(OperationContext* opCtx) override;
-
         virtual bool isDurable() const override { return _durable; }
 
         virtual bool isEphemeral() const override { return false; }
 
-        virtual int64_t getIdentSize(OperationContext* opCtx, StringData ident);
+        void setOldestActiveTransactionTimestampCallback(
+            StorageEngine::OldestActiveTransactionTimestampCallback callback) override;
 
-        virtual Status repairIdent(OperationContext* opCtx, StringData ident) {
-            return Status::OK();
-        }
+        RecoveryUnit* newRecoveryUnit() override;
 
-        virtual void cleanShutdown();
+        Status createRecordStore(OperationContext* opCtx, StringData ns, StringData ident,
+                                 const CollectionOptions& options) override;
 
-        virtual SnapshotManager* getSnapshotManager() const final {
+        std::unique_ptr<RecordStore> getRecordStore(OperationContext* opCtx, StringData ns,
+                                                    StringData ident,
+                                                    const CollectionOptions& options) override;
+
+        std::unique_ptr<RecordStore> makeTemporaryRecordStore(OperationContext* opCtx,
+                                                              StringData ident) override;
+
+        Status createSortedDataInterface(OperationContext* opCtx,
+                                         const CollectionOptions& collOptions, StringData ident,
+                                         const IndexDescriptor* desc) override;
+
+        SortedDataInterface* getSortedDataInterface(OperationContext* opCtx, StringData ident,
+                                                    const IndexDescriptor* desc) override;
+
+        Status dropIdent(OperationContext* opCtx, StringData ident) override;
+
+        virtual Status okToRename(OperationContext* opCtx, StringData fromNS, StringData toNS,
+                                  StringData ident,
+                                  const RecordStore* originalRecordStore) const override;
+
+        int flushAllFiles(OperationContext* opCtx, bool sync) override;
+
+        Status beginBackup(OperationContext* opCtx) override;
+
+        void endBackup(OperationContext* opCtx) override;
+
+        int64_t getIdentSize(OperationContext* opCtx, StringData ident);
+
+        Status repairIdent(OperationContext* opCtx, StringData ident) { return Status::OK(); }
+
+        bool hasIdent(OperationContext* opCtx, StringData ident) const override;
+
+        std::vector<std::string> getAllIdents(OperationContext* opCtx) const override;
+
+        void cleanShutdown();
+
+        SnapshotManager* getSnapshotManager() const final {
             return (SnapshotManager*)&_snapshotManager;
         }
 
-        virtual void setStableTimestamp(Timestamp stableTimestamp) override;
+        void setJournalListener(JournalListener* jl);
 
-        virtual void setInitialDataTimestamp(Timestamp initialDataTimestamp) override;
+        void setStableTimestamp(Timestamp stableTimestamp, bool force) override;
+
+        void setInitialDataTimestamp(Timestamp initialDataTimestamp) override;
+
+        void setOldestTimestampFromStable() override;
 
         /**
          * This method will set the oldest timestamp and commit timestamp to the input value.
@@ -142,27 +152,76 @@ namespace mongo {
          */
         void setOldestTimestamp(Timestamp oldestTimestamp, bool force) override;
 
-        virtual bool supportsRecoverToStableTimestamp() const override;
+        bool supportsRecoverToStableTimestamp() const override;
 
-        virtual bool supportsRecoveryTimestamp() const override;
+        bool supportsRecoveryTimestamp() const override;
 
-        virtual StatusWith<Timestamp> recoverToStableTimestamp(OperationContext* opCtx) override;
+        StatusWith<Timestamp> recoverToStableTimestamp(OperationContext* opCtx) override;
 
-        virtual boost::optional<Timestamp> getRecoveryTimestamp() const override;
+        boost::optional<Timestamp> getRecoveryTimestamp() const override;
 
         /**
-         * Returns a timestamp value that is at or before the last checkpoint. Everything before
-         * this
-         * value is guaranteed to be persisted on disk and replication recovery will not need to
-         * replay documents with an earlier time.
+         * Returns a stable timestamp value that is guaranteed to exist on recoverToStableTimestamp.
+         * Replication recovery will not need to replay documents with an earlier time.
+         *
+         * Only returns a stable timestamp when it has advanced to >= the initial data timestamp.
+         * Replication recoverable rollback is unsafe when stable < initial during repl initial sync
+         * due
+         * to initial sync's cloning phase without timestamps.
+         *
+         * For the persisted mode of this engine, further guarantees a stable timestamp value that
+         * is at
+         * or before the last checkpoint. Everything before this value is guaranteed to be persisted
+         * on
+         * disk. This supports replication recovery on restart.
          */
-        virtual boost::optional<Timestamp> getLastStableCheckpointTimestamp() const override;
+        boost::optional<Timestamp> getLastStableRecoveryTimestamp() const override;
 
-        virtual Timestamp getAllCommittedTimestamp() const override;
+        Timestamp getAllDurableTimestamp() const override;
+
+        Timestamp getOldestOpenReadTimestamp() const override;
 
         bool supportsReadConcernSnapshot() const final;
 
+        /*
+         * This function is called when replication has completed a batch.  In this function, we
+         * refresh our oplog visiblity read-at-timestamp value.
+         */
+        void replicationBatchIsComplete() const override;
+
+        bool isCacheUnderPressure(OperationContext* opCtx) const override;
+
         bool supportsReadConcernMajority() const final;
+
+        /*
+         * An oplog manager is always accessible, but this method will start the background thread
+         * to
+         * control oplog entry visibility for reads.
+         *
+         * On mongod, the background thread will be started when the first oplog record store is
+         * created, and stopped when the last oplog record store is destroyed, at shutdown time. For
+         * unit tests, the background thread may be started and stopped multiple times as tests
+         * create
+         * and destroy oplog record stores.
+         */
+        void startOplogManager(OperationContext* opCtx, RocksRecordStore* oplogRecordStore);
+
+        void haltOplogManager();
+
+        /*
+         * Always returns a non-nil pointer. However, the WiredTigerOplogManager may not have been
+         * initialized and its background refreshing thread may not be running.
+         *
+         * A caller that wants to get the oplog read timestamp, or call
+         * `waitForAllEarlierOplogWritesToBeVisible`, is advised to first see if the oplog manager
+         * is
+         * running with a call to `isRunning`.
+         *
+         * A caller that simply wants to call `triggerJournalFlush` may do so without concern.
+         */
+        RocksOplogManager* getOplogManager() const { return _oplogManager.get(); }
+
+        // TODO(cuixin): setInitRsOplogBackgroundThreadCallback is used for test, rocks no need
 
         /**
          * Initializes a background job to remove excess documents in the oplog collections.
@@ -171,8 +230,27 @@ namespace mongo {
          * Returns true if a background job is running for the namespace.
          */
         static bool initRsOplogBackgroundThread(StringData ns);
+        static void appendGlobalStats(BSONObjBuilder& b);
 
-        virtual void setJournalListener(JournalListener* jl);
+        Timestamp getStableTimestamp() const override;
+        Timestamp getOldestTimestamp() const override;
+
+        // TODO(cuixin): skip getCheckpointTimestamp
+        //             : skip getInitialDataTimestamp
+        //
+        //             : rocks 4.0.3 no include getDataFilePathForIdent, keep this in 4.2.5
+        //             : getOplogNeededForRollback is used for
+        // WiredTigerKVEngine::WiredTigerCheckpointThread
+        //         rocks db do not need it
+
+        /**
+         * Returns the minimum possible Timestamp value in the oplog that replication may need for
+         * recovery in the event of a crash. This value gets updated every time a checkpoint is
+         * completed. This value is typically a lagged version of what's needed for rollback.
+         *
+         * Returns boost::none when called on an ephemeral database.
+         */
+        boost::optional<Timestamp> getOplogNeededForCrashRecovery() const final;
 
         // rocks specific api
 
@@ -186,18 +264,6 @@ namespace mongo {
         RocksCompactionScheduler* getCompactionScheduler() const {
             return _compactionScheduler.get();
         }
-
-        void startOplogManager(OperationContext* opCtx, RocksRecordStore* oplogRecordStore);
-
-        void haltOplogManager();
-
-        RocksOplogManager* getOplogManager() const { return _oplogManager.get(); }
-
-        /*
-         * This function is called when replication has completed a batch.  In this function, we
-         * refresh our oplog visiblity read-at-timestamp value.
-         */
-        void replicationBatchIsComplete() const override;
 
         RocksDurabilityManager* getDurabilityManager() const { return _durabilityManager.get(); }
 
@@ -215,6 +281,21 @@ namespace mongo {
         std::string _extractPrefix(const BSONObj& config);
 
         rocksdb::Options _options() const;
+        /**
+         * Uses the 'stableTimestamp', the 'targetSnapshotHistoryWindowInSeconds' setting and the
+         * current _oldestTimestamp to calculate what the new oldest_timestamp should be, in order
+         * to
+         * maintain a window of available snapshots on the storage engine from oldest to stable
+         * timestamp.
+         *
+         * If the returned Timestamp isNull(), oldest_timestamp should not be moved forward.
+         */
+        Timestamp _calculateHistoryLagFromStableTimestamp(Timestamp stableTimestamp);
+
+        mutable Mutex _oldestActiveTransactionTimestampCallbackMutex =
+            MONGO_MAKE_LATCH("::_oldestActiveTransactionTimestampCallbackMutex");
+        StorageEngine::OldestActiveTransactionTimestampCallback
+            _oldestActiveTransactionTimestampCallback;
 
         std::string _path;
         std::unique_ptr<rocksdb::TOTransactionDB> _db;
@@ -228,7 +309,7 @@ namespace mongo {
         const int _formatVersion;
 
         // ident map stores mapping from ident to a BSON config
-        mutable stdx::mutex _identMapMutex;
+        mutable Mutex _identMapMutex = MONGO_MAKE_LATCH("RocksEngine::_identMapMutex");
         typedef StringMap<BSONObj> IdentMap;
         IdentMap _identMap;
         std::string _oplogIdent;
@@ -245,7 +326,7 @@ namespace mongo {
 
         // _identObjectMapMutex protects both _identIndexMap and _identCollectionMap. It should
         // never be locked together with _identMapMutex
-        mutable stdx::mutex _identObjectMapMutex;
+        mutable Mutex _identObjectMapMutex = MONGO_MAKE_LATCH("RocksEngine::_identObjectMapMutex");
         // mapping from ident --> index object. we don't own the object
         StringMap<RocksIndexBase*> _identIndexMap;
         // mapping from ident --> collection object
@@ -259,7 +340,7 @@ namespace mongo {
         std::unique_ptr<RocksCompactionScheduler> _compactionScheduler;
 
         // Mutex to protect use of _oplogManagerCount by this instance of KV engine.
-        mutable stdx::mutex _oplogManagerMutex;
+        mutable Mutex _oplogManagerMutex = MONGO_MAKE_LATCH("::_oplogManagerMutex");
         std::size_t _oplogManagerCount = 0;
         std::unique_ptr<RocksOplogManager> _oplogManager;
 
@@ -268,5 +349,9 @@ namespace mongo {
         std::unique_ptr<RocksDurabilityManager> _durabilityManager;
         class RocksJournalFlusher;
         std::unique_ptr<RocksJournalFlusher> _journalFlusher;  // Depends on _durabilityManager
+
+        // Tracks the stable and oldest timestamps we've set on the storage engine.
+        AtomicWord<std::uint64_t> _oldestTimestamp;
+        AtomicWord<std::uint64_t> _stableTimestamp;
     };
-}
+}  // namespace mongo

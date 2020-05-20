@@ -57,18 +57,22 @@
 #include "mongo/db/index/index_descriptor.h"
 #include "mongo/db/namespace_string.h"
 #include "mongo/db/operation_context.h"
+#include "mongo/db/repl/replication_coordinator.h"
 #include "mongo/db/server_options.h"
-#include "mongo/db/server_parameters.h"
+#include "mongo/db/server_recovery.h"
+#include "mongo/db/snapshot_window_options.h"
 #include "mongo/db/storage/journal_listener.h"
 #include "mongo/stdx/memory.h"
 #include "mongo/util/background.h"
 #include "mongo/util/concurrency/idle_thread_block.h"
 #include "mongo/util/concurrency/ticketholder.h"
+#include "mongo/util/debug_util.h"
 #include "mongo/util/fail_point.h"
 #include "mongo/util/fail_point_service.h"
 #include "mongo/util/log.h"
 #include "mongo/util/processinfo.h"
 
+#include "mongo/db/modules/rocks/src/rocks_parameters_gen.h"
 #include "rocks_counter_manager.h"
 #include "rocks_global_options.h"
 #include "rocks_index.h"
@@ -76,9 +80,43 @@
 #include "rocks_recovery_unit.h"
 #include "rocks_util.h"
 
-#define ROCKS_TRACE log()
-
 namespace mongo {
+
+    class MongoRocksLogger : public rocksdb::Logger {
+    public:
+        MongoRocksLogger() : rocksdb::Logger(getLogLevel()) {}
+
+        static rocksdb::InfoLogLevel getLogLevel() {
+            return rocksdb::InfoLogLevel::DEBUG_LEVEL;
+            if (rocksGlobalOptions.logLevel == "debug") {
+                return rocksdb::InfoLogLevel::DEBUG_LEVEL;
+            }
+            if (rocksGlobalOptions.logLevel == "info") {
+                return rocksdb::InfoLogLevel::INFO_LEVEL;
+            }
+            if (rocksGlobalOptions.logLevel == "warn") {
+                return rocksdb::InfoLogLevel::WARN_LEVEL;
+            }
+            if (rocksGlobalOptions.logLevel == "error") {
+                return rocksdb::InfoLogLevel::ERROR_LEVEL;
+            }
+            LOG(0) << "unknown rocksdb loglevel:" << rocksGlobalOptions.logLevel;
+            return rocksdb::InfoLogLevel::INFO_LEVEL;
+        }
+
+        // Write an entry to the log file with the specified format.
+        virtual void Logv(const char* format, va_list ap) {
+            char buffer[8192];
+            int len = snprintf(buffer, sizeof(buffer), "[RocksDB]");
+            if (0 > len) {
+                mongo::log() << "MongoRocksLogger::Logv return NEGATIVE value.";
+                return;
+            }
+            vsnprintf(buffer + len, sizeof(buffer) - len, format, ap);
+            mongo::log() << buffer;
+        }
+        using rocksdb::Logger::Logv;
+    };
 
     class RocksEngine::RocksJournalFlusher : public BackgroundJob {
     public:
@@ -87,9 +125,8 @@ namespace mongo {
 
         virtual std::string name() const { return "RocksJournalFlusher"; }
 
-        virtual void run() {
-            Client::initThread(name().c_str());
-
+        virtual void run() override {
+            ThreadClient tc(name(), getGlobalServiceContext());
             LOG(1) << "starting " << name() << " thread";
 
             while (!_shuttingDown.load()) {
@@ -121,54 +158,56 @@ namespace mongo {
     };
 
     namespace {
-        // ServerParameter to limit concurrency, to prevent thousands of threads running
-        // concurrent searches and thus blocking the entire DB.
-        class RocksTicketServerParameter : public ServerParameter {
-            MONGO_DISALLOW_COPYING(RocksTicketServerParameter);
-
-        public:
-            RocksTicketServerParameter(TicketHolder* holder, const std::string& name)
-                : ServerParameter(ServerParameterSet::getGlobal(), name, true, true),
-                  _holder(holder){};
-            virtual void append(OperationContext* opCtx, BSONObjBuilder& b,
-                                const std::string& name) {
-                b.append(name, _holder->outof());
-            }
-            virtual Status set(const BSONElement& newValueElement) {
-                if (!newValueElement.isNumber())
-                    return Status(ErrorCodes::BadValue, str::stream() << name()
-                                                                      << " has to be a number");
-                return _set(newValueElement.numberInt());
-            }
-            virtual Status setFromString(const std::string& str) {
-                int num = 0;
-                Status status = parseNumberFromString(str, &num);
-                if (!status.isOK()) return status;
-                return _set(num);
-            }
-
-        private:
-            Status _set(int newNum) {
-                if (newNum <= 0) {
-                    return Status(ErrorCodes::BadValue, str::stream() << name()
-                                                                      << " has to be > 0");
-                }
-
-                return _holder->resize(newNum);
-            }
-
-            TicketHolder* _holder;
-        };
-
         TicketHolder openWriteTransaction(128);
-        RocksTicketServerParameter openWriteTransactionParam(&openWriteTransaction,
-                                                             "rocksdbConcurrentWriteTransactions");
-
         TicketHolder openReadTransaction(128);
-        RocksTicketServerParameter openReadTransactionParam(&openReadTransaction,
-                                                            "rocksdbConcurrentReadTransactions");
+    }  // namespace
 
-    }  // anonymous namespace
+    ROpenWriteTransactionParam::ROpenWriteTransactionParam(StringData name, ServerParameterType spt)
+        : ServerParameter(name, spt), _data(&openWriteTransaction) {}
+
+    void ROpenWriteTransactionParam::append(OperationContext* opCtx, BSONObjBuilder& b,
+                                            const std::string& name) {
+        b.append(name, _data->outof());
+    }
+
+    Status ROpenWriteTransactionParam::setFromString(const std::string& str) {
+        int num = 0;
+        Status status = parseNumberFromString(str, &num);
+        if (!status.isOK()) {
+            return status;
+        }
+        if (num <= 0) {
+            return {ErrorCodes::BadValue, str::stream() << name() << " has to be > 0"};
+        }
+        return _data->resize(num);
+    }
+
+    ROpenReadTransactionParam::ROpenReadTransactionParam(StringData name, ServerParameterType spt)
+        : ServerParameter(name, spt), _data(&openReadTransaction) {}
+
+    void ROpenReadTransactionParam::append(OperationContext* opCtx, BSONObjBuilder& b,
+                                           const std::string& name) {
+        b.append(name, _data->outof());
+    }
+
+    Status ROpenReadTransactionParam::setFromString(const std::string& str) {
+        int num = 0;
+        Status status = parseNumberFromString(str, &num);
+        if (!status.isOK()) {
+            return status;
+        }
+        if (num <= 0) {
+            return {ErrorCodes::BadValue, str::stream() << name() << " has to be > 0"};
+        }
+        return _data->resize(num);
+    }
+
+    // TODO(cuixin): consider interfaces below, mongoRocks has not implemented them yet
+    //         WiredTigerKVEngine::setInitRsOplogBackgroundThreadCallback skip
+    //         WiredTigerKVEngine::initRsOplogBackgroundThread skip
+    //         getBackupInformationFromBackupCursor is used in
+    //         WiredTigerKVEngine::beginNonBlockingBackup
+    //         rocks db skip it
 
     // first four bytes are the default prefix 0
     const std::string RocksEngine::kMetadataPrefix("\0\0\0\0metadata-", 13);
@@ -208,6 +247,10 @@ namespace mongo {
         // used in building options for the db
         _compactionScheduler.reset(new RocksCompactionScheduler());
 
+        // Until the Replication layer installs a real callback, prevent truncating the oplog.
+        setOldestActiveTransactionTimestampCallback(
+            [](Timestamp) { return StatusWith(boost::make_optional(Timestamp::min())); });
+
         // open DB
         rocksdb::TOTransactionDB* db;
         rocksdb::Status s;
@@ -239,10 +282,10 @@ namespace mongo {
             invariant(ok);
         }
 
-        // load ident to prefix map. also update _maxPrefix if there's any prefix bigger than
-        // current _maxPrefix
+        // Log ident to prefix map. also update _maxPrefix if there's any prefix bigger than
+        // current _maxPrefix. Here we have no need to check conflict state since we'are
+        // bootstraping and there wouldn't be any Prepares.
         {
-            stdx::lock_guard<stdx::mutex> lk(_identMapMutex);
             for (iter->Seek(kMetadataPrefix);
                  iter->Valid() && iter->key().starts_with(kMetadataPrefix); iter->Next()) {
                 invariantRocksOK(iter->status());
@@ -307,6 +350,62 @@ namespace mongo {
         bb.done();
     }
 
+    void RocksEngine::cleanShutdown() {
+        if (_journalFlusher) {
+            _journalFlusher->shutdown();
+            _journalFlusher.reset();
+        }
+        _durabilityManager.reset();
+        _snapshotManager.dropAllSnapshots();
+        _counterManager->sync();
+        _counterManager.reset();
+        _compactionScheduler.reset();
+        _db.reset();
+    }
+
+    Status RocksEngine::okToRename(OperationContext* opCtx, StringData fromNS, StringData toNS,
+                                   StringData ident, const RecordStore* originalRecordStore) const {
+        _counterManager->sync();
+        return Status::OK();
+    }
+
+    int64_t RocksEngine::getIdentSize(OperationContext* opCtx, StringData ident) {
+        stdx::lock_guard<Latch> lk(_identObjectMapMutex);
+
+        auto indexIter = _identIndexMap.find(ident);
+        if (indexIter != _identIndexMap.end()) {
+            return static_cast<int64_t>(indexIter->second->getSpaceUsedBytes(opCtx));
+        }
+        auto collectionIter = _identCollectionMap.find(ident);
+        if (collectionIter != _identCollectionMap.end()) {
+            return collectionIter->second->storageSize(opCtx);
+        }
+
+        // this can only happen if collection or index exists, but it's not opened (i.e.
+        // getRecordStore or getSortedDataInterface are not called)
+        return 1;
+    }
+
+    int RocksEngine::flushAllFiles(OperationContext* opCtx, bool sync) {
+        LOG(1) << "RocksEngine::flushAllFiles";
+        _counterManager->sync();
+        _durabilityManager->waitUntilDurable(true);
+        return 1;
+    }
+
+    Status RocksEngine::beginBackup(OperationContext* opCtx) {
+        _counterManager->sync();
+        return rocksToMongoStatus(_db->PauseBackgroundWork());
+    }
+
+    void RocksEngine::endBackup(OperationContext* opCtx) { _db->ContinueBackgroundWork(); }
+
+    void RocksEngine::setOldestActiveTransactionTimestampCallback(
+        StorageEngine::OldestActiveTransactionTimestampCallback callback) {
+        stdx::lock_guard<Latch> lk(_oldestActiveTransactionTimestampCallbackMutex);
+        _oldestActiveTransactionTimestampCallback = std::move(callback);
+    };
+
     RecoveryUnit* RocksEngine::newRecoveryUnit() {
         return new RocksRecoveryUnit(_db.get(), _oplogManager.get(), &_snapshotManager,
                                      _counterManager.get(), _compactionScheduler.get(),
@@ -322,7 +421,7 @@ namespace mongo {
             // oplog needs two prefixes, so we also reserve the next one
             uint64_t oplogTrackerPrefix = 0;
             {
-                stdx::lock_guard<stdx::mutex> lk(_identMapMutex);
+                stdx::lock_guard<Latch> lk(_identMapMutex);
                 oplogTrackerPrefix = ++_maxPrefix;
             }
             // we also need to write out the new prefix to the database. this is just an
@@ -344,22 +443,31 @@ namespace mongo {
         auto config = _getIdentConfig(ident);
         std::string prefix = _extractPrefix(config);
 
+        RocksRecordStore::Params params;
+        params.ns = ns;
+        params.ident = ident.toString();
+        params.prefix = prefix;
+        params.isCapped = options.capped;
+        params.cappedMaxSize =
+            params.isCapped ? (options.cappedSize ? options.cappedSize : 4096) : -1;
+        params.cappedMaxDocs =
+            params.isCapped ? (options.cappedMaxDocs ? options.cappedMaxDocs : -1) : -1;
+        params.cappedCallback = nullptr;
+        params.tracksSizeAdjustments = true;
         std::unique_ptr<RocksRecordStore> recordStore =
-            options.capped ? stdx::make_unique<RocksRecordStore>(
-                                 this, opCtx, ns, ident, prefix, true,
-                                 options.cappedSize ? options.cappedSize : 4096,  // default size
-                                 options.cappedMaxDocs ? options.cappedMaxDocs : -1)
-                           : stdx::make_unique<RocksRecordStore>(this, opCtx, ns, ident, prefix);
+            stdx::make_unique<RocksRecordStore>(this, opCtx, params);
 
         {
-            stdx::lock_guard<stdx::mutex> lk(_identObjectMapMutex);
+            stdx::lock_guard<Latch> lk(_identObjectMapMutex);
             _identCollectionMap[ident] = recordStore.get();
         }
+
         return std::move(recordStore);
     }
 
-    Status RocksEngine::createSortedDataInterface(OperationContext* opCtx, StringData ident,
-                                                  const IndexDescriptor* desc) {
+    Status RocksEngine::createSortedDataInterface(OperationContext* opCtx,
+                                                  const CollectionOptions& collOptions,
+                                                  StringData ident, const IndexDescriptor* desc) {
         BSONObjBuilder configBuilder;
         // let index add its own config things
         RocksIndexBase::generateConfig(&configBuilder, _formatVersion, desc->version());
@@ -376,7 +484,8 @@ namespace mongo {
         if (desc->unique()) {
             index = new RocksUniqueIndex(_db.get(), prefix, ident.toString(),
                                          Ordering::make(desc->keyPattern()), std::move(config),
-                                         desc->parentNS(), desc->indexName(), desc->isPartial());
+                                         desc->parentNS().toString(), desc->indexName(),
+                                         desc->keyPattern(), desc->isPartial());
         } else {
             auto si = new RocksStandardIndex(_db.get(), prefix, ident.toString(),
                                              Ordering::make(desc->keyPattern()), std::move(config));
@@ -386,10 +495,42 @@ namespace mongo {
             index = si;
         }
         {
-            stdx::lock_guard<stdx::mutex> lk(_identObjectMapMutex);
+            stdx::lock_guard<Latch> lk(_identObjectMapMutex);
             _identIndexMap[ident] = index;
         }
         return index;
+    }
+
+    // TODO(wolfkdy); this interface is not fully reviewed
+    std::unique_ptr<RecordStore> RocksEngine::makeTemporaryRecordStore(OperationContext* opCtx,
+                                                                       StringData ident) {
+        BSONObjBuilder configBuilder;
+        auto s = _createIdent(ident, &configBuilder);
+        if (!s.isOK()) {
+            return nullptr;
+        }
+        auto config = _getIdentConfig(ident);
+        std::string prefix = _extractPrefix(config);
+
+        RocksRecordStore::Params params;
+        params.ns = "";
+        params.ident = ident.toString();
+        params.prefix = prefix;
+        params.isCapped = false;
+        params.cappedMaxSize = -1;
+        params.cappedMaxDocs = -1;
+        params.cappedCallback = nullptr;
+        params.tracksSizeAdjustments = false;
+
+        std::unique_ptr<RocksRecordStore> recordStore =
+            stdx::make_unique<RocksRecordStore>(this, opCtx, params);
+
+        {
+            stdx::lock_guard<Latch> lk(_identObjectMapMutex);
+            _identCollectionMap[ident] = recordStore.get();
+        }
+
+        return std::move(recordStore);
     }
 
     // cannot be rolled back
@@ -421,71 +562,96 @@ namespace mongo {
 
         if (s.isOK()) {
             // remove from map
-            stdx::lock_guard<stdx::mutex> lk(_identMapMutex);
+            stdx::lock_guard<Latch> lk(_identMapMutex);
             _identMap.erase(ident);
         }
         return s;
     }
 
     bool RocksEngine::hasIdent(OperationContext* opCtx, StringData ident) const {
-        stdx::lock_guard<stdx::mutex> lk(_identMapMutex);
+        stdx::lock_guard<Latch> lk(_identMapMutex);
         return _identMap.find(ident) != _identMap.end();
     }
 
     std::vector<std::string> RocksEngine::getAllIdents(OperationContext* opCtx) const {
         std::vector<std::string> indents;
+        stdx::lock_guard<Latch> lk(_identMapMutex);
         for (auto& entry : _identMap) {
             indents.push_back(entry.first);
         }
         return indents;
     }
 
-    void RocksEngine::cleanShutdown() {
-        if (_journalFlusher) {
-            _journalFlusher->shutdown();
-            _journalFlusher.reset();
-        }
-        _durabilityManager.reset();
-        _snapshotManager.dropAllSnapshots();
-        _counterManager->sync();
-        _counterManager.reset();
-        _compactionScheduler.reset();
-        _db.reset();
-    }
-
     void RocksEngine::setJournalListener(JournalListener* jl) {
         _durabilityManager->setJournalListener(jl);
     }
 
-    int64_t RocksEngine::getIdentSize(OperationContext* opCtx, StringData ident) {
-        stdx::lock_guard<stdx::mutex> lk(_identObjectMapMutex);
-
-        auto indexIter = _identIndexMap.find(ident);
-        if (indexIter != _identIndexMap.end()) {
-            return static_cast<int64_t>(indexIter->second->getSpaceUsedBytes(opCtx));
+    void RocksEngine::setStableTimestamp(Timestamp stableTimestamp, bool force) {
+        if (!_keepDataHistory || stableTimestamp.isNull()) {
+            return;
         }
-        auto collectionIter = _identCollectionMap.find(ident);
-        if (collectionIter != _identCollectionMap.end()) {
-            return collectionIter->second->storageSize(opCtx);
+        // Communicate to Rocksdb that it can clean up timestamp data earlier than the timestamp
+        // provided.  No future queries will need point-in-time reads at a timestamp prior to the
+        // one provided here.
+        setOldestTimestamp(stableTimestamp, false /*force*/);
+    }
+
+    void RocksEngine::setOldestTimestampFromStable() {
+        Timestamp stableTimestamp(_stableTimestamp.load());
+
+        // TODO(wolfkdy): impl failpoint RocksSetOldestTSToStableTS
+
+        // Calculate what the oldest_timestamp should be from the stable_timestamp. The oldest
+        // timestamp should lag behind stable by 'targetSnapshotHistoryWindowInSeconds' to create a
+        // window of available snapshots. If the lag window is not yet large enough, we will not
+        // update/forward the oldest_timestamp yet and instead return early.
+        Timestamp newOldestTimestamp = _calculateHistoryLagFromStableTimestamp(stableTimestamp);
+        if (newOldestTimestamp.isNull()) {
+            return;
         }
 
-        // this can only happen if collection or index exists, but it's not opened (i.e.
-        // getRecordStore or getSortedDataInterface are not called)
-        return 1;
+        setOldestTimestamp(newOldestTimestamp, false);
     }
 
-    int RocksEngine::flushAllFiles(OperationContext* opCtx, bool sync) {
-        LOG(1) << "RocksEngine::flushAllFiles";
-        _counterManager->sync();
-        _durabilityManager->waitUntilDurable(true);
-        return 1;
+    Timestamp RocksEngine::getAllDurableTimestamp() const {
+        return Timestamp(_oplogManager->fetchAllDurableValue());
     }
 
-    Status RocksEngine::beginBackup(OperationContext* opCtx) {
-        return rocksToMongoStatus(_db->PauseBackgroundWork());
+    Timestamp RocksEngine::getOldestOpenReadTimestamp() const {MONGO_UNREACHABLE}
+
+    boost::optional<Timestamp> RocksEngine::getOplogNeededForCrashRecovery() const {
+        return boost::none;
     }
 
-    void RocksEngine::endBackup(OperationContext* opCtx) { _db->ContinueBackgroundWork(); }
+    bool RocksEngine::supportsReadConcernSnapshot() const { return true; }
+
+    bool RocksEngine::supportsReadConcernMajority() const { return true; }
+
+    void RocksEngine::startOplogManager(OperationContext* opCtx,
+                                        RocksRecordStore* oplogRecordStore) {
+        stdx::lock_guard<Latch> lock(_oplogManagerMutex);
+        if (_oplogManagerCount == 0) _oplogManager->start(opCtx, oplogRecordStore);
+        _oplogManagerCount++;
+    }
+
+    void RocksEngine::haltOplogManager() {
+        stdx::unique_lock<Latch> lock(_oplogManagerMutex);
+        invariant(_oplogManagerCount > 0);
+        _oplogManagerCount--;
+        if (_oplogManagerCount == 0) {
+            _oplogManager->halt();
+        }
+    }
+
+    void RocksEngine::replicationBatchIsComplete() const { _oplogManager->triggerJournalFlush(); }
+
+    bool RocksEngine::isCacheUnderPressure(OperationContext* opCtx) const {
+        // TODO(wolfkdy): review rocksdb's memory-stats for answer
+        return false;
+    }
+
+    Timestamp RocksEngine::getStableTimestamp() const { return Timestamp(_stableTimestamp.load()); }
+    Timestamp RocksEngine::getOldestTimestamp() const { return Timestamp(_oldestTimestamp.load()); }
 
     void RocksEngine::setMaxWriteMBPerSec(int maxWriteMBPerSec) {
         _maxWriteMBPerSec = maxWriteMBPerSec;
@@ -502,12 +668,11 @@ namespace mongo {
         return rocksToMongoStatus(s);
     }
 
-    // non public api
     Status RocksEngine::_createIdent(StringData ident, BSONObjBuilder* configBuilder) {
         BSONObj config;
         uint32_t prefix = 0;
         {
-            stdx::lock_guard<stdx::mutex> lk(_identMapMutex);
+            stdx::lock_guard<Latch> lk(_identMapMutex);
             if (_identMap.find(ident) != _identMap.end()) {
                 // already exists
                 return Status::OK();
@@ -535,14 +700,14 @@ namespace mongo {
     }
 
     BSONObj RocksEngine::_getIdentConfig(StringData ident) {
-        stdx::lock_guard<stdx::mutex> lk(_identMapMutex);
+        stdx::lock_guard<Latch> lk(_identMapMutex);
         auto identIter = _identMap.find(ident);
         invariant(identIter != _identMap.end());
         return identIter->second.copy();
     }
 
     BSONObj RocksEngine::_tryGetIdentConfig(StringData ident) {
-        stdx::lock_guard<stdx::mutex> lk(_identMapMutex);
+        stdx::lock_guard<Latch> lk(_identMapMutex);
         auto identIter = _identMap.find(ident);
         const bool identFound = (identIter != _identMap.end());
         return identFound ? identIter->second.copy() : BSONObj();
@@ -563,6 +728,7 @@ namespace mongo {
         table_options.format_version = 2;
         options.table_factory.reset(rocksdb::NewBlockBasedTableFactory(table_options));
 
+        // options.info_log = std::shared_ptr<rocksdb::Logger>(new MongoRocksLogger);
         options.write_buffer_size = 64 * 1024 * 1024;  // 64MB
         options.level0_slowdown_writes_trigger = 8;
         options.max_write_buffer_number = 4;
@@ -607,7 +773,7 @@ namespace mongo {
 
         // create the DB if it's not already present
         options.create_if_missing = true;
-        options.wal_dir = _path + "/journal";
+        // options.wal_dir = _path + "/journal";
 
         // allow override
         if (!rocksGlobalOptions.configString.empty()) {
@@ -630,75 +796,65 @@ namespace mongo {
 
     }  // namespace
 
-    void RocksEngine::setStableTimestamp(Timestamp stableTimestamp) {
-        if (!_keepDataHistory || stableTimestamp.isNull()) {
-            return;
-        }
-        // Communicate to Rocksdb that it can clean up timestamp data earlier than the timestamp
-        // provided.  No future queries will need point-in-time reads at a timestamp prior to the one
-        // provided here.
-        const bool force = false;
-        setOldestTimestamp(stableTimestamp, force);
-    }
-
     void RocksEngine::setInitialDataTimestamp(Timestamp initialDataTimestamp) {}
 
+    // TODO(wolfkdy): in 4.0.3, setOldestTimestamp considers oplogReadTimestamp
+    // it disappears in mongo4.2, find why it happens
     void RocksEngine::setOldestTimestamp(Timestamp oldestTimestamp, bool force) {
         if (MONGO_FAIL_POINT(RocksPreserveSnapshotHistoryIndefinitely)) {
             return;
         }
 
-        if (oldestTimestamp == Timestamp()) {
-            // Nothing to set yet.
-            return;
-        }
-        const auto oplogReadTimestamp = Timestamp(_oplogManager->getOplogReadTimestamp());
-        if (!force && !oplogReadTimestamp.isNull() && oldestTimestamp > oplogReadTimestamp) {
-            // Oplog visibility is updated asynchronously from replication updating the commit
-            // point.
-            // When force is not set, lag the `oldest_timestamp` to the possibly stale oplog read
-            // timestamp value. This guarantees an oplog reader's `read_timestamp` can always
-            // be serviced. When force is set, we respect the caller's request and do not lag the
-            // oldest timestamp.
-            oldestTimestamp = oplogReadTimestamp;
-        }
-        const auto localSnapshotTimestamp = _snapshotManager.getLocalSnapshot();
-        if (!force && localSnapshotTimestamp && oldestTimestamp > *localSnapshotTimestamp) {
-            // When force is not set, lag the `oldest timestamp` to the local snapshot timestamp.
-            // Secondary reads are performed at the local snapshot timestamp, so advancing the
-            // oldest
-            // timestamp beyond the local snapshot timestamp could cause secondary reads to fail.
-            // This
-            // is not a problem when majority read concern is enabled, since the replication system
-            // will
-            // not set the stable timestamp ahead of the local snapshot timestamp. However, when
-            // majority read concern is disabled and the oldest timestamp is set by the oplog
-            // manager,
-            // the oplog manager can set the oldest timestamp ahead of the local snapshot timestamp.
-            oldestTimestamp = *localSnapshotTimestamp;
-        }
-
         rocksdb::RocksTimeStamp ts(oldestTimestamp.asULL());
-        invariantRocksOK(_db->SetTimeStamp(rocksdb::TimeStampType::kOldest, ts, force));
+
         if (force) {
+            invariantRocksOK(_db->SetTimeStamp(rocksdb::TimeStampType::kOldest, ts, force));
             invariantRocksOK(_db->SetTimeStamp(rocksdb::TimeStampType::kCommitted, ts, force));
-        }
-        if (force) {
+            _oldestTimestamp.store(oldestTimestamp.asULL());
             LOG(2) << "oldest_timestamp and commit_timestamp force set to " << oldestTimestamp;
         } else {
+            invariantRocksOK(_db->SetTimeStamp(rocksdb::TimeStampType::kOldest, ts, force));
+            if (_oldestTimestamp.load() < oldestTimestamp.asULL()) {
+                _oldestTimestamp.store(oldestTimestamp.asULL());
+            }
             LOG(2) << "oldest_timestamp set to " << oldestTimestamp;
         }
+    }
+
+    Timestamp RocksEngine::_calculateHistoryLagFromStableTimestamp(Timestamp stableTimestamp) {
+        // The oldest_timestamp should lag behind the stable_timestamp by
+        // 'targetSnapshotHistoryWindowInSeconds' seconds.
+
+        if (stableTimestamp.getSecs() <
+            static_cast<unsigned>(
+                snapshotWindowParams.targetSnapshotHistoryWindowInSeconds.load())) {
+            // The history window is larger than the timestamp history thus far. We must wait for
+            // the history to reach the window size before moving oldest_timestamp forward.
+            return Timestamp();
+        }
+
+        Timestamp calculatedOldestTimestamp(
+            stableTimestamp.getSecs() -
+                snapshotWindowParams.targetSnapshotHistoryWindowInSeconds.load(),
+            stableTimestamp.getInc());
+
+        if (calculatedOldestTimestamp.asULL() <= _oldestTimestamp.load()) {
+            // The stable_timestamp is not far enough ahead of the oldest_timestamp for the
+            // oldest_timestamp to be moved forward: the window is still too small.
+            return Timestamp();
+        }
+
+        return calculatedOldestTimestamp;
     }
 
     bool RocksEngine::supportsRecoverToStableTimestamp() const { return false; }
 
     bool RocksEngine::supportsRecoveryTimestamp() const { return false; }
 
-    StatusWith<Timestamp> RocksEngine::recoverToStableTimestamp(OperationContext* opCtx) {
-        MONGO_UNREACHABLE
-    }
+    StatusWith<Timestamp> RocksEngine::recoverToStableTimestamp(OperationContext* opCtx){
+        MONGO_UNREACHABLE}
 
-    boost::optional<Timestamp> RocksEngine::getRecoveryTimestamp() const { MONGO_UNREACHABLE }
+    boost::optional<Timestamp> RocksEngine::getRecoveryTimestamp() const {MONGO_UNREACHABLE}
 
     /**
      * Returns a timestamp value that is at or before the last checkpoint. Everything before
@@ -706,34 +862,8 @@ namespace mongo {
      * value is guaranteed to be persisted on disk and replication recovery will not need to
      * replay documents with an earlier time.
      */
-    boost::optional<Timestamp> RocksEngine::getLastStableCheckpointTimestamp() const {
+    boost::optional<Timestamp> RocksEngine::getLastStableRecoveryTimestamp() const {
         MONGO_UNREACHABLE
     }
 
-    Timestamp RocksEngine::getAllCommittedTimestamp() const {
-        return _oplogManager->fetchAllCommittedValue();
-    }
-
-    bool RocksEngine::supportsReadConcernSnapshot() const { return true; }
-
-    bool RocksEngine::supportsReadConcernMajority() const { return true; }
-
-    void RocksEngine::startOplogManager(OperationContext* opCtx,
-                                        RocksRecordStore* oplogRecordStore) {
-        stdx::lock_guard<stdx::mutex> lock(_oplogManagerMutex);
-        if (_oplogManagerCount == 0)
-            _oplogManager->start(opCtx, oplogRecordStore, !_keepDataHistory);
-        _oplogManagerCount++;
-    }
-
-    void RocksEngine::haltOplogManager() {
-        stdx::unique_lock<stdx::mutex> lock(_oplogManagerMutex);
-        invariant(_oplogManagerCount > 0);
-        _oplogManagerCount--;
-        if (_oplogManagerCount == 0) {
-            _oplogManager->halt();
-        }
-    }
-
-    void RocksEngine::replicationBatchIsComplete() const { _oplogManager->triggerJournalFlush(); }
 }  // namespace mongo
