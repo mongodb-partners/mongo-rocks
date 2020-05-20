@@ -48,7 +48,8 @@ namespace mongo {
     class RocksRecoveryUnit;
 
     class RocksIndexBase : public SortedDataInterface {
-        MONGO_DISALLOW_COPYING(RocksIndexBase);
+        RocksIndexBase(const RocksIndexBase&) = delete;
+        RocksIndexBase& operator=(const RocksIndexBase&) = delete;
 
     public:
         RocksIndexBase(rocksdb::DB* db, std::string prefix, std::string ident, Ordering order,
@@ -60,17 +61,17 @@ namespace mongo {
         virtual void fullValidate(OperationContext* opCtx, long long* numKeysOut,
                                   ValidateResults* fullResults) const;
 
-        virtual bool appendCustomStats(OperationContext* opCtx, BSONObjBuilder* output,
-                                       double scale) const {
+        virtual bool appendCustomStats(OperationContext* /* opCtx */, BSONObjBuilder* /* output */,
+                                       double /* scale */) const {
             // nothing to say here, really
             return false;
         }
 
         virtual bool isEmpty(OperationContext* opCtx);
 
-        virtual Status initAsEmpty(OperationContext* opCtx);
-
         virtual long long getSpaceUsedBytes(OperationContext* opCtx) const;
+
+        virtual Status initAsEmpty(OperationContext* opCtx);
 
         static void generateConfig(BSONObjBuilder* configBuilder, int formatVersion,
                                    IndexDescriptor::IndexVersion descVersion);
@@ -100,17 +101,17 @@ namespace mongo {
     public:
         RocksUniqueIndex(rocksdb::DB* db, std::string prefix, std::string ident, Ordering order,
                          const BSONObj& config, std::string collectionNamespace,
-                         std::string indexName, bool partial = false);
+                         std::string indexName, const BSONObj& keyPattern, bool partial = false);
 
-        virtual Status insert(OperationContext* opCtx, const BSONObj& key, const RecordId& loc,
-                              bool dupsAllowed);
+        virtual StatusWith<SpecialFormatInserted> insert(OperationContext* opCtx,
+                                                         const BSONObj& key, const RecordId& loc,
+                                                         bool dupsAllowed);
         virtual void unindex(OperationContext* opCtx, const BSONObj& key, const RecordId& loc,
                              bool dupsAllowed);
         virtual std::unique_ptr<SortedDataInterface::Cursor> newCursor(OperationContext* opCtx,
                                                                        bool forward) const;
 
-        virtual Status dupKeyCheck(OperationContext* opCtx, const BSONObj& key,
-                                   const RecordId& loc);
+        virtual Status dupKeyCheck(OperationContext* opCtx, const BSONObj& key);
 
         virtual SortedDataBuilderInterface* getBulkBuilder(OperationContext* opCtx,
                                                            bool dupsAllowed) override;
@@ -118,6 +119,7 @@ namespace mongo {
     private:
         std::string _collectionNamespace;
         std::string _indexName;
+        const BSONObj _keyPattern;
         const bool _partial;
     };
 
@@ -126,14 +128,14 @@ namespace mongo {
         RocksStandardIndex(rocksdb::DB* db, std::string prefix, std::string ident, Ordering order,
                            const BSONObj& config);
 
-        virtual Status insert(OperationContext* opCtx, const BSONObj& key, const RecordId& loc,
-                              bool dupsAllowed);
+        virtual StatusWith<SpecialFormatInserted> insert(OperationContext* opCtx,
+                                                         const BSONObj& key, const RecordId& loc,
+                                                         bool dupsAllowed);
         virtual void unindex(OperationContext* opCtx, const BSONObj& key, const RecordId& loc,
                              bool dupsAllowed);
         virtual std::unique_ptr<SortedDataInterface::Cursor> newCursor(OperationContext* opCtx,
                                                                        bool forward) const;
-        virtual Status dupKeyCheck(OperationContext* opCtx, const BSONObj& key,
-                                   const RecordId& loc) {
+        virtual Status dupKeyCheck(OperationContext* opCtx, const BSONObj& key) {
             // dupKeyCheck shouldn't be called for non-unique indexes
             invariant(false);
             return Status::OK();
