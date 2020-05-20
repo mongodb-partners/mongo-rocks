@@ -36,7 +36,7 @@
 #include <vector>
 
 #include "mongo/base/status.h"
-#include "mongo/stdx/mutex.h"
+#include "mongo/platform/mutex.h"
 #include "mongo/util/timer.h"
 
 namespace rocksdb {
@@ -45,7 +45,7 @@ namespace rocksdb {
     class Iterator;
     struct WriteOptions;
     class WriteBatch;
-}
+}  // namespace rocksdb
 
 namespace mongo {
 
@@ -83,7 +83,7 @@ namespace mongo {
         void droppedPrefixCompacted(const std::string& prefix, bool opSucceeded);
 
     private:
-        stdx::mutex _lock;
+        Mutex _lock = MONGO_MAKE_LATCH("RocksCompactionScheduler::_lock");
         // protected by _lock
         Timer _timer;
 
@@ -99,10 +99,11 @@ namespace mongo {
         std::unique_ptr<CompactionBackgroundJob> _compactionJob;
 
         // set of all prefixes that are deleted. we delete them in the background thread
-        mutable stdx::mutex _droppedPrefixesMutex;
+        mutable Mutex _droppedPrefixesMutex =
+            MONGO_MAKE_LATCH("RocksCompactionScheduler::_droppedPrefixesMutex");
         std::unordered_set<uint32_t> _droppedPrefixes;
         std::atomic<uint32_t> _droppedPrefixesCount;
 
         static const std::string kDroppedPrefix;
     };
-}
+}  // namespace mongo

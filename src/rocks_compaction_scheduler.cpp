@@ -35,8 +35,8 @@
 #include <queue>
 
 #include "mongo/db/client.h"
+#include "mongo/platform/mutex.h"
 #include "mongo/stdx/condition_variable.h"
-#include "mongo/stdx/mutex.h"
 #include "mongo/util/assert_util.h"
 #include "mongo/util/background.h"
 #include "mongo/util/concurrency/idle_thread_block.h"
@@ -125,7 +125,7 @@ namespace mongo {
         private:
             const RocksCompactionScheduler* _compactionScheduler;
         };
-    }  // end of anon namespace
+    }  // namespace
 
     class CompactionBackgroundJob : public BackgroundJob {
     public:
@@ -159,7 +159,7 @@ namespace mongo {
         RocksCompactionScheduler* _compactionScheduler;  // not owned
 
         bool _compactionThreadRunning = true;
-        stdx::mutex _compactionMutex;
+        Mutex _compactionMutex = MONGO_MAKE_LATCH("CompactionBackgroundJob::_compactionMutex");
         stdx::condition_variable _compactionWakeUp;
         using CompactQueue =
             std::priority_queue<CompactOp, std::vector<CompactOp>, std::greater<CompactOp>>;
@@ -176,7 +176,7 @@ namespace mongo {
 
     CompactionBackgroundJob::~CompactionBackgroundJob() {
         {
-            stdx::lock_guard<stdx::mutex> lk(_compactionMutex);
+            stdx::lock_guard<Latch> lk(_compactionMutex);
             _compactionThreadRunning = false;
             // Clean up the queue
             CompactQueue tmp;
@@ -207,11 +207,11 @@ namespace mongo {
         private:
             T& lk_;
         };
-    }
+    }  // namespace
 
     void CompactionBackgroundJob::run() {
         Client::initThread(_name);
-        stdx::unique_lock<stdx::mutex> lk(_compactionMutex);
+        stdx::unique_lock<Latch> lk(_compactionMutex);
         while (_compactionThreadRunning) {
             // check if we have something to compact
             if (_compactionQueue.empty()) {
@@ -235,7 +235,7 @@ namespace mongo {
                                                     const std::string& end, bool rangeDropped,
                                                     uint32_t order) {
         {
-            stdx::lock_guard<stdx::mutex> lk(_compactionMutex);
+            stdx::lock_guard<Latch> lk(_compactionMutex);
             _compactionQueue.push({begin, end, rangeDropped, order});
         }
         _compactionWakeUp.notify_one();
@@ -267,7 +267,7 @@ namespace mongo {
             log() << "Failed to compact range: " << s.ToString();
 
             // Let's leave as quickly as possible if in shutdown
-            stdx::lock_guard<stdx::mutex> lk(_compactionMutex);
+            stdx::lock_guard<Latch> lk(_compactionMutex);
             if (!_compactionThreadRunning) {
                 return;
             }
@@ -290,7 +290,7 @@ namespace mongo {
     void RocksCompactionScheduler::reportSkippedDeletionsAboveThreshold(const std::string& prefix) {
         bool schedule = false;
         {
-            stdx::lock_guard<stdx::mutex> lk(_lock);
+            stdx::lock_guard<Latch> lk(_lock);
             if (_timer.minutes() >= kMinCompactionIntervalMins) {
                 schedule = true;
                 _timer.reset();
@@ -336,7 +336,7 @@ namespace mongo {
     }
 
     std::unordered_set<uint32_t> RocksCompactionScheduler::getDroppedPrefixes() const {
-        stdx::lock_guard<stdx::mutex> lk(_droppedPrefixesMutex);
+        stdx::lock_guard<Latch> lk(_droppedPrefixesMutex);
         // this will copy the set. that way compaction filter has its own copy and doesn't need to
         // worry about thread safety
         return _droppedPrefixes;
@@ -348,6 +348,8 @@ namespace mongo {
             (uint32_t)get_internal_delete_skipped_count();
         int dropped_count = 0;
         uint32_t int_prefix = 0;
+
+        // NOTE(cuixin): only invoke in rocksengine contruct function, no need check conflict
         for (iter->Seek(kDroppedPrefix); iter->Valid() && iter->key().starts_with(kDroppedPrefix);
              iter->Next()) {
             invariantRocksOK(iter->status());
@@ -359,7 +361,7 @@ namespace mongo {
             bool ok = extractPrefix(prefix, &int_prefix);
             invariant(ok);
             {
-                stdx::lock_guard<stdx::mutex> lk(_droppedPrefixesMutex);
+                stdx::lock_guard<Latch> lk(_droppedPrefixesMutex);
                 _droppedPrefixes.insert(int_prefix);
             }
             LOG(1) << "Compacting dropped prefix: " << prefix.ToString(true);
@@ -389,7 +391,7 @@ namespace mongo {
 
         // instruct compaction filter to start deleting
         {
-            stdx::lock_guard<stdx::mutex> lk(_droppedPrefixesMutex);
+            stdx::lock_guard<Latch> lk(_droppedPrefixesMutex);
             for (const auto& prefix : prefixesToDrop) {
                 uint32_t int_prefix;
                 bool ok = extractPrefix(prefix, &int_prefix);
@@ -420,7 +422,7 @@ namespace mongo {
         bool ok = extractPrefix(prefix, &int_prefix);
         invariant(ok);
         {
-            stdx::lock_guard<stdx::mutex> lk(_droppedPrefixesMutex);
+            stdx::lock_guard<Latch> lk(_droppedPrefixesMutex);
             _droppedPrefixes.erase(int_prefix);
         }
         if (opSucceeded) {
@@ -443,4 +445,4 @@ namespace mongo {
             }
         }
     }
-}
+}  // namespace mongo

@@ -37,30 +37,52 @@
 
 namespace mongo {
     RocksBeginTxnBlock::RocksBeginTxnBlock(rocksdb::TOTransactionDB* db,
-                                           std::unique_ptr<rocksdb::TOTransaction>* txn)
+                                           std::unique_ptr<rocksdb::TOTransaction>* txn,
+                                           PrepareConflictBehavior prepareConflictBehavior,
+                                           RoundUpPreparedTimestamps roundUpPreparedTimestamps,
+                                           RoundUpReadTimestamp roundUpReadTimestamp)
         : _db(db) {
         invariant(!_rollback);
         rocksdb::WriteOptions wOpts;
         rocksdb::TOTransactionOptions txnOpts;
+
+        if (prepareConflictBehavior == PrepareConflictBehavior::kIgnoreConflicts) {
+            txnOpts.ignore_prepare = true;
+            txnOpts.read_only = true;
+        } else if (prepareConflictBehavior ==
+                   PrepareConflictBehavior::kIgnoreConflictsAllowWrites) {
+            txnOpts.ignore_prepare = true;
+        }
+
+        if (roundUpPreparedTimestamps == RoundUpPreparedTimestamps::kRound) {
+            txnOpts.timestamp_round_prepared = true;
+        }
+        if (roundUpReadTimestamp == RoundUpReadTimestamp::kRound) {
+            txnOpts.timestamp_round_read = true;
+        }
+
         _transaction = _db->BeginTransaction(wOpts, txnOpts);
         invariant(_transaction);
         txn->reset(_transaction);
         _rollback = true;
     }
 
-    Status RocksBeginTxnBlock::setTimestamp(Timestamp readTs, RoundToOldest roundToOldest) {
+    RocksBeginTxnBlock::~RocksBeginTxnBlock() {
+        if (_rollback) {
+            invariant(_transaction->Rollback().ok());
+        }
+    }
+
+    Status RocksBeginTxnBlock::setReadSnapshot(Timestamp readTs) {
         invariant(_rollback);
         rocksdb::RocksTimeStamp ts(readTs.asULL());
-        auto status =
-            _transaction->SetReadTimeStamp(ts, roundToOldest == RoundToOldest::kRound ? 1 : 0);
+        auto status = _transaction->SetReadTimeStamp(ts);
         if (!status.ok()) {
             return rocksToMongoStatus(status);
         }
+
         status = _transaction->GetReadTimeStamp(&ts);
         invariant(status.ok(), status.ToString());
-        if (roundToOldest != RoundToOldest::kRound) {
-            invariant(readTs == Timestamp(ts));
-        }
         _readTimestamp = Timestamp(ts);
         return Status::OK();
     }
@@ -75,9 +97,4 @@ namespace mongo {
         return _readTimestamp;
     }
 
-    RocksBeginTxnBlock::~RocksBeginTxnBlock() {
-        if (_rollback) {
-            invariant(_transaction->Rollback().ok());
-        }
-    }
 }  // namespace mongo

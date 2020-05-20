@@ -26,11 +26,11 @@
  *    it in the license file.
  */
 
-#include "mongo/platform/basic.h"
-
 #pragma once
 
-#include "mongo/base/disallow_copying.h"
+#include "mongo/db/operation_context.h"
+#include "mongo/platform/basic.h"
+#include "mongo/stdx/condition_variable.h"
 
 namespace rocksdb {
     class DB;
@@ -41,7 +41,8 @@ namespace mongo {
     class JournalListener;
 
     class RocksDurabilityManager {
-        MONGO_DISALLOW_COPYING(RocksDurabilityManager);
+        RocksDurabilityManager(const RocksDurabilityManager&) = delete;
+        RocksDurabilityManager& operator=(const RocksDurabilityManager&) = delete;
 
     public:
         RocksDurabilityManager(rocksdb::DB* db, bool durable);
@@ -50,13 +51,49 @@ namespace mongo {
 
         void waitUntilDurable(bool forceFlush);
 
+        /**
+         * Waits until a prepared unit of work has ended (either been commited or aborted).
+         * This should be used when encountering WT_PREPARE_CONFLICT errors. The caller is
+         * required to retry the conflicting WiredTiger API operation. A return from this
+         * function does not guarantee that the conflicting transaction has ended, only
+         * that one prepared unit of work in the process has signaled that it has ended.
+         * Accepts an OperationContext that will throw an AssertionException when interrupted.
+         * This method is provided in RocksDurabilityManager and not RecoveryUnit because all
+         * recovery units share the same durable manager, and we want a recovery unit on one
+         * thread to signal all recovery units waiting for prepare conflicts across all
+         * other threads.
+         */
+        void waitUntilPreparedUnitOfWorkCommitsOrAborts(OperationContext* opCtx,
+                                                        uint64_t lastCount);
+
+        /**
+         * Notifies waiters that the caller's perpared unit of work has ended
+         * (either committed or aborted).
+         */
+        void notifyPreparedUnitOfWorkHasCommittedOrAborted();
+
+        std::uint64_t getPrepareCommitOrAbortCount() const {
+            return _prepareCommitOrAbortCounter.loadRelaxed();
+        }
+
     private:
         rocksdb::DB* _db;  // not owned
+
         bool _durable;
+
         // Notified when we commit to the journal.
         JournalListener* _journalListener;
-        // Protects _journalListener.
-        stdx::mutex _journalListenerMutex;
-    };
 
+        // Protects _journalListener.
+        Mutex _journalListenerMutex =
+            MONGO_MAKE_LATCH("RocksDurabilityManager::_journalListenerMutex");
+
+        // Mutex and cond var for waiting on prepare commit or abort.
+        Mutex _prepareCommittedOrAbortedMutex =
+            MONGO_MAKE_LATCH("RocksDurabilityManager::_prepareCommittedOrAbortedMutex");
+
+        stdx::condition_variable _prepareCommittedOrAbortedCond;
+
+        AtomicWord<std::uint64_t> _prepareCommitOrAbortCounter{0};
+    };
 }  // namespace mongo

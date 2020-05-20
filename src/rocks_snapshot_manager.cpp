@@ -42,24 +42,24 @@
 
 namespace mongo {
     void RocksSnapshotManager::setCommittedSnapshot(const Timestamp& ts) {
-        stdx::lock_guard<stdx::mutex> lock(_committedSnapshotMutex);
+        stdx::lock_guard<Latch> lock(_committedSnapshotMutex);
 
         invariant(!_committedSnapshot || *_committedSnapshot <= ts);
         _committedSnapshot = ts;
     }
 
     void RocksSnapshotManager::setLocalSnapshot(const Timestamp& timestamp) {
-        stdx::lock_guard<stdx::mutex> lock(_localSnapshotMutex);
+        stdx::lock_guard<Latch> lock(_localSnapshotMutex);
         _localSnapshot = timestamp;
     }
 
     boost::optional<Timestamp> RocksSnapshotManager::getLocalSnapshot() {
-        stdx::lock_guard<stdx::mutex> lock(_localSnapshotMutex);
+        stdx::lock_guard<Latch> lock(_localSnapshotMutex);
         return _localSnapshot;
     }
 
     void RocksSnapshotManager::dropAllSnapshots() {
-        stdx::lock_guard<stdx::mutex> lock(_committedSnapshotMutex);
+        stdx::lock_guard<Latch> lock(_committedSnapshotMutex);
         _committedSnapshot = boost::none;
     }
 
@@ -68,18 +68,20 @@ namespace mongo {
             return boost::none;
         }
 
-        stdx::lock_guard<stdx::mutex> lock(_committedSnapshotMutex);
+        stdx::lock_guard<Latch> lock(_committedSnapshotMutex);
         return _committedSnapshot;
     }
 
     Timestamp RocksSnapshotManager::beginTransactionOnCommittedSnapshot(
-        rocksdb::TOTransactionDB* db, std::unique_ptr<rocksdb::TOTransaction>* txn) const {
-        RocksBeginTxnBlock txnOpen(db, txn);
-        stdx::lock_guard<stdx::mutex> lock(_committedSnapshotMutex);
+        rocksdb::TOTransactionDB* db, std::unique_ptr<rocksdb::TOTransaction>* txn,
+        PrepareConflictBehavior prepareConflictBehavior,
+        RoundUpPreparedTimestamps roundUpPreparedTimestamps) const {
+        RocksBeginTxnBlock txnOpen(db, txn, prepareConflictBehavior, roundUpPreparedTimestamps);
+        stdx::lock_guard<Latch> lock(_committedSnapshotMutex);
         uassert(ErrorCodes::ReadConcernMajorityNotAvailableYet,
                 "Committed view disappeared while running operation", _committedSnapshot);
 
-        auto status = txnOpen.setTimestamp(_committedSnapshot.get());
+        auto status = txnOpen.setReadSnapshot(_committedSnapshot.get());
         invariant(status.isOK(), status.reason());
 
         txnOpen.done();
@@ -87,12 +89,14 @@ namespace mongo {
     }
 
     Timestamp RocksSnapshotManager::beginTransactionOnLocalSnapshot(
-        rocksdb::TOTransactionDB* db, std::unique_ptr<rocksdb::TOTransaction>* txn) const {
-        RocksBeginTxnBlock txnOpen(db, txn);
-        stdx::lock_guard<stdx::mutex> lock(_localSnapshotMutex);
+        rocksdb::TOTransactionDB* db, std::unique_ptr<rocksdb::TOTransaction>* txn,
+        PrepareConflictBehavior prepareConflictBehavior,
+        RoundUpPreparedTimestamps roundUpPreparedTimestamps) const {
+        RocksBeginTxnBlock txnOpen(db, txn, prepareConflictBehavior, roundUpPreparedTimestamps);
+        stdx::lock_guard<Latch> lock(_localSnapshotMutex);
         invariant(_localSnapshot);
         LOG(3) << "begin_transaction on local snapshot " << _localSnapshot.get().toString();
-        auto status = txnOpen.setTimestamp(_localSnapshot.get());
+        auto status = txnOpen.setReadSnapshot(_localSnapshot.get());
         invariant(status.isOK(), status.reason());
 
         txnOpen.done();
