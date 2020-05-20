@@ -26,6 +26,8 @@
  *    it in the license file.
  */
 
+#define MONGO_LOG_DEFAULT_COMPONENT ::mongo::logger::LogComponent::kStorage
+
 #include "rocks_util.h"
 
 #include <rocksdb/status.h>
@@ -38,6 +40,8 @@
 
 #include "mongo/db/concurrency/write_conflict_exception.h"
 #include "mongo/platform/endian.h"
+#include "mongo/util/log.h"
+#include "mongo/util/stacktrace.h"
 
 namespace mongo {
     std::string encodePrefix(uint32_t prefix) {
@@ -72,7 +76,7 @@ namespace mongo {
             throw WriteConflictException();
         }
 
-        if (status.IsCorruption()) {
+        if (status.IsCorruption() || status.IsInvalidArgument()) {
             return Status(ErrorCodes::BadValue, status.ToString());
         }
 

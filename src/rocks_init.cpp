@@ -31,15 +31,19 @@
 
 #include "mongo/base/init.h"
 #include "mongo/db/service_context.h"
-#include "mongo/db/storage/kv/kv_storage_engine.h"
+#include "mongo/db/storage/storage_engine_impl.h"
 #include "mongo/db/storage/storage_engine_init.h"
 #include "mongo/db/storage/storage_engine_metadata.h"
 #include "mongo/db/storage/storage_options.h"
-#include "mongo/util/mongoutils/str.h"
+#include "mongo/util/str.h"
 
+#include "mongo/db/modules/rocks/src/rocks_parameters_gen.h"
 #include "rocks_engine.h"
-#include "rocks_parameters.h"
 #include "rocks_server_status.h"
+
+#if __has_feature(address_sanitizer)
+#include <sanitizer/lsan_interface.h>
+#endif
 
 namespace mongo {
     const std::string kRocksDBEngineName = "rocksdb";
@@ -51,7 +55,7 @@ namespace mongo {
             virtual ~RocksFactory() {}
             virtual StorageEngine* create(const StorageGlobalParams& params,
                                           const StorageEngineLockFile* lockFile) const {
-                KVStorageEngineOptions options;
+                StorageEngineOptions options;
                 options.directoryPerDB = params.directoryperdb;
                 options.forRepair = params.repair;
                 // Mongo keeps some files in params.dbpath. To avoid collision, put out files under
@@ -64,13 +68,23 @@ namespace mongo {
                                               params.readOnly);
                 // Intentionally leaked.
                 auto leaked __attribute__((unused)) = new RocksServerStatusSection(engine);
-                auto leaked2 __attribute__((unused)) = new RocksRateLimiterServerParameter(engine);
-                auto leaked3 __attribute__((unused)) = new RocksBackupServerParameter(engine);
-                auto leaked4 __attribute__((unused)) = new RocksCompactServerParameter(engine);
-                auto leaked5 __attribute__((unused)) = new RocksCacheSizeParameter(engine);
-                auto leaked6 __attribute__((unused)) = new RocksOptionsParameter(engine);
+                auto leaked2 __attribute__((unused)) = new RocksRateLimiterServerParameter(
+                    "rocksdbRuntimeConfigMaxWriteMBPerSec", ServerParameterType::kRuntimeOnly);
+                auto leaked3 __attribute__((unused)) = new RocksBackupServerParameter(
+                    "rocksdbBackup", ServerParameterType::kRuntimeOnly);
+                auto leaked4 __attribute__((unused)) = new RocksCompactServerParameter(
+                    "rocksdbCompact", ServerParameterType::kRuntimeOnly);
+                auto leaked5 __attribute__((unused)) = new RocksCacheSizeParameter(
+                    "rocksdbRuntimeConfigCacheSizeGB", ServerParameterType::kRuntimeOnly);
+                auto leaked6 __attribute__((unused)) =
+                    new RocksOptionsParameter("rocksdbOptions", ServerParameterType::kRuntimeOnly);
+                leaked2->_data = engine;
+                leaked3->_data = engine;
+                leaked4->_data = engine;
+                leaked5->_data = engine;
+                leaked6->_data = engine;
 
-                return new KVStorageEngine(engine, options);
+                return new StorageEngineImpl(engine, options);
             }
 
             virtual StringData getCanonicalName() const { return kRocksDBEngineName; }
@@ -141,4 +155,4 @@ namespace mongo {
                 registerStorageEngine(service, std::make_unique<RocksFactory>());
             });
     }  // namespace
-}
+}  // namespace mongo
