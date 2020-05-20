@@ -63,14 +63,14 @@ namespace mongo {
 
             virtual ~RocksIndexHarness() {}
 
-            std::unique_ptr<SortedDataInterface> newSortedDataInterface(bool unique) {
+            std::unique_ptr<SortedDataInterface> newSortedDataInterface(bool unique, bool partial) {
                 BSONObjBuilder configBuilder;
                 RocksIndexBase::generateConfig(&configBuilder, 3,
                                                IndexDescriptor::IndexVersion::kV2);
                 if (unique) {
-                    return stdx::make_unique<RocksUniqueIndex>(_engine.getDB(), "prefix", "ident",
-                                                               _order, configBuilder.obj(),
-                                                               "test.rocks", "testIndex");
+                    return stdx::make_unique<RocksUniqueIndex>(
+                        _engine.getDB(), "prefix", "ident", _order, configBuilder.obj(),
+                        "test.rocks", "testIndex", BSONObj(), partial);
                 } else {
                     return stdx::make_unique<RocksStandardIndex>(_engine.getDB(), "prefix", "ident",
                                                                  _order, configBuilder.obj());

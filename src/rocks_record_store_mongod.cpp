@@ -56,13 +56,13 @@ namespace mongo {
     namespace {
 
         std::set<NamespaceString> _backgroundThreadNamespaces;
-        stdx::mutex _backgroundThreadMutex;
+        Mutex _backgroundThreadMutex;
 
         class RocksRecordStoreThread : public BackgroundJob {
         public:
             RocksRecordStoreThread(const NamespaceString& ns)
                 : BackgroundJob(true /* deleteSelf */), _ns(ns) {
-                _name = std::string("RocksRecordStoreThread for ") + _ns.toString();
+                _name = std::string("RocksRecordStoreThread-for-") + _ns.toString();
             }
 
             virtual std::string name() const { return _name; }
@@ -86,7 +86,7 @@ namespace mongo {
                         return 0;
                     }
 
-                    Lock::CollectionLock collectionLock(opCtx->lockState(), _ns.ns(), MODE_IX);
+                    Lock::CollectionLock collectionLock(opCtx.get(), _ns, MODE_IX);
                     Collection* collection = db->getCollection(opCtx.get(), _ns);
                     if (!collection) {
                         LOG(2) << "no collection " << _ns;
@@ -110,7 +110,7 @@ namespace mongo {
             }
 
             virtual void run() {
-                Client::initThread(_name.c_str());
+                ThreadClient tc(_name, getGlobalServiceContext());
 
                 while (!globalInShutdownDeprecated()) {
                     int64_t removed = _deleteExcessDocuments();
@@ -147,7 +147,7 @@ namespace mongo {
             return false;
         }
 
-        stdx::lock_guard<stdx::mutex> lock(_backgroundThreadMutex);
+        stdx::lock_guard<Latch> lock(_backgroundThreadMutex);
         NamespaceString nss(ns);
         if (_backgroundThreadNamespaces.count(nss)) {
             log() << "RocksRecordStoreThread " << ns << " already started";
