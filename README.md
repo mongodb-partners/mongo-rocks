@@ -70,4 +70,4 @@ environment variables:
 
 ### Reach out
 
-If you have any issues with MongoRocks, feel free to reach out to our Google Group https://groups.google.com/forum/#!forum/mongo-rocks
+If you have any issues with MongoRocks, feel free to leave an issue on github's issue board.
