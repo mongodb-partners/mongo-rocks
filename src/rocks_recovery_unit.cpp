@@ -67,10 +67,11 @@ namespace mongo {
         class PrefixStrippingIterator : public RocksIterator {
         public:
             // baseIterator is consumed
-            PrefixStrippingIterator(std::string prefix, Iterator* baseIterator,
-                                    RocksCompactionScheduler* compactionScheduler,
+            PrefixStrippingIterator(rocksdb::ColumnFamilyHandle* cf, std::string prefix,
+                                    Iterator* baseIterator, RocksCompactionScheduler* compactionScheduler,
                                     std::unique_ptr<rocksdb::Slice> upperBound)
-                : _rocksdbSkippedDeletionsInitial(0),
+                : _cf(cf),
+                  _rocksdbSkippedDeletionsInitial(0),
                   _prefix(std::move(prefix)),
                   _nextPrefix(rocksGetNextPrefix(_prefix)),
                   _prefixSlice(_prefix.data(), _prefix.size()),
@@ -185,12 +186,12 @@ namespace mongo {
                     get_internal_delete_skipped_count() - _rocksdbSkippedDeletionsInitial;
                 if (skippedDeletionsOp >=
                     RocksCompactionScheduler::getSkippedDeletionsThreshold()) {
-                    _compactionScheduler->reportSkippedDeletionsAboveThreshold(_prefix);
+                    _compactionScheduler->reportSkippedDeletionsAboveThreshold(_cf, _prefix);
                 }
             }
 
+            rocksdb::ColumnFamilyHandle* _cf;
             int _rocksdbSkippedDeletionsInitial;
-
             std::string _prefix;
             std::string _nextPrefix;
             rocksdb::Slice _prefixSlice;
@@ -600,30 +601,33 @@ namespace mongo {
         return _timestampReadSource;
     }
 
-    rocksdb::Status RocksRecoveryUnit::Get(const rocksdb::Slice& key, std::string* value) {
+    rocksdb::Status RocksRecoveryUnit::Get(rocksdb::ColumnFamilyHandle* cf,
+                                           const rocksdb::Slice& key, std::string* value) {
         invariant(getTransaction());
         rocksdb::ReadOptions options;
-        return _transaction->Get(options, key, value);
+        return _transaction->Get(options, cf, key, value);
     }
 
-    RocksIterator* RocksRecoveryUnit::NewIterator(std::string prefix, bool isOplog) {
+    RocksIterator* RocksRecoveryUnit::NewIterator(rocksdb::ColumnFamilyHandle* cf,
+                                                  std::string prefix, bool isOplog) {
         std::unique_ptr<rocksdb::Slice> upperBound(new rocksdb::Slice());
         rocksdb::ReadOptions options;
         options.iterate_upper_bound = upperBound.get();
         invariant(getTransaction());
-        auto it = _transaction->GetIterator(options);
-        return new PrefixStrippingIterator(
-            std::move(prefix), it, isOplog ? nullptr : _compactionScheduler, std::move(upperBound));
+        auto it = _transaction->GetIterator(options, cf);
+        RocksCompactionScheduler * compactScheduler = (isOplog ? nullptr : _compactionScheduler);
+        return new PrefixStrippingIterator(cf, std::move(prefix), it, compactScheduler, std::move(upperBound));
     }
 
     RocksIterator* RocksRecoveryUnit::NewIteratorWithTxn(rocksdb::TOTransaction* txn,
+                                                         rocksdb::ColumnFamilyHandle* cf,
                                                          std::string prefix) {
         invariant(txn);
         std::unique_ptr<rocksdb::Slice> upperBound(new rocksdb::Slice());
         rocksdb::ReadOptions options;
         options.iterate_upper_bound = upperBound.get();
-        auto it = txn->GetIterator(options);
-        return new PrefixStrippingIterator(std::move(prefix), it, nullptr, std::move(upperBound));
+        auto it = txn->GetIterator(options, cf);
+        return new PrefixStrippingIterator(cf, std::move(prefix), it, nullptr, std::move(upperBound));
     }
 
     void RocksRecoveryUnit::incrementCounter(const rocksdb::Slice& counterKey,

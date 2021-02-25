@@ -57,7 +57,7 @@ namespace mongo {
             }
         }
         std::string value;
-        auto s = _db->Get(rocksdb::ReadOptions(), counterKey, &value);
+        auto s = _db->Get(rocksdb::ReadOptions(), _cf, counterKey, &value);
         if (s.IsNotFound()) {
             return 0;
         }
@@ -74,7 +74,7 @@ namespace mongo {
         if (_crashSafe) {
             int64_t storage;
             auto txn = _makeTxn();
-            invariantRocksOK(txn->Put(counterKey, _encodeCounter(count, &storage)));
+            invariantRocksOK(txn->Put(_cf, counterKey, _encodeCounter(count, &storage)));
             invariantRocksOK(txn->Commit());
         } else {
             stdx::lock_guard<stdx::mutex> lk(_lock);
@@ -86,7 +86,7 @@ namespace mongo {
                 auto txn = _makeTxn();
                 for (const auto& counter : _counters) {
                     invariantRocksOK(
-                        txn->Put(counter.first, _encodeCounter(counter.second, &storage)));
+                        txn->Put(_cf, counter.first, _encodeCounter(counter.second, &storage)));
                 }
                 _counters.clear();
                 _syncCounter = 0;
@@ -104,7 +104,7 @@ namespace mongo {
             }
             int64_t storage;
             for (const auto& counter : _counters) {
-                invariantRocksOK(txn->Put(counter.first, _encodeCounter(counter.second, &storage)));
+                invariantRocksOK(txn->Put(_cf, counter.first, _encodeCounter(counter.second, &storage)));
             }
             _counters.clear();
             _syncCounter = 0;

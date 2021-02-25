@@ -32,19 +32,24 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
 #include "mongo/base/status.h"
 #include "mongo/stdx/mutex.h"
 #include "mongo/util/timer.h"
+#include "mongo/bson/bsonobj.h"
 
 namespace rocksdb {
     class CompactionFilterFactory;
+    class ColumnFamilyHandle;
     class DB;
     class Iterator;
     struct WriteOptions;
     class WriteBatch;
+    class TOTransaction;
+    class TOTransactionDB;
 }
 
 namespace mongo {
@@ -56,30 +61,35 @@ namespace mongo {
         RocksCompactionScheduler();
         ~RocksCompactionScheduler();
 
-        void start(rocksdb::DB* db);
+        void start(rocksdb::DB* db, rocksdb::ColumnFamilyHandle* cf);
 
         static int getSkippedDeletionsThreshold() { return kSkippedDeletionsThreshold; }
 
-        void reportSkippedDeletionsAboveThreshold(const std::string& prefix);
+        void reportSkippedDeletionsAboveThreshold(rocksdb::ColumnFamilyHandle* cf, const std::string& prefix);
 
         // schedule compact range operation for execution in _compactionThread
         void compactAll();
-        void compactOplog(const std::string& begin, const std::string& end);
+        void compactOplog(rocksdb::ColumnFamilyHandle* cf, const std::string& begin, const std::string& end);
 
         rocksdb::CompactionFilterFactory* createCompactionFilterFactory() const;
-        std::unordered_set<uint32_t> getDroppedPrefixes() const;
-        uint32_t loadDroppedPrefixes(rocksdb::Iterator* iter);
-        Status dropPrefixesAtomic(const std::vector<std::string>& prefixesToDrop,
-                                  const rocksdb::WriteOptions& syncOptions,
-                                  rocksdb::WriteBatch& wb);
+        std::unordered_map<uint32_t, BSONObj> getDroppedPrefixes() const;
+
+        // load dropped prefixes, and re-schedule compaction of each dropped prefix.
+        // as we don't know which cf a prefix exists, we have to compact each prefix out of each cf.
+        // since prefix is globally unique, we don't worry about deleting unexpceted data.
+        uint32_t loadDroppedPrefixes(rocksdb::Iterator* iter, const std::vector<rocksdb::ColumnFamilyHandle*>);
+        Status dropPrefixesAtomic(rocksdb::ColumnFamilyHandle* cf,
+                                  const std::vector<std::string>& prefixesToDrop,
+                                  rocksdb::TOTransaction* txn,
+                                  const BSONObj& debugInfo);
         void notifyCompacted(const std::string& begin, const std::string& end, bool rangeDropped,
                              bool opSucceeded);
 
     private:
-        void compactPrefix(const std::string& prefix);
-        void compactDroppedPrefix(const std::string& prefix);
-        void compact(const std::string& begin, const std::string& end, bool rangeDropped,
-                     uint32_t order);
+        void compactPrefix(rocksdb::ColumnFamilyHandle* cf, const std::string& prefix);
+        void compactDroppedPrefix(rocksdb::ColumnFamilyHandle* cf, const std::string& prefix);
+        void compact(rocksdb::ColumnFamilyHandle* cf, const std::string& begin, const std::string& end,
+                     bool rangeDropped, uint32_t order);
         void droppedPrefixCompacted(const std::string& prefix, bool opSucceeded);
 
     private:
@@ -88,6 +98,9 @@ namespace mongo {
         Timer _timer;
 
         rocksdb::DB* _db;  // not owned
+
+        // not owned, cf where compaction_scheduler's metadata exists.
+        rocksdb::ColumnFamilyHandle* _metaCf;
 
         // Don't trigger compactions more often than every 10min
         static const int kMinCompactionIntervalMins = 10;
@@ -100,7 +113,7 @@ namespace mongo {
 
         // set of all prefixes that are deleted. we delete them in the background thread
         mutable stdx::mutex _droppedPrefixesMutex;
-        std::unordered_set<uint32_t> _droppedPrefixes;
+        std::unordered_map<uint32_t, BSONObj> _droppedPrefixes;
         std::atomic<uint32_t> _droppedPrefixesCount;
 
         static const std::string kDroppedPrefix;
