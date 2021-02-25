@@ -47,8 +47,8 @@ namespace mongo {
 
     class RocksCounterManager {
     public:
-        RocksCounterManager(rocksdb::TOTransactionDB* db, bool crashSafe)
-            : _db(db), _crashSafe(crashSafe), _syncing(false), _syncCounter(0) {}
+        RocksCounterManager(rocksdb::TOTransactionDB* db, rocksdb::ColumnFamilyHandle* cf, bool crashSafe)
+            : _db(db), _cf(cf), _crashSafe(crashSafe), _syncing(false), _syncCounter(0) {}
 
         long long loadCounter(const std::string& counterKey);
 
@@ -64,8 +64,13 @@ namespace mongo {
         std::unique_ptr<rocksdb::TOTransaction> _makeTxn();
 
         rocksdb::TOTransactionDB* _db;  // not owned
+
+        rocksdb::ColumnFamilyHandle* _cf;  // not owned
+
         const bool _crashSafe;
+
         Mutex _lock = MONGO_MAKE_LATCH("RocksCounterManager::_lock");
+
         // protected by _lock
         bool _syncing;
         // protected by _lock

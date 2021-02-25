@@ -67,6 +67,7 @@ namespace rocksdb {
     class TOTransactionDB;
     class Iterator;
     class Slice;
+    class ColumnFamilyHandle;
 }  // namespace rocksdb
 
 namespace mongo {
@@ -100,7 +101,8 @@ namespace mongo {
                   cappedCallback(nullptr),
                   tracksSizeAdjustments(true) {}
         };
-        RocksRecordStore(RocksEngine* engine, OperationContext* opCtx, Params params);
+        RocksRecordStore(RocksEngine* engine, rocksdb::ColumnFamilyHandle* cf,
+		         OperationContext* opCtx, Params params);
 
         virtual ~RocksRecordStore();
 
@@ -216,8 +218,8 @@ namespace mongo {
         // shared_ptrs
         class Cursor : public SeekableRecordCursor {
         public:
-            Cursor(OperationContext* opCtx, rocksdb::TOTransactionDB* db, std::string prefix,
-                   bool forward, bool isCapped, bool isOplog, RecordId startIterator);
+            Cursor(OperationContext* opCtx, rocksdb::TOTransactionDB* db, rocksdb::ColumnFamilyHandle* cf,
+                   std::string prefix, bool forward, bool isCapped, bool isOplog, RecordId startIterator);
 
             boost::optional<Record> next() final;
             boost::optional<Record> seekExact(const RecordId& id) final;
@@ -236,7 +238,8 @@ namespace mongo {
             boost::optional<Record> curr();
 
             OperationContext* _opCtx;
-            rocksdb::TOTransactionDB* _db;  // not owned
+            rocksdb::TOTransactionDB* _db;     // not owned
+            rocksdb::ColumnFamilyHandle* _cf;  // not owned
             std::string _prefix;
             bool _forward;
             bool _isCapped;
@@ -254,7 +257,7 @@ namespace mongo {
 
         static RecordId _makeRecordId(const rocksdb::Slice& slice);
 
-        static RecordData _getDataFor(rocksdb::TOTransactionDB* db, const std::string& prefix,
+        static RecordData _getDataFor(rocksdb::ColumnFamilyHandle* cf, const std::string& prefix,
                                       OperationContext* opCtx, const RecordId& loc);
 
         RecordId _nextId();
@@ -283,6 +286,7 @@ namespace mongo {
     private:
         RocksEngine* _engine;                            // not owned
         rocksdb::TOTransactionDB* _db;                   // not owned
+        rocksdb::ColumnFamilyHandle* _cf;                // not owned
         RocksOplogManager* _oplogManager;                // not owned
         RocksCounterManager* _counterManager;            // not owned
         RocksCompactionScheduler* _compactionScheduler;  // not owned

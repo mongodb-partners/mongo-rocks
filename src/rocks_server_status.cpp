@@ -203,7 +203,7 @@ namespace mongo {
             bob.append("counters", countersObjBuilder.obj());
         }
 
-        // TODO(wolfkdy): add t/o transaction stats here
+        //  transaction stats
         {
             rocksdb::TOTransactionStat txnStat;
             memset(&txnStat, 0, sizeof txnStat);
@@ -250,6 +250,21 @@ namespace mongo {
             bob.append("transaction-stats", txnObjBuilder.obj());
         }
 
+        // compaction scheduler stats
+        // TODO(wolfkdy): use jstests and failPoints to test primary/secondary status after dropIndex
+        // and dropCollection, test prefixes draining before and after mongod reboot
+        {
+            BSONObjBuilder bb;
+            auto droppedPrefixes = _engine->getCompactionScheduler()->getDroppedPrefixes();
+            {
+                BSONArrayBuilder a;
+                for (auto p : droppedPrefixes) {
+                    a.append(BSON("prefix" << static_cast<long long>(p.first) << "debug-info" << p.second));
+                }
+                bb.appendArray("dropped-prefixes", a.arr());
+            }
+            bob.append("compaction-scheduler", bb.obj());
+        }
         RocksEngine::appendGlobalStats(bob);
 
         return bob.obj();

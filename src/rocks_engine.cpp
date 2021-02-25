@@ -36,6 +36,7 @@
 #include <algorithm>
 #include <mutex>
 
+#include <boost/filesystem.hpp>
 #include <rocksdb/cache.h>
 #include <rocksdb/compaction_filter.h>
 #include <rocksdb/comparator.h>
@@ -235,7 +236,7 @@ namespace mongo {
                     cacheSizeGB = 1;
                 }
             }
-            _block_cache = rocksdb::NewLRUCache(cacheSizeGB * 1024 * 1024 * 1024LL, 6);
+            _blockCache = rocksdb::NewLRUCache(cacheSizeGB * 1024 * 1024 * 1024LL, 6);
         }
         _maxWriteMBPerSec = rocksGlobalOptions.maxWriteMBPerSec;
         _rateLimiter.reset(
@@ -258,20 +259,17 @@ namespace mongo {
         // TODO(wolfkdy): support readOnly mode
         invariant(!readOnly);
 
-        s = rocksdb::TOTransactionDB::Open(_options(), rocksdb::TOTransactionDBOptions(), path,
-                                           &db);
-        invariantRocksOK(s);
-        _db.reset(db);
+        _initDatabase();
 
         _counterManager.reset(
-            new RocksCounterManager(_db.get(), rocksGlobalOptions.crashSafeCounters));
+            new RocksCounterManager(_db.get(), _defaultCf.get(), rocksGlobalOptions.crashSafeCounters));
 
         // open iterator
         auto txn = std::unique_ptr<rocksdb::TOTransaction>(
             _db->BeginTransaction(rocksdb::WriteOptions(), rocksdb::TOTransactionOptions()));
         // metadata is write no-timestamped, so read no-timestamped
         rocksdb::ReadOptions readOpts;
-        auto iter = std::unique_ptr<rocksdb::Iterator>(txn->GetIterator(readOpts));
+        auto iter = std::unique_ptr<rocksdb::Iterator>(txn->GetIterator(readOpts, _defaultCf.get()));
 
         // find maxPrefix
         iter->SeekToLast();
@@ -313,8 +311,9 @@ namespace mongo {
         ++_maxPrefix;
 
         // start compaction thread and load dropped prefixes
-        _compactionScheduler->start(_db.get());
-        auto maxDroppedPrefix = _compactionScheduler->loadDroppedPrefixes(iter.get());
+        _compactionScheduler->start(_db.get(), _defaultCf.get());
+        auto maxDroppedPrefix = _compactionScheduler->loadDroppedPrefixes(iter.get(),
+                                                                          {_defaultCf.get(), _oplogCf.get()});
         _maxPrefix = std::max(_maxPrefix, maxDroppedPrefix);
 
         _durabilityManager.reset(new RocksDurabilityManager(_db.get(), _durable));
@@ -330,6 +329,66 @@ namespace mongo {
     }
 
     RocksEngine::~RocksEngine() { cleanShutdown(); }
+
+    void RocksEngine::_initDatabase() {
+        // open DB
+        rocksdb::TOTransactionDB* db = nullptr;
+        rocksdb::Status s;
+        std::vector<std::string> columnFamilies;
+
+        const auto options = _options();
+        const bool newDB = [&]() {
+            const auto path = boost::filesystem::path(_path) / "CURRENT";
+            return !boost::filesystem::exists(path);
+        }();
+        if (newDB) {
+            // init manifest so list column families will not fail when db is empty.
+            invariantRocksOK(rocksdb::TOTransactionDB::Open(options, 
+                                                            rocksdb::TOTransactionDBOptions(),
+                                                            _path,
+                                                            &db));
+            invariantRocksOK(db->Close());
+        }
+
+        const bool hasOplog = [&]() {
+            s = rocksdb::DB::ListColumnFamilies(options, _path, &columnFamilies);
+            invariantRocksOK(s);
+
+            auto it = std::find(columnFamilies.begin(), columnFamilies.end(),
+                                NamespaceString::kRsOplogNamespace.toString());
+            return (it != columnFamilies.end());
+        }();
+
+        // init oplog columnfamily if not exists.
+        if (!hasOplog) {
+            rocksdb::ColumnFamilyHandle* cf = nullptr;
+            invariantRocksOK(rocksdb::TOTransactionDB::Open(options, 
+                                                            rocksdb::TOTransactionDBOptions(),
+                                                            _path,
+                                                            &db));
+            invariantRocksOK(db->CreateColumnFamily(options,
+                                                    NamespaceString::kRsOplogNamespace.toString(),
+                                                    &cf));
+            invariantRocksOK(db->DestroyColumnFamilyHandle(cf));
+            invariantRocksOK(db->Close());
+            log() << "init oplog cf success";
+        }
+
+        std::vector<rocksdb::ColumnFamilyHandle*> cfs;
+        s = rocksdb::TOTransactionDB::Open(options,
+                                           rocksdb::TOTransactionDBOptions(), _path,
+                                           {{rocksdb::kDefaultColumnFamilyName, options},
+                                            {NamespaceString::kRsOplogNamespace.toString(), options}},
+                                           &cfs,
+                                           &db);
+        invariantRocksOK(s);
+        invariant(cfs.size() == 2);
+        invariant(cfs[0]->GetName() == rocksdb::kDefaultColumnFamilyName);
+        invariant(cfs[1]->GetName() == NamespaceString::kRsOplogNamespace.toString());
+        _db.reset(db);
+        _defaultCf.reset(cfs[0]);
+        _oplogCf.reset(cfs[1]);
+    }
 
     void RocksEngine::appendGlobalStats(BSONObjBuilder& b) {
         BSONObjBuilder bb(b.subobjStart("concurrentTransactions"));
@@ -428,7 +487,7 @@ namespace mongo {
             // optimization
             std::string encodedPrefix(encodePrefix(oplogTrackerPrefix));
             s = rocksToMongoStatus(
-                _db->Put(rocksdb::WriteOptions(), encodedPrefix, rocksdb::Slice()));
+                _db->Put(rocksdb::WriteOptions(), _defaultCf.get(), encodedPrefix, rocksdb::Slice()));
         }
         return s;
     }
@@ -436,8 +495,12 @@ namespace mongo {
     std::unique_ptr<RecordStore> RocksEngine::getRecordStore(OperationContext* opCtx, StringData ns,
                                                              StringData ident,
                                                              const CollectionOptions& options) {
+        rocksdb::ColumnFamilyHandle* cf = nullptr;
         if (NamespaceString::oplog(ns)) {
             _oplogIdent = ident.toString();
+            cf = _oplogCf.get();
+        } else {
+            cf = _defaultCf.get();
         }
 
         auto config = _getIdentConfig(ident);
@@ -480,14 +543,17 @@ namespace mongo {
         auto config = _getIdentConfig(ident);
         std::string prefix = _extractPrefix(config);
 
+        // oplog have no indexes
+        invariant(!NamespaceString::oplog(desc->parentNS()));
+
         RocksIndexBase* index;
         if (desc->unique()) {
-            index = new RocksUniqueIndex(_db.get(), prefix, ident.toString(),
+            index = new RocksUniqueIndex(_db.get(), _defaultCf.get(), prefix, ident.toString(),
                                          Ordering::make(desc->keyPattern()), std::move(config),
                                          desc->parentNS().toString(), desc->indexName(),
                                          desc->keyPattern(), desc->isPartial());
         } else {
-            auto si = new RocksStandardIndex(_db.get(), prefix, ident.toString(),
+            auto si = new RocksStandardIndex(_db.get(), _defaultCf.get(), prefix, ident.toString(),
                                              Ordering::make(desc->keyPattern()), std::move(config));
             if (rocksGlobalOptions.singleDeleteIndex) {
                 si->enableSingleDelete();
@@ -543,8 +609,17 @@ namespace mongo {
             return Status::OK();
         }
 
-        rocksdb::WriteBatch wb;
-        wb.Delete(kMetadataPrefix + ident.toString());
+        rocksdb::WriteOptions writeOptions;
+        writeOptions.sync = true;
+        rocksdb::TOTransactionOptions txnOptions;
+        std::unique_ptr<rocksdb::TOTransaction> txn(_db->BeginTransaction(writeOptions, txnOptions));
+
+        auto status = txn->Delete(_defaultCf.get(), kMetadataPrefix + ident.toString());
+        if (!status.ok()) {
+            log() << "dropIdent error: " << status.ToString();
+            txn->Rollback();
+            return rocksToMongoStatus(status);
+        }
 
         // calculate which prefixes we need to drop
         std::vector<std::string> prefixesToDrop;
@@ -555,10 +630,9 @@ namespace mongo {
             prefixesToDrop.push_back(rocksGetNextPrefix(prefixesToDrop[0]));
         }
 
+        auto cf = (_oplogIdent == ident.toString()) ? _oplogCf.get() : _defaultCf.get();
         // we need to make sure this is on disk before starting to delete data in compactions
-        rocksdb::WriteOptions syncOptions;
-        syncOptions.sync = true;
-        auto s = _compactionScheduler->dropPrefixesAtomic(prefixesToDrop, syncOptions, wb);
+        auto s = _compactionScheduler->dropPrefixesAtomic(cf, prefixesToDrop, txn.get(), config);
 
         if (s.isOK()) {
             // remove from map
@@ -687,13 +761,13 @@ namespace mongo {
 
         BSONObjBuilder builder;
 
-        auto s = _db->Put(rocksdb::WriteOptions(), kMetadataPrefix + ident.toString(),
+        auto s = _db->Put(rocksdb::WriteOptions(), _defaultCf.get(), kMetadataPrefix + ident.toString(),
                           rocksdb::Slice(config.objdata(), config.objsize()));
 
         if (s.ok()) {
             // As an optimization, add a key <prefix> to the DB
             std::string encodedPrefix(encodePrefix(prefix));
-            s = _db->Put(rocksdb::WriteOptions(), encodedPrefix, rocksdb::Slice());
+            s = _db->Put(rocksdb::WriteOptions(), _defaultCf.get(), encodedPrefix, rocksdb::Slice());
         }
 
         return rocksToMongoStatus(s);
@@ -722,7 +796,7 @@ namespace mongo {
         rocksdb::Options options;
         options.rate_limiter = _rateLimiter;
         rocksdb::BlockBasedTableOptions table_options;
-        table_options.block_cache = _block_cache;
+        table_options.block_cache = _blockCache;
         table_options.filter_policy.reset(rocksdb::NewBloomFilterPolicy(10, false));
         table_options.block_size = 16 * 1024;  // 16KB
         table_options.format_version = 2;

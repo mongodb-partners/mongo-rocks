@@ -90,14 +90,17 @@ namespace mongo {
     // assume oplog already locked the relevant keys
     class RocksOplogKeyTracker {
     public:
-        RocksOplogKeyTracker(std::string prefix) : _prefix(std::move(prefix)) {}
+        RocksOplogKeyTracker(rocksdb::ColumnFamilyHandle* cf, std::string prefix)
+            : _cf(cf),
+              _prefix(std::move(prefix)) {}
+
         void insertKey(RocksRecoveryUnit* ru, const RecordId& loc, int len) {
             uint32_t lenLittleEndian = endian::nativeToLittle(static_cast<uint32_t>(len));
             invariant(ru);
             auto transaction = ru->getTransaction();
             invariant(transaction);
             invariantRocksOK(
-                transaction->Put(RocksRecordStore::_makePrefixedKey(_prefix, loc),
+                transaction->Put(_cf, RocksRecordStore::_makePrefixedKey(_prefix, loc),
                                  rocksdb::Slice(reinterpret_cast<const char*>(&lenLittleEndian),
                                                 sizeof(lenLittleEndian))));
         }
@@ -105,11 +108,11 @@ namespace mongo {
             invariant(ru);
             auto transaction = ru->getTransaction();
             invariant(transaction);
-            invariantRocksOK(transaction->Delete(RocksRecordStore::_makePrefixedKey(_prefix, loc)));
+            invariantRocksOK(transaction->Delete(_cf, RocksRecordStore::_makePrefixedKey(_prefix, loc)));
             _deletedKeysSinceCompaction++;
         }
         rocksdb::Iterator* newIterator(RocksRecoveryUnit* ru) {
-            return ru->NewIterator(_prefix, true);
+            return ru->NewIterator(_cf, _prefix, true);
         }
         int decodeSize(const rocksdb::Slice& value) {
             uint32_t size =
@@ -120,14 +123,17 @@ namespace mongo {
         long long getDeletedSinceCompaction() { return _deletedKeysSinceCompaction; }
 
     private:
+        rocksdb::ColumnFamilyHandle* _cf;
         std::atomic<long long> _deletedKeysSinceCompaction;
         std::string _prefix;
     };
 
-    RocksRecordStore::RocksRecordStore(RocksEngine* engine, OperationContext* opCtx, Params params)
+    RocksRecordStore::RocksRecordStore(RocksEngine* engine, rocksdb::ColumnFamilyHandle* cf,
+		    		       OperationContext* opCtx, Params params)
         : RecordStore(params.ns),
           _engine(engine),
           _db(engine->getDB()),
+	  _cf(cf),
           _oplogManager(NamespaceString::oplog(params.ns) ? engine->getOplogManager() : nullptr),
           _counterManager(engine->getCounterManager()),
           _compactionScheduler(engine->getCompactionScheduler()),
@@ -139,7 +145,7 @@ namespace mongo {
           _cappedCallback(params.cappedCallback),
           _cappedDeleteCheckCount(0),
           _isOplog(NamespaceString::oplog(params.ns)),
-          _oplogKeyTracker(_isOplog ? new RocksOplogKeyTracker(rocksGetNextPrefix(_prefix))
+          _oplogKeyTracker(_isOplog ? new RocksOplogKeyTracker(cf, rocksGetNextPrefix(_prefix))
                                     : nullptr),
           _ident(params.ident),
           _dataSizeKey(std::string("\0\0\0\0", 4) + "datasize-" + params.ident),
@@ -164,7 +170,7 @@ namespace mongo {
             _db->BeginTransaction(rocksdb::WriteOptions(), rocksdb::TOTransactionOptions()));
         invariant(txn);
         std::unique_ptr<RocksIterator> iter(
-            RocksRecoveryUnit::NewIteratorWithTxn(txn.get(), _prefix));
+            RocksRecoveryUnit::NewIteratorWithTxn(txn.get(), _cf, _prefix));
         // first check if the collection is empty
         iter->SeekPrefix("");
         bool emptyCollection = !iter->Valid();
@@ -195,6 +201,7 @@ namespace mongo {
 
         _hasBackgroundThread = RocksEngine::initRsOplogBackgroundThread(params.ns);
         invariant(_isOplog == (_oplogManager != nullptr));
+        invariant(_isOplog == NamespaceString::oplog(_cf->GetName()));
         if (_isOplog) {
             _engine->startOplogManager(opCtx, this);
         }
@@ -232,7 +239,7 @@ namespace mongo {
 
     RecordData RocksRecordStore::dataFor(OperationContext* opCtx, const RecordId& loc) const {
         dassert(opCtx->lockState()->isReadLocked());
-        RecordData rd = _getDataFor(_db, _prefix, opCtx, loc);
+        RecordData rd = _getDataFor(_cf, _prefix, opCtx, loc);
         massert(28605, "Didn't find RecordId in RocksRecordStore", (rd.data() != nullptr));
         return rd;
     }
@@ -246,11 +253,11 @@ namespace mongo {
         invariant(txn);
 
         std::string oldValue;
-        auto status = rocksPrepareConflictRetry(opCtx, [&] { return ru->Get(key, &oldValue); });
+        auto status = rocksPrepareConflictRetry(opCtx, [&] { return ru->Get(_cf, key, &oldValue); });
         invariantRocksOK(status);
         int oldLength = oldValue.size();
 
-        invariantRocksOK(txn->Delete(key));
+        invariantRocksOK(txn->Delete(_cf, key));
         if (_isOplog) {
             _oplogKeyTracker->deleteKey(ru, dl);
         }
@@ -346,6 +353,7 @@ namespace mongo {
         return cappedDeleteAsNeeded_inlock(opCtx, justInserted);
     }
 
+    // TODO(wolfkdy): delete oplogs only when there are enough sst files and use compact-filter.
     int64_t RocksRecordStore::cappedDeleteAsNeeded_inlock(OperationContext* opCtx,
                                                           const RecordId& justInserted) {
         // we do this is a sub transaction in case it aborts
@@ -382,7 +390,7 @@ namespace mongo {
                 // should be no need for us to reconstruct the document to pass it to the callback
                 iter.reset(_oplogKeyTracker->newIterator(ru));
             } else {
-                iter.reset(ru->NewIterator(_prefix));
+                iter.reset(ru->NewIterator(_cf, _prefix));
             }
             int64_t storage;
 
@@ -406,7 +414,7 @@ namespace mongo {
                 }
 
                 std::string key(_makePrefixedKey(_prefix, newestOld));
-                invariantRocksOK(txn->Delete(key));
+                invariantRocksOK(txn->Delete(_cf, key));
                 rocksdb::Slice oldValue;
                 ++docsRemoved;
                 if (_isOplog) {
@@ -480,12 +488,12 @@ namespace mongo {
                 _oplogSinceLastCompaction.reset();
                 // schedule compaction for oplog
                 std::string oldestAliveKey(_makePrefixedKey(_prefix, _cappedOldestKeyHint));
-                _compactionScheduler->compactOplog(_prefix, oldestAliveKey);
+                _compactionScheduler->compactOplog(_cf, _prefix, oldestAliveKey);
 
                 // schedule compaction for oplog tracker
                 std::string oplogKeyTrackerPrefix(rocksGetNextPrefix(_prefix));
                 oldestAliveKey = _makePrefixedKey(oplogKeyTrackerPrefix, _cappedOldestKeyHint);
-                _compactionScheduler->compactOplog(oplogKeyTrackerPrefix, oldestAliveKey);
+                _compactionScheduler->compactOplog(_cf, oplogKeyTrackerPrefix, oldestAliveKey);
 
                 _oplogKeyTracker->resetDeletedSinceCompaction();
             }
@@ -529,7 +537,7 @@ namespace mongo {
             auto s = opCtx->recoveryUnit()->setTimestamp(ts);
             invariant(s.isOK(), s.reason());
         }
-        invariantRocksOK(txn->Put(_makePrefixedKey(_prefix, loc), rocksdb::Slice(data, len)));
+        invariantRocksOK(txn->Put(_cf, _makePrefixedKey(_prefix, loc), rocksdb::Slice(data, len)));
         if (_isOplog) {
             _oplogKeyTracker->insertKey(ru, loc, len);
         }
@@ -603,12 +611,12 @@ namespace mongo {
         invariant(txn);
 
         std::string old_value;
-        auto status = rocksPrepareConflictRetry(opCtx, [&] { return ru->Get(key, &old_value); });
+        auto status = rocksPrepareConflictRetry(opCtx, [&] { return ru->Get(_cf, key, &old_value); });
         invariantRocksOK(status);
 
         int old_length = old_value.size();
 
-        invariantRocksOK(txn->Put(key, rocksdb::Slice(data, len)));
+        invariantRocksOK(txn->Put(_cf, key, rocksdb::Slice(data, len)));
 
         if (_isOplog) {
             _oplogKeyTracker->insertKey(ru, loc, len);
@@ -643,7 +651,7 @@ namespace mongo {
             ru->setIsOplogReader();
         }
 
-        return stdx::make_unique<Cursor>(opCtx, _db, _prefix, forward, _isCapped, _isOplog,
+        return stdx::make_unique<Cursor>(opCtx, _db, _cf, _prefix, forward, _isCapped, _isOplog,
                                          startIterator);
     }
 
@@ -651,7 +659,7 @@ namespace mongo {
         // We can't use getCursor() here because we need to ignore the visibility of records (i.e.
         // we need to delete all records, regardless of visibility)
         auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(opCtx);
-        std::unique_ptr<RocksIterator> iterator(ru->NewIterator(_prefix, _isOplog));
+        std::unique_ptr<RocksIterator> iterator(ru->NewIterator(_cf, _prefix, _isOplog));
 
         rocksPrepareConflictRetry(opCtx, [&] {
             iterator->SeekToFirst();
@@ -908,20 +916,20 @@ namespace mongo {
 
     bool RocksRecordStore::findRecord(OperationContext* opCtx, const RecordId& loc,
                                       RecordData* out) const {
-        RecordData rd = _getDataFor(_db, _prefix, opCtx, loc);
+        RecordData rd = _getDataFor(_cf, _prefix, opCtx, loc);
         if (rd.data() == NULL) return false;
         *out = rd;
         return true;
     }
 
-    RecordData RocksRecordStore::_getDataFor(rocksdb::TOTransactionDB* db,
+    RecordData RocksRecordStore::_getDataFor(rocksdb::ColumnFamilyHandle* cf,
                                              const std::string& prefix, OperationContext* opCtx,
                                              const RecordId& loc) {
         RocksRecoveryUnit* ru = RocksRecoveryUnit::getRocksRecoveryUnit(opCtx);
 
         std::string valueStorage;
         auto key = _makePrefixedKey(prefix, loc);
-        auto status = rocksPrepareConflictRetry(opCtx, [&] { return ru->Get(key, &valueStorage); });
+        auto status = rocksPrepareConflictRetry(opCtx, [&] { return ru->Get(_cf, key, &valueStorage); });
         if (status.IsNotFound()) {
             return RecordData(nullptr, 0);
         }
@@ -951,10 +959,12 @@ namespace mongo {
     // --------
 
     RocksRecordStore::Cursor::Cursor(OperationContext* opCtx, rocksdb::TOTransactionDB* db,
+                                     rocksdb::ColumnFamilyHandle* cf,
                                      std::string prefix, bool forward, bool isCapped, bool isOplog,
                                      RecordId startIterator)
         : _opCtx(opCtx),
           _db(db),
+          _cf(cf),
           _prefix(std::move(prefix)),
           _forward(forward),
           _isCapped(isCapped),
@@ -1025,7 +1035,7 @@ namespace mongo {
             return _iterator.get();
         }
         _iterator.reset(RocksRecoveryUnit::getRocksRecoveryUnit(_opCtx)->NewIterator(
-            _prefix, _isOplog /* isOplog */));
+            _cf, _prefix, _isOplog /* isOplog */));
         if (!_needFirstSeek) {
             positionIterator();
         }
@@ -1085,7 +1095,7 @@ namespace mongo {
         auto key = _makePrefixedKey(_prefix, id);
         auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(_opCtx);
         auto status =
-            rocksPrepareConflictRetry(_opCtx, [&] { return ru->Get(key, &_seekExactResult); });
+            rocksPrepareConflictRetry(_opCtx, [&] { return ru->Get(_cf, key, &_seekExactResult); });
 
         if (status.IsNotFound()) {
             _eof = true;
@@ -1123,7 +1133,7 @@ namespace mongo {
             _oplogVisibleTs = ru->getOplogVisibilityTs();
         }
         if (!_iterator.get()) {
-            _iterator.reset(ru->NewIterator(_prefix, _isOplog));
+            _iterator.reset(ru->NewIterator(_cf, _prefix, _isOplog));
         }
         _skipNextAdvance = false;
 
