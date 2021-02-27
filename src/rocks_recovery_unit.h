@@ -137,11 +137,12 @@ namespace mongo {
         // local api
         void setIsOplogReader() { _isOplogReader = true; }
 
-        rocksdb::Status Get(const rocksdb::Slice& key, std::string* value);
+        rocksdb::Status Get(rocksdb::ColumnFamilyHandle* cf, const rocksdb::Slice& key, std::string* value);
 
-        RocksIterator* NewIterator(std::string prefix, bool isOplog = false);
+        RocksIterator* NewIterator(rocksdb::ColumnFamilyHandle* cf, std::string prefix, bool isOplog = false);
 
-        static RocksIterator* NewIteratorWithTxn(rocksdb::TOTransaction* txn, std::string prefix);
+        static RocksIterator* NewIteratorWithTxn(rocksdb::TOTransaction* txn,
+                                                 rocksdb::ColumnFamilyHandle* cf, std::string prefix);
 
         void incrementCounter(const rocksdb::Slice& counterKey, std::atomic<long long>* counter,
                               long long delta);
