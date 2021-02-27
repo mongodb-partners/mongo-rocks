@@ -41,6 +41,7 @@
 
 namespace rocksdb {
     class DB;
+    class ColumnFamilyHandle;
 }
 
 namespace mongo {
@@ -51,8 +52,8 @@ namespace mongo {
         MONGO_DISALLOW_COPYING(RocksIndexBase);
 
     public:
-        RocksIndexBase(rocksdb::DB* db, std::string prefix, std::string ident, Ordering order,
-                       const BSONObj& config);
+        RocksIndexBase(rocksdb::DB* db, rocksdb::ColumnFamilyHandle* cf, std::string prefix,
+                       std::string ident, Ordering order, const BSONObj& config);
 
         virtual SortedDataBuilderInterface* getBulkBuilder(OperationContext* opCtx,
                                                            bool dupsAllowed) = 0;
@@ -80,6 +81,8 @@ namespace mongo {
 
         rocksdb::DB* _db;  // not owned
 
+        rocksdb::ColumnFamilyHandle* _cf; // not owned
+
         // Each key in the index is prefixed with _prefix
         std::string _prefix;
         std::string _ident;
@@ -98,7 +101,8 @@ namespace mongo {
 
     class RocksUniqueIndex : public RocksIndexBase {
     public:
-        RocksUniqueIndex(rocksdb::DB* db, std::string prefix, std::string ident, Ordering order,
+        RocksUniqueIndex(rocksdb::DB* db, rocksdb::ColumnFamilyHandle* cf, std::string prefix,
+                         std::string ident, Ordering order,
                          const BSONObj& config, std::string collectionNamespace,
                          std::string indexName, bool partial = false);
 
@@ -123,8 +127,8 @@ namespace mongo {
 
     class RocksStandardIndex : public RocksIndexBase {
     public:
-        RocksStandardIndex(rocksdb::DB* db, std::string prefix, std::string ident, Ordering order,
-                           const BSONObj& config);
+        RocksStandardIndex(rocksdb::DB* db, rocksdb::ColumnFamilyHandle* cf, std::string prefix,
+                           std::string ident, Ordering order, const BSONObj& config);
 
         virtual Status insert(OperationContext* opCtx, const BSONObj& key, const RecordId& loc,
                               bool dupsAllowed);
