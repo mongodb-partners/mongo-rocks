@@ -368,7 +368,11 @@ namespace mongo {
         stdx::lock_guard<stdx::mutex> lk(_droppedPrefixesMutex);
         // this will copy the set. that way compaction filter has its own copy and doesn't need to
         // worry about thread safety
-        return _droppedPrefixes;
+        std::unordered_map<uint32_t, BSONObj> ret;
+        for(auto p : _droppedPrefixes) {
+          ret.emplace(p.first, p.second.copy());
+        }
+        return ret;
     }
 
     uint32_t RocksCompactionScheduler::loadDroppedPrefixes(rocksdb::Iterator* iter,
@@ -390,7 +394,7 @@ namespace mongo {
             invariant(ok);
             {
                 stdx::lock_guard<stdx::mutex> lk(_droppedPrefixesMutex);
-                _droppedPrefixes.emplace(int_prefix, BSONObj(iter->value().data()));
+                _droppedPrefixes.emplace(int_prefix, BSONObj(iter->value().data()).copy());
             }
             LOG(1) << "Compacting dropped prefix: " << prefix.ToString(true);
             for (auto cf : cfs) {
