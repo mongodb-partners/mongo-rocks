@@ -51,6 +51,7 @@
 #include "mongo/util/mongoutils/str.h"
 
 #include "rocks_engine.h"
+#include "rocks_prepare_conflict.h"
 #include "rocks_record_store.h"
 #include "rocks_recovery_unit.h"
 #include "rocks_util.h"
@@ -241,15 +242,24 @@ namespace mongo {
                 if (_iterator.get() == nullptr) {
                     _iterator.reset(
                         RocksRecoveryUnit::getRocksRecoveryUnit(_opCtx)->NewIterator(_cf, _prefix));
-                    _iterator->SeekPrefix(rocksdb::Slice(_key.getBuffer(), _key.getSize()));
+                    rocksPrepareConflictRetry(_opCtx, [&] {
+                        _iterator->SeekPrefix(rocksdb::Slice(_key.getBuffer(), _key.getSize()));
+                        return _iterator->status();
+                    });
                     // advanceCursor() should only ever be called in states where the above seek
                     // will succeed in finding the exact key
                     invariant(_iterator->Valid());
                 }
                 if (_forward) {
-                    _iterator->Next();
+                    rocksPrepareConflictRetry(_opCtx, [&] {
+                        _iterator->Next();
+                        return _iterator->status();
+                    });
                 } else {
-                    _iterator->Prev();
+                    rocksPrepareConflictRetry(_opCtx, [&] {
+                        _iterator->Prev();
+                        return _iterator->status();
+                    });
                 }
                 _updateOnIteratorValidity();
             }
@@ -258,11 +268,17 @@ namespace mongo {
             bool seekCursor(const KeyString& query) {
                 auto* iter = iterator();
                 const rocksdb::Slice keySlice(query.getBuffer(), query.getSize());
-                iter->Seek(keySlice);
+                rocksPrepareConflictRetry(_opCtx, [&] {
+                    iter->Seek(keySlice);
+                    return iter->status();
+                });
                 if (!_updateOnIteratorValidity()) {
                     if (!_forward) {
                         // this will give lower bound behavior for backwards
-                        iter->SeekToLast();
+                        rocksPrepareConflictRetry(_opCtx, [&] {
+                            iter->SeekToLast();
+                            return iter->status();
+                        });
                         _updateOnIteratorValidity();
                     }
                     return false;
@@ -278,7 +294,10 @@ namespace mongo {
                     // less than (to the left of) what we were searching for,
                     // rather than the first value greater than (to the right
                     // of) the value we were searching for.
-                    iter->Prev();
+                    rocksPrepareConflictRetry(_opCtx, [&] {
+                        iter->Prev();
+                        return iter->status();
+                    });
                     _updateOnIteratorValidity();
                 }
 
@@ -399,8 +418,10 @@ namespace mongo {
                 std::string prefixedKey(_prefix);
                 _query.resetToKey(stripFieldNames(key), _order);
                 prefixedKey.append(_query.getBuffer(), _query.getSize());
-                rocksdb::Status status =
-                    RocksRecoveryUnit::getRocksRecoveryUnit(_opCtx)->Get(_cf, prefixedKey, &_value);
+                rocksdb::Status status = rocksPrepareConflictRetry(_opCtx, [&] {
+                    return RocksRecoveryUnit::getRocksRecoveryUnit(_opCtx)->Get(_cf, prefixedKey, &_value);
+                });
+
                 if (status.IsNotFound()) {
                     _eof = true;
                 } else if (!status.ok()) {
@@ -606,7 +627,10 @@ namespace mongo {
         auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(opCtx);
         std::unique_ptr<rocksdb::Iterator> it(ru->NewIterator(_cf, _prefix));
 
-        it->SeekToFirst();
+        auto s = rocksPrepareConflictRetry(opCtx, [&] {
+            it->SeekToFirst();
+            return it->status();
+        });
         return !it->Valid();
     }
 
@@ -669,7 +693,8 @@ namespace mongo {
                                     std::memory_order_relaxed);
 
         std::string currentValue;
-        auto getStatus = ru->Get(_cf, prefixedKey, &currentValue);
+        auto getStatus =
+            rocksPrepareConflictRetry(opCtx, [&] { return ru->Get(_cf, prefixedKey, &currentValue); });
         if (!getStatus.ok() && !getStatus.IsNotFound()) {
             return rocksToMongoStatus(getStatus);
         } else if (getStatus.IsNotFound()) {
@@ -679,7 +704,7 @@ namespace mongo {
                 value.appendTypeBits(encodedKey.getTypeBits());
             }
             rocksdb::Slice valueSlice(value.getBuffer(), value.getSize());
-            invariantRocksOK(ru->getTransaction()->Put(_cf, prefixedKey, valueSlice));
+            invariantRocksOK(ROCKS_OP_CHECK(ru->getTransaction()->Put(_cf, prefixedKey, valueSlice)));
             return Status::OK();
         }
 
@@ -722,7 +747,7 @@ namespace mongo {
         rocksdb::Slice valueVectorSlice(valueVector.getBuffer(), valueVector.getSize());
         auto txn = ru->getTransaction();
         invariant(txn);
-        invariantRocksOK(txn->Put(_cf, prefixedKey, valueVectorSlice));
+        invariantRocksOK(ROCKS_OP_CHECK(txn->Put(_cf, prefixedKey, valueVectorSlice)));
         return Status::OK();
     }
 
@@ -753,7 +778,7 @@ namespace mongo {
             // NOTE(wolfkdy): can only be called when a Get returns NOT_FOUND, to avoid SI's
             // write skew. this function has the semantics of GetForUpdate.
             // DO NOT use this if you dont know if the exists or not.
-            invariantRocksOK(transaction->Delete(_cf, prefixedKey));
+            invariantRocksOK(ROCKS_OP_CHECK(transaction->Delete(_cf, prefixedKey)));
         };
 
         if (!dupsAllowed) {
@@ -761,7 +786,8 @@ namespace mongo {
                 // Check that the record id matches.  We may be called to unindex records that are
                 // not present in the index due to the partial filter expression.
                 std::string val;
-                auto s = ru->Get(_cf, prefixedKey, &val);
+                auto s =
+                    rocksPrepareConflictRetry(opCtx, [&] { return ru->Get(_cf, prefixedKey, &val); });
                 if (s.IsNotFound()) {
                     triggerWriteConflictAtPoint();
                     return;
@@ -775,7 +801,7 @@ namespace mongo {
                 KeyString::TypeBits::fromBuffer(_keyStringVersion, &br);
                 fassert(90417, !br.remaining());
             }
-            invariantRocksOK(transaction->Delete(_cf, prefixedKey));
+            invariantRocksOK(ROCKS_OP_CHECK(transaction->Delete(_cf, prefixedKey)));
             _indexStorageSize.fetch_sub(static_cast<long long>(prefixedKey.size()),
                                         std::memory_order_relaxed);
             return;
@@ -783,7 +809,8 @@ namespace mongo {
 
         // dups are allowed, so we have to deal with a vector of RecordIds.
         std::string currentValue;
-        auto getStatus = ru->Get(_cf, prefixedKey, &currentValue);
+        auto getStatus =
+            rocksPrepareConflictRetry(opCtx, [&] { return ru->Get(_cf, prefixedKey, &currentValue); });
         if (getStatus.IsNotFound()) {
             triggerWriteConflictAtPoint();
             return;
@@ -802,7 +829,7 @@ namespace mongo {
                 if (records.empty() && !br.remaining()) {
                     // This is the common case: we are removing the only loc for this key.
                     // Remove the whole entry.
-                    invariantRocksOK(transaction->Delete(_cf, prefixedKey));
+                    invariantRocksOK(ROCKS_OP_CHECK(transaction->Delete(_cf, prefixedKey)));
                     _indexStorageSize.fetch_sub(static_cast<long long>(prefixedKey.size()),
                                                 std::memory_order_relaxed);
                     return;
@@ -833,7 +860,7 @@ namespace mongo {
         }
 
         rocksdb::Slice newValueSlice(newValue.getBuffer(), newValue.getSize());
-        invariantRocksOK(transaction->Put(_cf, prefixedKey, newValueSlice));
+        invariantRocksOK(ROCKS_OP_CHECK(transaction->Put(_cf, prefixedKey, newValueSlice)));
         _indexStorageSize.fetch_sub(static_cast<long long>(prefixedKey.size()),
                                     std::memory_order_relaxed);
     }
@@ -851,7 +878,8 @@ namespace mongo {
 
         auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(opCtx);
         std::string value;
-        auto getStatus = ru->Get(_cf, prefixedKey, &value);
+        auto getStatus =
+            rocksPrepareConflictRetry(opCtx, [&] { return ru->Get(_cf, prefixedKey, &value); });
         if (!getStatus.ok() && !getStatus.IsNotFound()) {
             return rocksToMongoStatus(getStatus);
         } else if (getStatus.IsNotFound()) {
@@ -907,7 +935,7 @@ namespace mongo {
                                encodedKey.getTypeBits().getSize());
         }
 
-        invariantRocksOK(transaction->Put(_cf, prefixedKey, value));
+        invariantRocksOK(ROCKS_OP_CHECK(transaction->Put(_cf, prefixedKey, value)));
         _indexStorageSize.fetch_add(static_cast<long long>(prefixedKey.size()),
                                     std::memory_order_relaxed);
 
@@ -941,7 +969,7 @@ namespace mongo {
         if (useSingleDelete) {
             warning() << "mongoRocks4.0+ nolonger supports singleDelete, fallback to Delete";
         }
-        invariantRocksOK(transaction->Delete(_cf, prefixedKey));
+        invariantRocksOK(ROCKS_OP_CHECK(transaction->Delete(_cf, prefixedKey)));
         _indexStorageSize.fetch_sub(static_cast<long long>(prefixedKey.size()),
                                     std::memory_order_relaxed);
     }
