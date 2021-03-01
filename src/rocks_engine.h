@@ -214,7 +214,7 @@ namespace mongo {
         BSONObj _tryGetIdentConfig(StringData ident);
         std::string _extractPrefix(const BSONObj& config);
 
-        rocksdb::Options _options() const;
+        rocksdb::Options _options(bool isOplog) const;
 
         void _initDatabase();
 

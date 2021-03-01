@@ -72,7 +72,6 @@ namespace mongo {
     class RocksDurabilityManager;
     class RocksCompactionScheduler;
     class RocksRecoveryUnit;
-    class RocksOplogKeyTracker;
     class RocksRecordStore;
     class RocksOplogManager;
     class RocksEngine;
@@ -183,6 +182,10 @@ namespace mongo {
 
         int64_t cappedDeleteAsNeeded(OperationContext* opCtx, const RecordId& justInserted);
         int64_t cappedDeleteAsNeeded_inlock(OperationContext* opCtx, const RecordId& justInserted);
+
+        bool reclaimOplog(OperationContext* opCtx);
+        bool reclaimOplog(OperationContext* opCtx, Timestamp persistedTimestamp);
+
         bool haveCappedWaiters();
 
         void notifyCappedWaitersIfNeeded();
@@ -196,8 +199,6 @@ namespace mongo {
         class CappedInsertChange;
 
     private:
-        // we just need to expose _makePrefixedKey to RocksOplogKeyTracker
-        friend class RocksOplogKeyTracker;
         // NOTE: Cursor might outlive the RecordStore. That's why we use all those
         // shared_ptrs
         class Cursor : public SeekableRecordCursor {
@@ -249,9 +250,12 @@ namespace mongo {
         // The use of this function requires that the passed in storage outlives the returned Slice
         static rocksdb::Slice _makeKey(const RecordId& loc, int64_t* storage);
         static std::string _makePrefixedKey(const std::string& prefix, const RecordId& loc);
+        Timestamp _prefixedKeyToTimestamp(const std::string& key) const;
 
         void _changeNumRecords(OperationContext* opCtx, int64_t amount);
         void _increaseDataSize(OperationContext* opCtx, int64_t amount);
+
+        void _loadCountFromCountManager(OperationContext* opCtx);
 
         RocksEngine* _engine;                            // not owned
         rocksdb::TOTransactionDB* _db;                   // not owned
@@ -272,15 +276,6 @@ namespace mongo {
         int _cappedDeleteCheckCount;                    // see comment in ::cappedDeleteAsNeeded
 
         const bool _isOplog;
-        // nullptr iff _isOplog == false
-        RocksOplogKeyTracker* _oplogKeyTracker;
-        // keep track of when we compacted oplog last time. only valid when _isOplog == true.
-        // Protected by _cappedDeleterMutex.
-        Timer _oplogSinceLastCompaction;
-        // compact oplog every 30 min
-        static const int kOplogCompactEveryMins = 30;
-        // compact oplog every 500K deletes
-        static const int kOplogCompactEveryDeletedRecords = 500000;
 
         // invariant: there is no live records earlier than _cappedOldestKeyHint. There might be
         // some records that are dead after _cappedOldestKeyHint.
