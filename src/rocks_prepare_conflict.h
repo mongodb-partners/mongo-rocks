@@ -40,7 +40,7 @@
 
 namespace mongo {
 
-    // When set, simulates returning ROCKS_PREPARE_CONFLICT on Rocks cursor read operations.
+    // When set, returns simulates returning rocks prepare conflict status.
     MONGO_FAIL_POINT_DECLARE(RocksPrepareConflictForReads);
 
     // When set, rocksdb::Busy is returned in place of retrying on ROCKS_PREPARE_CONFLICT errors.
@@ -60,12 +60,10 @@ namespace mongo {
 
     /**
      * Runs the argument function f as many times as needed for f to return an error other than
-     * ROCKS_PREPARE_CONFLICT. Each time f returns PrepareConflict we wait until the current unit
-     * of
-     * work commits or aborts, and then try f again. Imposes no upper limit on the number of times
-     * to
-     * re-try f, so any required timeout behavior must be enforced within f.
-     * The function f must return a WiredTiger error code.
+     * WT_PREPARE_CONFLICT. Each time f returns WT_PREPARE_CONFLICT we wait until the current unit
+     * of work commits or aborts, and then try f again. Imposes no upper limit on the number of
+     * times to re-try f, so any required timeout behavior must be enforced within f. The function f
+     * must return a error code.
      */
     template <typename F>
     rocksdb::Status rocksPrepareConflictRetry(OperationContext* opCtx, F&& f) {

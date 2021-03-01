@@ -28,6 +28,7 @@
 
 #pragma once
 
+#include <rocksdb/env.h>
 #include <rocksdb/status.h>
 #include <string>
 #include "mongo/util/assert_util.h"
@@ -44,6 +45,14 @@
 #endif
 
 namespace mongo {
+    class MongoRocksLogger : public rocksdb::Logger {
+    public:
+        MongoRocksLogger() : rocksdb::Logger(rocksdb::InfoLogLevel::INFO_LEVEL) {}
+
+        // Write an entry to the log file with the specified format.
+        virtual void Logv(const char* format, va_list ap) override;
+        using rocksdb::Logger::Logv;
+    };
 
 #ifdef __linux__
     namespace {

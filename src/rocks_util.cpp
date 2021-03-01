@@ -25,6 +25,7 @@
  *    exception statement from all source files in the program, then also delete
  *    it in the license file.
  */
+#define MONGO_LOG_DEFAULT_COMPONENT ::mongo::logger::LogComponent::kStorage
 
 #define MONGO_LOG_DEFAULT_COMPONENT ::mongo::logger::LogComponent::kStorage
 
@@ -32,6 +33,8 @@
 
 #include <rocksdb/status.h>
 #include <string>
+#include <stdarg.h>
+#include <stdio.h>
 
 // Temporary fix for https://github.com/facebook/rocksdb/pull/2336#issuecomment-303226208
 #define ROCKSDB_SUPPORT_THREAD_LOCAL
@@ -41,7 +44,6 @@
 #include "mongo/db/concurrency/write_conflict_exception.h"
 #include "mongo/platform/endian.h"
 #include "mongo/util/log.h"
-#include "mongo/util/stacktrace.h"
 
 namespace mongo {
     std::string encodePrefix(uint32_t prefix) {
@@ -81,6 +83,17 @@ namespace mongo {
         }
 
         return Status(ErrorCodes::InternalError, status.ToString());
+    }
+
+    void MongoRocksLogger::Logv(const char* format, va_list ap) {
+        char buffer[8192];
+        int len = snprintf(buffer, sizeof(buffer), "[RocksDB]:");
+        if (0 > len) {
+            mongo::log() << "MongoRocksLogger::Logv return NEGATIVE value.";
+            return;
+        }
+        vsnprintf(buffer + len, sizeof(buffer) - len, format, ap);
+        log() << buffer;
     }
 
 }  // namespace mongo

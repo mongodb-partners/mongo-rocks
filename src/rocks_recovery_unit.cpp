@@ -54,6 +54,7 @@
 #include "rocks_begin_transaction_block.h"
 #include "rocks_oplog_manager.h"
 #include "rocks_snapshot_manager.h"
+#include "rocks_engine.h"
 
 namespace mongo {
     namespace {
@@ -132,6 +133,7 @@ namespace mongo {
                 // we can't have upper bound set to _nextPrefix since we need to seek to it
                 *_upperBound.get() = rocksdb::Slice("\xFF\xFF\xFF\xFF");
                 _baseIterator->Seek(_nextPrefix);
+
                 // reset back to original value
                 *_upperBound.get() = rocksdb::Slice(_nextPrefix);
                 if (!_baseIterator->Valid()) {
@@ -256,13 +258,12 @@ namespace mongo {
     RocksRecoveryUnit::RocksRecoveryUnit(rocksdb::TOTransactionDB* db,
                                          RocksOplogManager* oplogManager,
                                          RocksSnapshotManager* snapshotManager,
-                                         RocksCounterManager* counterManager,
                                          RocksCompactionScheduler* compactionScheduler,
-                                         RocksDurabilityManager* durabilityManager, bool durable)
+                                         RocksDurabilityManager* durabilityManager,
+                                         bool durable, RocksEngine* engine)
         : _db(db),
           _oplogManager(oplogManager),
           _snapshotManager(snapshotManager),
-          _counterManager(counterManager),
           _compactionScheduler(compactionScheduler),
           _durabilityManager(durabilityManager),
           _durable(durable),
@@ -271,7 +272,8 @@ namespace mongo {
           _timestampReadSource(ReadSource::kUnset),
           _orderedCommit(true),
           _mySnapshotId(nextSnapshotId.fetchAndAdd(1)),
-          _isOplogReader(false) {
+          _isOplogReader(false),
+          _engine(engine) {
         RocksRecoveryUnit::_totalLiveRecoveryUnits.fetch_add(1, std::memory_order_relaxed);
     }
 
@@ -316,7 +318,7 @@ namespace mongo {
             auto& counter = pair.second;
             counter._value->fetch_add(counter._delta, std::memory_order::memory_order_relaxed);
             long long newValue = counter._value->load(std::memory_order::memory_order_relaxed);
-            _counterManager->updateCounter(pair.first, newValue);
+            _engine->getCounterManager()->updateCounter(pair.first, newValue);
         }
 
         _deltaCounters.clear();

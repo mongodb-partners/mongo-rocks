@@ -274,6 +274,10 @@ namespace mongo {
 
         rocksdb::Statistics* getStatistics() const { return _statistics.get(); }
 
+        bool canRecoverToStableTimestamp() const;
+        std::uint64_t getStableTimestamp() const;
+        std::uint64_t getInitialDataTimestamp() const;
+
     private:
         Status _createIdent(StringData ident, BSONObjBuilder* configBuilder);
         BSONObj _getIdentConfig(StringData ident);
@@ -366,5 +370,8 @@ namespace mongo {
         // Tracks the stable and oldest timestamps we've set on the storage engine.
         AtomicWord<std::uint64_t> _oldestTimestamp;
         AtomicWord<std::uint64_t> _stableTimestamp;
+        AtomicWord<std::uint64_t> _initialDataTimestamp;
+        AtomicWord<std::uint64_t> _lastStableCheckpointTimestamp;
+        Timestamp _recoveryTimestamp;
     };
 }  // namespace mongo

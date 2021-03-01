@@ -65,6 +65,7 @@ namespace rocksdb {
 namespace mongo {
     using RoundUpPreparedTimestamps = RocksBeginTxnBlock::RoundUpPreparedTimestamps;
     using RoundUpReadTimestamp = RocksBeginTxnBlock::RoundUpReadTimestamp;
+    class RocksEngine;
 
     // Same as rocksdb::Iterator, but adds couple more useful functions
     class RocksIterator : public rocksdb::Iterator {
@@ -86,9 +87,9 @@ namespace mongo {
     public:
         RocksRecoveryUnit(rocksdb::TOTransactionDB* db, RocksOplogManager* oplogManager,
                           RocksSnapshotManager* snapshotManager,
-                          RocksCounterManager* counterManager,
                           RocksCompactionScheduler* compactionScheduler,
-                          RocksDurabilityManager* durabilityManager, bool durable);
+                          RocksDurabilityManager* durabilityManager,
+                          bool durable, RocksEngine* engine);
         virtual ~RocksRecoveryUnit();
 
         void beginUnitOfWork(OperationContext* opCtx) override;
@@ -172,8 +173,8 @@ namespace mongo {
         void resetDeltaCounters();
 
         RocksRecoveryUnit* newRocksRecoveryUnit() {
-            return new RocksRecoveryUnit(_db, _oplogManager, _snapshotManager, _counterManager,
-                                         _compactionScheduler, _durabilityManager, _durable);
+            return new RocksRecoveryUnit(_db, _oplogManager, _snapshotManager, 
+                                         _compactionScheduler, _durabilityManager, _durable, _engine);
         }
 
         struct Counter {
@@ -297,7 +298,6 @@ namespace mongo {
         rocksdb::TOTransactionDB* _db;                   // not owned
         RocksOplogManager* _oplogManager;                // not owned
         RocksSnapshotManager* _snapshotManager;          // not owned
-        RocksCounterManager* _counterManager;            // not owned
         RocksCompactionScheduler* _compactionScheduler;  // not owned
         RocksDurabilityManager* _durabilityManager;      // not owned
 
@@ -338,5 +338,6 @@ namespace mongo {
         typedef std::vector<std::unique_ptr<Change>> Changes;
         Changes _changes;
         static std::atomic<int> _totalLiveRecoveryUnits;
+        RocksEngine* _engine; // not owned
     };
 }  // namespace mongo
