@@ -280,7 +280,6 @@ namespace mongo {
         BSONObj _tryGetIdentConfig(StringData ident);
         std::string _extractPrefix(const BSONObj& config);
 
-        rocksdb::Options _options() const;
         /**
          * Uses the 'stableTimestamp', the 'targetSnapshotHistoryWindowInSeconds' setting and the
          * current _oldestTimestamp to calculate what the new oldest_timestamp should be, in order
@@ -296,6 +295,8 @@ namespace mongo {
             MONGO_MAKE_LATCH("::_oldestActiveTransactionTimestampCallbackMutex");
         StorageEngine::OldestActiveTransactionTimestampCallback
             _oldestActiveTransactionTimestampCallback;
+
+        rocksdb::Options _options(bool isOplog) const;
 
         void _initDatabase();
 

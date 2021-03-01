@@ -50,6 +50,7 @@
 #include "mongo/db/namespace_string.h"
 #include "mongo/db/operation_context.h"
 #include "mongo/db/storage/oplog_hack.h"
+#include "mongo/db/server_parameters.h"
 #include "mongo/platform/endian.h"
 #include "mongo/stdx/memory.h"
 #include "mongo/util/assert_util.h"
@@ -70,7 +71,6 @@
 namespace mongo {
 
     using namespace fmt::literals;
-
     using std::string;
     using std::unique_ptr;
 
@@ -112,22 +112,28 @@ namespace mongo {
                 transaction->Delete(_cf, RocksRecordStore::_makePrefixedKey(_prefix, loc))));
             _deletedKeysSinceCompaction++;
         }
-        rocksdb::Iterator* newIterator(RocksRecoveryUnit* ru) {
-            return ru->NewIterator(_cf, _prefix, true);
-        }
-        int decodeSize(const rocksdb::Slice& value) {
-            uint32_t size =
-                endian::littleToNative(*reinterpret_cast<const uint32_t*>(value.data()));
-            return static_cast<int>(size);
-        }
-        void resetDeletedSinceCompaction() { _deletedKeysSinceCompaction = 0; }
-        long long getDeletedSinceCompaction() { return _deletedKeysSinceCompaction; }
 
-    private:
-        rocksdb::ColumnFamilyHandle* _cf;
-        std::atomic<long long> _deletedKeysSinceCompaction;
-        std::string _prefix;
-    };
+        AtomicInt32 minSSTFileCountReserved{1}; 
+
+        class ExportedMinSSTFileCountReservedParameter
+            : public ExportedServerParameter<int, ServerParameterType::kStartupAndRuntime> {
+        public:
+            ExportedMinSSTFileCountReservedParameter()
+                : ExportedServerParameter<int, ServerParameterType::kStartupAndRuntime>(
+                      ServerParameterSet::getGlobal(),
+                      "minSSTFileCountReserved",
+                      &minSSTFileCountReserved) {}
+        
+            virtual Status validate(const int& potentialNewValue) {
+                if (potentialNewValue < 1 || potentialNewValue > (1000 * 1000)) {
+                    return Status(ErrorCodes::BadValue,
+                                  "minSSTFileCountReserved must be between 1 and 1 million, inclusive");
+                }
+        
+                return Status::OK();
+            }
+        } exportedMinSSTFileCountReservedParameter;
+    }  // namespace
 
     RocksRecordStore::RocksRecordStore(RocksEngine* engine, rocksdb::ColumnFamilyHandle* cf,
 		    		       OperationContext* opCtx, Params params)
@@ -146,8 +152,6 @@ namespace mongo {
           _cappedCallback(params.cappedCallback),
           _cappedDeleteCheckCount(0),
           _isOplog(NamespaceString::oplog(params.ns)),
-          _oplogKeyTracker(_isOplog ? new RocksOplogKeyTracker(cf, rocksGetNextPrefix(_prefix))
-                                    : nullptr),
           _ident(params.ident),
           _dataSizeKey(std::string("\0\0\0\0", 4) + "datasize-" + params.ident),
           _numRecordsKey(std::string("\0\0\0\0", 4) + "numrecords-" + params.ident),
@@ -190,15 +194,7 @@ namespace mongo {
             _nextIdNum.store(1);
         }
 
-        // load metadata
-        _numRecords.store(_counterManager->loadCounter(_numRecordsKey));
-        _dataSize.store(_counterManager->loadCounter(_dataSizeKey));
-        if (_dataSize.load() < 0) {
-            _dataSize.store(0);
-        }
-        if (_numRecords.load() < 0) {
-            _numRecords.store(0);
-        }
+        _loadCountFromCountManager(opCtx);
 
         _hasBackgroundThread = RocksEngine::initRsOplogBackgroundThread(params.ns);
         invariant(_isOplog == (_oplogManager != nullptr));
@@ -214,10 +210,6 @@ namespace mongo {
             _shuttingDown = true;
         }
 
-        if (_isOplog) {
-            delete _oplogKeyTracker;
-        }
-
         if (!isTemp()) {
             LOG(1) << "~RocksRecordStore for: " << ns();
         } else {
@@ -230,12 +222,30 @@ namespace mongo {
         }
     }
 
+    void RocksRecordStore::_loadCountFromCountManager(OperationContext* opCtx) {
+        if (_isOplog) {
+            return;
+        }
+        _numRecords.store(_counterManager->loadCounter(_numRecordsKey));
+        _dataSize.store(_counterManager->loadCounter(_dataSizeKey));
+        if (_dataSize.load() < 0) {
+            _dataSize.store(0);
+        }
+        if (_numRecords.load() < 0) {
+            _numRecords.store(0);
+        }
+    }
+
     int64_t RocksRecordStore::storageSize(OperationContext* opCtx, BSONObjBuilder* extraInfo,
                                           int infoLevel) const {
+        long long size = _dataSize.load();
+        if (_isOplog) {
+            size = dataSize(opCtx);
+        }
         // We need to make it multiple of 256 to make
         // jstests/concurrency/fsm_workloads/convert_to_capped_collection.js happy
         return static_cast<int64_t>(
-            std::max(_dataSize.load() & (~255), static_cast<long long>(256)));
+            std::max(size & (~255), static_cast<long long>(256)));
     }
 
     RecordData RocksRecordStore::dataFor(OperationContext* opCtx, const RecordId& loc) const {
@@ -246,6 +256,7 @@ namespace mongo {
     }
 
     void RocksRecordStore::deleteRecord(OperationContext* opCtx, const RecordId& dl) {
+        invariant(!_isOplog);
         std::string key(_makePrefixedKey(_prefix, dl));
 
         RocksRecoveryUnit* ru = RocksRecoveryUnit::getRocksRecoveryUnit(opCtx);
@@ -259,21 +270,48 @@ namespace mongo {
         int oldLength = oldValue.size();
 
         invariantRocksOK(ROCKS_OP_CHECK(txn->Delete(_cf, key)));
-        if (_isOplog) {
-            _oplogKeyTracker->deleteKey(ru, dl);
-        }
-
         _changeNumRecords(opCtx, -1);
         _increaseDataSize(opCtx, -oldLength);
     }
 
     long long RocksRecordStore::dataSize(OperationContext* opCtx) const {
+        if (_isOplog) {
+            uint64_t curSizeAllMemTables = 0, liveSSTTotalSize = 0;
+            invariant(_db->GetRootDB()->GetIntProperty(_cf,
+                                                       rocksdb::Slice("rocksdb.cur-size-all-mem-tables"),
+                                                       &curSizeAllMemTables));
+            invariant(_db->GetRootDB()->GetIntProperty(_cf,
+                                                       rocksdb::Slice("rocksdb.live-sst-files-size"),
+                                                       &liveSSTTotalSize));
+            return curSizeAllMemTables + liveSSTTotalSize;
+        }
         RocksRecoveryUnit* ru = RocksRecoveryUnit::getRocksRecoveryUnit(opCtx);
         return _dataSize.load(std::memory_order::memory_order_relaxed) +
                ru->getDeltaCounter(_dataSizeKey);
     }
 
     long long RocksRecordStore::numRecords(OperationContext* opCtx) const {
+        if (_isOplog) {
+            uint64_t cntMem = 0, cntImm = 0;
+            int64_t cntSST = 0;
+            invariant(_db->GetRootDB()->GetIntProperty(_cf,
+                                                       rocksdb::Slice("rocksdb.num-entries-active-mem-table"),
+                                                       &cntMem));
+            invariant(_db->GetRootDB()->GetIntProperty(_cf,
+                                                       rocksdb::Slice("rocksdb.num-entries-imm-mem-tables"),
+                                                       &cntImm));
+
+            std::vector<rocksdb::LiveFileMetaData> allFiles;
+            _db->GetRootDB()->GetLiveFilesMetaData(&allFiles);
+            for (const auto& f : allFiles) {
+              if (!NamespaceString::oplog(f.column_family_name)) {
+                continue;
+              }
+              invariant(f.num_entries >= f.num_deletions);
+              cntSST += f.num_entries - f.num_deletions;
+            }
+            return cntMem + cntImm + cntSST;
+        }
         RocksRecoveryUnit* ru = RocksRecoveryUnit::getRocksRecoveryUnit(opCtx);
         return _numRecords.load(std::memory_order::memory_order_relaxed) +
                ru->getDeltaCounter(_numRecordsKey);
@@ -357,6 +395,7 @@ namespace mongo {
     // TODO(wolfkdy): delete oplogs only when there are enough sst files and use compact-filter.
     int64_t RocksRecordStore::cappedDeleteAsNeeded_inlock(OperationContext* opCtx,
                                                           const RecordId& justInserted) {
+        invariant(!_isOplog);
         // we do this is a sub transaction in case it aborts
         RocksRecoveryUnit* realRecoveryUnit =
             checked_cast<RocksRecoveryUnit*>(opCtx->releaseRecoveryUnit().release());
@@ -383,16 +422,7 @@ namespace mongo {
             auto txn = ru->getTransaction();
             invariant(txn);
             std::unique_ptr<rocksdb::Iterator> iter;
-            if (_isOplog) {
-                // we're using _oplogKeyTracker to find which keys to delete -- this is much faster
-                // because we don't need to read any values. We theoretically need values to pass
-                // the document to the cappedCallback, but the callback is only using
-                // documents to remove them from indexes. opLog doesn't have indexes, so there
-                // should be no need for us to reconstruct the document to pass it to the callback
-                iter.reset(_oplogKeyTracker->newIterator(ru));
-            } else {
-                iter.reset(ru->NewIterator(_cf, _prefix));
-            }
+            iter.reset(ru->NewIterator(_cf, _prefix));
             int64_t storage;
             rocksPrepareConflictRetry(opCtx, [&] {
                 iter->Seek(RocksRecordStore::_makeKey(_cappedOldestKeyHint, &storage));
@@ -417,15 +447,8 @@ namespace mongo {
                 invariantRocksOK(ROCKS_OP_CHECK(txn->Delete(_cf, key)));
                 rocksdb::Slice oldValue;
                 ++docsRemoved;
-                if (_isOplog) {
-                    // trick the callback by giving it empty bson document
-                    oldValue = rocksdb::Slice(emptyBson.objdata(), emptyBson.objsize());
-                    // we keep data size in the value
-                    sizeSaved += _oplogKeyTracker->decodeSize(iter->value());
-                } else {
-                    oldValue = iter->value();
-                    sizeSaved += oldValue.size();
-                }
+                oldValue = iter->value();
+                sizeSaved += oldValue.size();
                 {
                     stdx::lock_guard<Latch> lk(_cappedCallbackMutex);
                     if (_cappedCallback) {
@@ -434,9 +457,6 @@ namespace mongo {
                             RecordData(static_cast<const char*>(oldValue.data()),
                                        oldValue.size())));
                     }
-                }
-                if (_isOplog) {
-                    _oplogKeyTracker->deleteKey(ru, newestOld);
                 }
 
                 rocksPrepareConflictRetry(opCtx, [&] {
@@ -478,28 +498,93 @@ namespace mongo {
         opCtx->releaseRecoveryUnit();
         opCtx->setRecoveryUnit(std::unique_ptr<RecoveryUnit>(realRecoveryUnit), realRUstate);
 
-        if (_isOplog) {
-            if ((_oplogSinceLastCompaction.minutes() >= kOplogCompactEveryMins) ||
-                (_oplogKeyTracker->getDeletedSinceCompaction() >=
-                 kOplogCompactEveryDeletedRecords)) {
-                log() << "Scheduling oplog compactions. time since last "
-                      << _oplogSinceLastCompaction.minutes() << " deleted since last "
-                      << _oplogKeyTracker->getDeletedSinceCompaction();
-                _oplogSinceLastCompaction.reset();
-                // schedule compaction for oplog
-                std::string oldestAliveKey(_makePrefixedKey(_prefix, _cappedOldestKeyHint));
-                _compactionScheduler->compactOplog(_cf, _prefix, oldestAliveKey);
+        return docsRemoved;
+    }
 
-                // schedule compaction for oplog tracker
-                std::string oplogKeyTrackerPrefix(rocksGetNextPrefix(_prefix));
-                oldestAliveKey = _makePrefixedKey(oplogKeyTrackerPrefix, _cappedOldestKeyHint);
-                _compactionScheduler->compactOplog(_cf, oplogKeyTrackerPrefix, oldestAliveKey);
+    bool RocksRecordStore::reclaimOplog(OperationContext* opCtx) {
+        if (!_engine->supportsRecoverToStableTimestamp()) {
+            // For non-RTT storage engines, the oplog can always be truncated.
+            return reclaimOplog(opCtx, Timestamp::max());
+        }
+        const auto lastStableCheckpointTimestamp = _engine->getLastStableCheckpointTimestamp();
+        return reclaimOplog(opCtx,
+                            lastStableCheckpointTimestamp ? *lastStableCheckpointTimestamp : Timestamp::min());
+    }
 
-                _oplogKeyTracker->resetDeletedSinceCompaction();
+    bool RocksRecordStore::reclaimOplog(OperationContext* opCtx, Timestamp persistedTimestamp) {
+        std::vector<rocksdb::LiveFileMetaData> allFiles, oplogFiles, pendingDelFiles;
+        ssize_t oplogTotalBytes = 0, pendingDelSize = 0;
+        std::string maxDelKey;
+        _db->GetRootDB()->GetLiveFilesMetaData(&allFiles);
+        for (const auto& f : allFiles) {
+            if (!NamespaceString::oplog(f.column_family_name)) {
+                continue;
+            }
+            auto largestTs = _prefixedKeyToTimestamp(f.largestkey);
+            if (largestTs > persistedTimestamp) {
+                continue;
+            }
+            oplogFiles.push_back(f);
+            oplogTotalBytes += f.size;
+        }
+        std::sort(oplogFiles.begin(), oplogFiles.end(),
+                  [&](const rocksdb::LiveFileMetaData& a, const rocksdb::LiveFileMetaData& b) {
+            return a.smallestkey < b.smallestkey;
+        });
+        for (const auto& f : oplogFiles) {
+            if (oplogTotalBytes - pendingDelSize > _cappedMaxSize + static_cast<ssize_t>(f.size)) {
+                pendingDelSize += f.size;
+                pendingDelFiles.push_back(f);
+                maxDelKey = std::max(maxDelKey, f.largestkey);
             }
         }
-
-        return docsRemoved;
+        if (pendingDelFiles.size() < static_cast<uint32_t>(minSSTFileCountReserved.load())) {
+            return false;
+        }
+        {
+            // update _cappedOldestKeyHint
+            auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(opCtx);
+            invariant(ru);
+            std::unique_ptr<RocksIterator> iterator(ru->NewIterator(_cf, _prefix, _isOplog));
+            rocksdb::Slice maxDelKeyWithoutPrefix(maxDelKey.data(), maxDelKey.size());
+            maxDelKeyWithoutPrefix.remove_prefix(_prefix.size());
+            rocksPrepareConflictRetry(opCtx, [&] {
+                iterator->Seek(rocksdb::Slice(maxDelKeyWithoutPrefix));
+                return iterator->status();
+            });
+            if (!iterator->Valid()) {
+                LOG(0) << "reclaimOplog oplog seekto " << _prefixedKeyToTimestamp(maxDelKey)
+                       << " failed " << rocksToMongoStatus(iterator->status());
+                return false;
+            }
+            rocksPrepareConflictRetry(opCtx, [&] {
+                iterator->Next();
+                return iterator->status();
+            });
+            if (!iterator->Valid()) {
+                if (!iterator->status().ok()) {
+                    LOG(0) << "reclaimOplog oplog lookup next " << _prefixedKeyToTimestamp(maxDelKey)
+                           << " failed " << rocksToMongoStatus(iterator->status());
+                }
+                return false;
+            }
+            LOG(0) << "reclaimOplog update _cappedOldestKeyHint from "
+                   << Timestamp(_cappedOldestKeyHint.repr()) << " to "
+                   << Timestamp(_makeRecordId(iterator->key()).repr())
+                   << " maxDelKey is " << _prefixedKeyToTimestamp(maxDelKey);
+            // TODO(deyukong): we should persist _cappedOldestKeyHint because
+            // there is a small chance that DeleteFilesInRange successes but CompactRange fails
+            // and then crashes and restarts. In this case, there is a hole at the front of oplogs.
+            // Currently, we just log this error.
+            _cappedOldestKeyHint = _makeRecordId(iterator->key());
+        }
+        auto s = _compactionScheduler->compactOplog(_cf, _prefix, maxDelKey);
+        if (!s.isOK()) {
+            LOG(0) << "reclaimOplog to " << _prefixedKeyToTimestamp(maxDelKey) << " success";
+        } else {
+            LOG(0) << "reclaimOplog to " << _prefixedKeyToTimestamp(maxDelKey) << " fail " << s;
+        }
+        return s.isOK();
     }
 
     StatusWith<RecordId> RocksRecordStore::insertRecord(OperationContext* opCtx, const char* data,
@@ -539,9 +624,6 @@ namespace mongo {
         }
         invariantRocksOK(
             ROCKS_OP_CHECK(txn->Put(_cf, _makePrefixedKey(_prefix, loc), rocksdb::Slice(data, len))));
-        if (_isOplog) {
-            _oplogKeyTracker->insertKey(ru, loc, len);
-        }
 
         if (_isOplog) {
             _oplogKeyTracker->insertKey(ru, loc, len);
@@ -619,10 +701,6 @@ namespace mongo {
 
         invariantRocksOK(ROCKS_OP_CHECK(txn->Put(_cf, key, rocksdb::Slice(data, len))));
 
-        if (_isOplog) {
-            _oplogKeyTracker->insertKey(ru, loc, len);
-        }
-
         _increaseDataSize(opCtx, len - old_length);
 
         _cappedDeleteAsNeeded(opCtx, loc);
@@ -661,17 +739,23 @@ namespace mongo {
         // we need to delete all records, regardless of visibility)
         auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(opCtx);
         std::unique_ptr<RocksIterator> iterator(ru->NewIterator(_cf, _prefix, _isOplog));
-
-        rocksPrepareConflictRetry(opCtx, [&] {
+        if (!_isOplog) {
+            for (rocksPrepareConflictRetry(opCtx,
+                                       [&] {
+                                           iterator->SeekToFirst();
+                                           return iterator->status();
+                                       });
+             iterator->Valid(); rocksPrepareConflictRetry(opCtx, [&] {
+                 iterator->Next();
+                 return iterator->status();
+             })) {
+                 deleteRecord(opCtx, _makeRecordId(iterator->key()));
+           }
+        } else {
             iterator->SeekToFirst();
-            return iterator->status();
-        });
-        for (; iterator->Valid();) {
-            deleteRecord(opCtx, _makeRecordId(iterator->key()));
-            rocksPrepareConflictRetry(opCtx, [&] {
-                iterator->Next();
-                return iterator->status();
-            });
+            if(iterator->Valid()){
+               cappedTruncateAfter(opCtx, _makeRecordId(iterator->key()), true);
+            }
         }
 
         return rocksToMongoStatus(iterator->status());
@@ -730,10 +814,12 @@ namespace mongo {
                                                   long long dataSize) {
         RocksRecoveryUnit* ru = RocksRecoveryUnit::getRocksRecoveryUnit(opCtx);
         ru->resetDeltaCounters();
-        _numRecords.store(numRecords);
-        _dataSize.store(dataSize);
-        _counterManager->updateCounter(_numRecordsKey, numRecords);
-        _counterManager->updateCounter(_dataSizeKey, dataSize);
+        if (!_isOplog) {
+            _numRecords.store(numRecords);
+            _dataSize.store(dataSize);
+            _counterManager->updateCounter(_numRecordsKey, numRecords);
+            _counterManager->updateCounter(_dataSizeKey, dataSize);
+        }
     }
 
     /**
@@ -752,15 +838,7 @@ namespace mongo {
         invariant(ru);
         ru->setIsOplogReader();
 
-        RecordId searchFor = startingPosition;
-        auto visibilityTs = ru->getOplogVisibilityTs();
-        if (visibilityTs && searchFor.repr() > *visibilityTs) {
-            searchFor = RecordId(*visibilityTs);
-        }
-        // we use _oplogKeyTracker, which contains exactly the same keys as oplog. the difference is
-        // that values are different (much smaller), so reading is faster. in this case, we only
-        // need keys (we never touch the values), so this works nicely
-        std::unique_ptr<rocksdb::Iterator> iter(_oplogKeyTracker->newIterator(ru));
+        std::unique_ptr<rocksdb::Iterator> iter(ru->NewIterator(_cf, _prefix));
         int64_t storage;
         rocksPrepareConflictRetry(opCtx, [&] {
             iter->Seek(_makeKey(searchFor, &storage));
@@ -772,8 +850,9 @@ namespace mongo {
                 return iter->status();
             });
             if (iter->Valid()) {
-                // searchFor is bigger than everything else
-                return _makeRecordId(iter->key());
+                // startingPosition is bigger than everything else
+                auto rcd = _makeRecordId(iter->key());
+                return rcd >= _cappedOldestKeyHint ? rcd : RecordId();
             } else {
                 invariantRocksOK(iter->status());
                 // record store is empty
@@ -801,8 +880,8 @@ namespace mongo {
             // there are no entries <= searchFor
             return RecordId();
         }
-
-        return _makeRecordId(iter->key());
+        auto rcd = _makeRecordId(iter->key());
+        return rcd >= _cappedOldestKeyHint ? rcd : RecordId();
     }
 
     void RocksRecordStore::cappedTruncateAfter(OperationContext* opCtx, RecordId end,
@@ -820,6 +899,7 @@ namespace mongo {
         int64_t recordsRemoved = 0;
         RecordId lastKeptId;
         RecordId firstRemovedId;
+        RecordId lastRemovedId;
 
         if (inclusive) {
             std::unique_ptr<SeekableRecordCursor> reverseCursor = getCursor(opCtx, false);
@@ -827,6 +907,7 @@ namespace mongo {
             auto prev = reverseCursor->next();
             lastKeptId = prev ? prev->id : RecordId();
             firstRemovedId = end;
+            LOG(0) << "lastKeptId: " << Timestamp(lastKeptId.repr());
         } else {
             // If not deleting the record located at 'end', then advance the cursor to the first
             // record
@@ -838,6 +919,7 @@ namespace mongo {
             }
             lastKeptId = end;
             firstRemovedId = record->id;
+            LOG(0) << "firstRemovedId: " << Timestamp(lastKeptId.repr());
         }
 
         // Compute the number and associated sizes of the records to delete.
@@ -858,8 +940,11 @@ namespace mongo {
                     uassertStatusOK(
                         _cappedCallback->aboutToDeleteCapped(opCtx, record->id, record->data));
                 }
-                deleteRecord(opCtx, record->id);
+                if (!_isOplog) {
+                    deleteRecord(opCtx, record->id);
+                }
                 recordsRemoved++;
+                lastRemovedId = record->id;
                 LOG(logLevel) << "Record id to delete for truncation of '" << _ns
                               << "': " << record->id << " (" << Timestamp(record->id.repr()) << ")";
             } while ((record = cursor->next()));
@@ -867,6 +952,23 @@ namespace mongo {
         wuow.commit();
 
         if (_isOplog) {
+            {
+                // Set oldestTs to a large number first. after compaction, we set it back.
+                // This is to avoid some oplog entries being pinned in compaction.
+                rocksdb::RocksTimeStamp ts(0), preTs(0);
+                _db->QueryTimeStamp(rocksdb::TimeStampType::kOldest, &preTs);
+                LOG(logLevel) << "pre oldest ts: " << Timestamp(preTs);
+                const bool force = true;
+                _db->SetTimeStamp(rocksdb::TimeStampType::kOldest, 0, force);
+                invariantRocksOK(_db->QueryTimeStamp(rocksdb::TimeStampType::kOldest, &ts));
+                invariant(Timestamp(ts).isNull()); 
+                auto s = _compactionScheduler->compactOplog(_cf,
+                                                            _makePrefixedKey(_prefix, firstRemovedId),
+                                                            _makePrefixedKey(_prefix, lastRemovedId));
+                invariant(s.isOK());
+                invariantRocksOK(_db->SetTimeStamp(rocksdb::TimeStampType::kOldest, preTs, force));
+                LOG(logLevel) << "reset oldest ts to : " << Timestamp(preTs);
+            }
             // Immediately rewind visibility to our truncation point, to prevent new
             // transactions from appearing.
             Timestamp truncTs(lastKeptId.repr());
@@ -908,6 +1010,12 @@ namespace mongo {
         std::string key(prefix);
         key.append(encodedLoc.data(), encodedLoc.size());
         return key;
+    }
+
+    Timestamp RocksRecordStore::_prefixedKeyToTimestamp(const std::string& key) const {
+        rocksdb::Slice slice(key);
+        slice.remove_prefix(_prefix.size());
+        return Timestamp(_makeRecordId(slice).repr());
     }
 
     RecordId RocksRecordStore::_makeRecordId(const rocksdb::Slice& slice) {

@@ -42,6 +42,8 @@ namespace mongo {
         _journalListener = jl;
     }
 
+    // TODO(cuixin): rtt should modify waitUntilDurable
+    // TODO(cuixin): use lastSyncTime to ensure only one thread work at a time
     void RocksDurabilityManager::waitUntilDurable(bool forceFlush) {
         stdx::unique_lock<Latch> lk(_journalListenerMutex);
         JournalListener::Token token = _journalListener->getToken();

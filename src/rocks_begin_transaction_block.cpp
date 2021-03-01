@@ -78,6 +78,11 @@ namespace mongo {
         rocksdb::RocksTimeStamp ts(readTs.asULL());
         auto status = _transaction->SetReadTimeStamp(ts);
         if (!status.ok()) {
+            if (status.IsInvalidArgument()) {
+                return Status(ErrorCodes::SnapshotTooOld,
+                      str::stream() << "Read timestamp " << ts
+                                    << " is older than the oldest available timestamp.");
+            }
             return rocksToMongoStatus(status);
         }
 
