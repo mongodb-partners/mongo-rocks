@@ -57,6 +57,8 @@ namespace mongo {
         JournalListener* _journalListener;
         // Protects _journalListener.
         stdx::mutex _journalListenerMutex;
+        AtomicUInt32 _lastSyncTime;
+        stdx::mutex _lastSyncMutex;
     };
 
 }  // namespace mongo

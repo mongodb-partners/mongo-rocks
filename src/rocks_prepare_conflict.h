@@ -39,7 +39,7 @@
 
 namespace mongo {
 
-    // When set, returns simulates returning WT_PREPARE_CONFLICT on WT cursor read operations.
+    // When set, returns simulates returning rocks prepare conflict status.
     MONGO_FAIL_POINT_DECLARE(RocksPrepareConflictForReads);
 
     /**
@@ -52,7 +52,7 @@ namespace mongo {
      * WT_PREPARE_CONFLICT. Each time f returns WT_PREPARE_CONFLICT we wait until the current unit
      * of work commits or aborts, and then try f again. Imposes no upper limit on the number of
      * times to re-try f, so any required timeout behavior must be enforced within f. The function f
-     * must return a WiredTiger error code.
+     * must return a error code.
      */
     template <typename F>
     rocksdb::Status rocksPrepareConflictRetry(OperationContext* opCtx, F&& f) {
