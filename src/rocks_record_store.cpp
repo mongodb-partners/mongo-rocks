@@ -915,7 +915,7 @@ namespace mongo {
         RocksRecoveryUnit* ru = RocksRecoveryUnit::getRocksRecoveryUnit(opCtx);
 
         std::string valueStorage;
-        auto status = ru->Get(_cf, _makePrefixedKey(prefix, loc), &valueStorage);
+        auto status = ru->Get(cf, _makePrefixedKey(prefix, loc), &valueStorage);
         if (status.IsNotFound()) {
             return RecordData(nullptr, 0);
         }
