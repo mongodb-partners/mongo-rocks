@@ -99,16 +99,17 @@ namespace mongo {
             invariant(ru);
             auto transaction = ru->getTransaction();
             invariant(transaction);
-            invariantRocksOK(
+            invariantRocksOK(ROCKS_OP_CHECK(
                 transaction->Put(_cf, RocksRecordStore::_makePrefixedKey(_prefix, loc),
                                  rocksdb::Slice(reinterpret_cast<const char*>(&lenLittleEndian),
-                                                sizeof(lenLittleEndian))));
+                                                sizeof(lenLittleEndian)))));
         }
         void deleteKey(RocksRecoveryUnit* ru, const RecordId& loc) {
             invariant(ru);
             auto transaction = ru->getTransaction();
             invariant(transaction);
-            invariantRocksOK(transaction->Delete(_cf, RocksRecordStore::_makePrefixedKey(_prefix, loc)));
+            invariantRocksOK(ROCKS_OP_CHECK(
+                transaction->Delete(_cf, RocksRecordStore::_makePrefixedKey(_prefix, loc))));
             _deletedKeysSinceCompaction++;
         }
         rocksdb::Iterator* newIterator(RocksRecoveryUnit* ru) {
@@ -257,7 +258,7 @@ namespace mongo {
         invariantRocksOK(status);
         int oldLength = oldValue.size();
 
-        invariantRocksOK(txn->Delete(_cf, key));
+        invariantRocksOK(ROCKS_OP_CHECK(txn->Delete(_cf, key)));
         if (_isOplog) {
             _oplogKeyTracker->deleteKey(ru, dl);
         }
@@ -393,7 +394,6 @@ namespace mongo {
                 iter.reset(ru->NewIterator(_cf, _prefix));
             }
             int64_t storage;
-
             rocksPrepareConflictRetry(opCtx, [&] {
                 iter->Seek(RocksRecordStore::_makeKey(_cappedOldestKeyHint, &storage));
                 return iter->status();
@@ -414,7 +414,7 @@ namespace mongo {
                 }
 
                 std::string key(_makePrefixedKey(_prefix, newestOld));
-                invariantRocksOK(txn->Delete(_cf, key));
+                invariantRocksOK(ROCKS_OP_CHECK(txn->Delete(_cf, key)));
                 rocksdb::Slice oldValue;
                 ++docsRemoved;
                 if (_isOplog) {
@@ -537,7 +537,8 @@ namespace mongo {
             auto s = opCtx->recoveryUnit()->setTimestamp(ts);
             invariant(s.isOK(), s.reason());
         }
-        invariantRocksOK(txn->Put(_cf, _makePrefixedKey(_prefix, loc), rocksdb::Slice(data, len)));
+        invariantRocksOK(
+            ROCKS_OP_CHECK(txn->Put(_cf, _makePrefixedKey(_prefix, loc), rocksdb::Slice(data, len))));
         if (_isOplog) {
             _oplogKeyTracker->insertKey(ru, loc, len);
         }
@@ -616,7 +617,7 @@ namespace mongo {
 
         int old_length = old_value.size();
 
-        invariantRocksOK(txn->Put(_cf, key, rocksdb::Slice(data, len)));
+        invariantRocksOK(ROCKS_OP_CHECK(txn->Put(_cf, key, rocksdb::Slice(data, len))));
 
         if (_isOplog) {
             _oplogKeyTracker->insertKey(ru, loc, len);
@@ -789,8 +790,10 @@ namespace mongo {
             // RocksDB invariant -- iterator needs to land at or past target when Seek-ing
             invariant(cmp < 0);
             // we're past target -- prev()
-            // NOTE(cuixin): oplog do not have prepare, so do not need conflict check
-            iter->Prev();
+            rocksPrepareConflictRetry(opCtx, [&] {
+                iter->Prev();
+                return iter->status();
+            });
         }
 
         if (!iter->Valid()) {
@@ -929,7 +932,7 @@ namespace mongo {
 
         std::string valueStorage;
         auto key = _makePrefixedKey(prefix, loc);
-        auto status = rocksPrepareConflictRetry(opCtx, [&] { return ru->Get(_cf, key, &valueStorage); });
+        auto status = rocksPrepareConflictRetry(opCtx, [&] { return ru->Get(cf, key, &valueStorage); });
         if (status.IsNotFound()) {
             return RecordData(nullptr, 0);
         }

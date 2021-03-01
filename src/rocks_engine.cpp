@@ -80,6 +80,7 @@
 #include "rocks_record_store.h"
 #include "rocks_recovery_unit.h"
 #include "rocks_util.h"
+#include "mongo_rate_limiter_checker.h"
 
 namespace mongo {
 
@@ -244,6 +245,11 @@ namespace mongo {
         if (rocksGlobalOptions.counters) {
             _statistics = rocksdb::CreateDBStatistics();
         }
+
+        log() << "clusterRole is " << static_cast<int>(serverGlobalParams.clusterRole) << ";";
+#ifdef __linux__
+        startMongoRateLimiterChecker();
+#endif
 
         // used in building options for the db
         _compactionScheduler.reset(new RocksCompactionScheduler());
@@ -869,6 +875,18 @@ namespace mongo {
         MONGO_FAIL_POINT_DEFINE(RocksPreserveSnapshotHistoryIndefinitely);
 
     }  // namespace
+
+    void RocksEngine::setStableTimestamp(Timestamp stableTimestamp) {
+        if (!_keepDataHistory || stableTimestamp.isNull()) {
+            return;
+        }
+        // Communicate to Rocksdb that it can clean up timestamp data earlier than the timestamp
+        // provided.  No future queries will need point-in-time reads at a timestamp prior to the
+        // one
+        // provided here.
+        const bool force = false;
+        setOldestTimestamp(stableTimestamp, force);
+    }
 
     void RocksEngine::setInitialDataTimestamp(Timestamp initialDataTimestamp) {}
 

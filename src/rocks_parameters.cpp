@@ -32,6 +32,7 @@
 #include "mongo/db/modules/rocks/src/rocks_parameters_gen.h"
 #include "rocks_util.h"
 
+#include "mongo/db/json.h"
 #include "mongo/logger/parse_log_component_settings.h"
 #include "mongo/util/log.h"
 #include "mongo/util/str.h"
@@ -194,4 +195,81 @@ namespace mongo {
 
         return Status::OK();
     }
+
+#ifdef __linux__
+    MongoRateLimitParameter::MongoRateLimitParameter()
+        : ServerParameter(ServerParameterSet::getGlobal(), "mongoRateLimit", true, true),
+          _disk(""),
+          _iops(kDefaultRateLimitIops),
+          _mbps(kDefaultRateLimitMbps) {}
+
+    void MongoRateLimitParameter::append(OperationContext* opCtx, BSONObjBuilder& b,
+                                       const std::string& name) {
+        b.append(name, "iops: " + std::to_string(_iops) + "; mbps: " + std::to_string(_mbps));
+    }
+
+    Status MongoRateLimitParameter::set(const BSONElement& newValueElement) {
+        auto newValueObj = newValueElement.Obj().removeField("disk");
+        log() << "MongoRateLimitSetting set obj is " << newValueObj << ";";
+        return setInternal(newValueObj);
+    }
+
+    Status MongoRateLimitParameter::setFromString(const std::string& str) {
+        try {
+            log() << "MongoRateLimitSetting set str is " << str << ";";
+            return setInternal(fromjson(str));
+        } catch (const DBException& ex) {
+            return ex.toStatus(); 
+        }
+    }
+
+    Status MongoRateLimitParameter::setInternal(const BSONObj& rateLimitObj) {
+        log() << "MongoRateLimitSetting rateLimitObj is " << rateLimitObj << ";";
+        auto diskType = rateLimitObj.getField("disk").type();
+        if (diskType == BSONType::String) {
+            _disk = rateLimitObj.getField("disk").String();
+        }
+        auto iopsType = rateLimitObj.getField("iops").type();
+        auto mbpsType = rateLimitObj.getField("mbps").type();
+        if (iopsType == BSONType::EOO && mbpsType == BSONType::EOO) {
+            return Status(ErrorCodes::BadValue,
+                          str::stream() << "Incorrect values: no disk, no iops, no mbps");
+        }
+        if (iopsType != BSONType::EOO) {
+            auto iopsValue = rateLimitObj.getField("iops").safeNumberLong();
+            if (iopsValue < kMinRateLimitIops || kMaxRateLimitIops < iopsValue) {
+                return Status(ErrorCodes::BadValue,
+                              str::stream() << "Invalid values: iopsValue should in "
+                                            << "[" << kMinRateLimitIops << "~" << kMaxRateLimitIops << "]");
+            } else if (iopsValue < kDefaultRateLimitIops) {
+                log() << "MongoRateLimitSetting lower than default value"
+                      << "(iops: " << kDefaultRateLimitIops << ")"
+                      << " is " << rateLimitObj << ";";
+            }
+            _iops = static_cast<uint64_t>(iopsValue);
+        }
+        if (mbpsType != BSONType::EOO) {
+            auto mbpsValue = rateLimitObj.getField("mbps").safeNumberLong();
+            if (mbpsValue < kMinRateLimitMbps || kMaxRateLimitMbps < mbpsValue) {
+                return Status(ErrorCodes::BadValue,
+                              str::stream() << "Invalid values: mbpsValue should in "
+                                            << "[" << kMinRateLimitMbps << "~" << kMaxRateLimitMbps << "]");
+            } else if (mbpsValue < kDefaultRateLimitMbps) {
+                log() << "MongoRateLimitSetting lower than default value"
+                      << "(mbps: " << kDefaultRateLimitMbps << ")"
+                      << " is " << rateLimitObj << ";";
+            }
+            _mbps = static_cast<uint64_t>(mbpsValue);
+        }
+        return Status::OK(); 
+    }
+
+    namespace {
+        MongoRateLimitParameter mongoRateLimitParameter;
+    }
+
+    MongoRateLimitParameter& getMongoRateLimitParameter() {
+        return mongoRateLimitParameter;
+    }
+#endif
 }  // namespace mongo
