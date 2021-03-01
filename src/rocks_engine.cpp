@@ -295,14 +295,13 @@ namespace mongo {
         rocksdb::Status s;
         std::vector<std::string> columnFamilies;
 
-        const auto options = _options();
         const bool newDB = [&]() {
             const auto path = boost::filesystem::path(_path) / "CURRENT";
             return !boost::filesystem::exists(path);
         }();
         if (newDB) {
             // init manifest so list column families will not fail when db is empty.
-            invariantRocksOK(rocksdb::TOTransactionDB::Open(options, 
+            invariantRocksOK(rocksdb::TOTransactionDB::Open(_options(false /* isOplog */), 
                                                             rocksdb::TOTransactionDBOptions(),
                                                             _path,
                                                             &db));
@@ -310,7 +309,7 @@ namespace mongo {
         }
 
         const bool hasOplog = [&]() {
-            s = rocksdb::DB::ListColumnFamilies(options, _path, &columnFamilies);
+            s = rocksdb::DB::ListColumnFamilies(_options(false /* isOplog */), _path, &columnFamilies);
             invariantRocksOK(s);
 
             auto it = std::find(columnFamilies.begin(), columnFamilies.end(),
@@ -321,11 +320,11 @@ namespace mongo {
         // init oplog columnfamily if not exists.
         if (!hasOplog) {
             rocksdb::ColumnFamilyHandle* cf = nullptr;
-            invariantRocksOK(rocksdb::TOTransactionDB::Open(options, 
+            invariantRocksOK(rocksdb::TOTransactionDB::Open(_options(false /* isOplog */), 
                                                             rocksdb::TOTransactionDBOptions(),
                                                             _path,
                                                             &db));
-            invariantRocksOK(db->CreateColumnFamily(options,
+            invariantRocksOK(db->CreateColumnFamily(_options(true /* isOplog */),
                                                     NamespaceString::kRsOplogNamespace.toString(),
                                                     &cf));
             invariantRocksOK(db->DestroyColumnFamilyHandle(cf));
@@ -334,10 +333,12 @@ namespace mongo {
         }
 
         std::vector<rocksdb::ColumnFamilyHandle*> cfs;
-        s = rocksdb::TOTransactionDB::Open(options,
+        s = rocksdb::TOTransactionDB::Open(_options(false /* isOplog */),
                                            rocksdb::TOTransactionDBOptions(), _path,
-                                           {{rocksdb::kDefaultColumnFamilyName, options},
-                                            {NamespaceString::kRsOplogNamespace.toString(), options}},
+                                           {{rocksdb::kDefaultColumnFamilyName,
+                                             _options(false /* isOplog */)},
+                                            {NamespaceString::kRsOplogNamespace.toString(),
+                                             _options(true /* isOplog */)}},
                                            &cfs,
                                            &db);
         invariantRocksOK(s);
@@ -628,7 +629,7 @@ namespace mongo {
         return encodePrefix(config.getField("prefix").numberInt());
     }
 
-    rocksdb::Options RocksEngine::_options() const {
+    rocksdb::Options RocksEngine::_options(bool isOplog) const {
         // default options
         rocksdb::Options options;
         options.rate_limiter = _rateLimiter;
@@ -663,20 +664,25 @@ namespace mongo {
         options.compression_per_level.resize(3);
         options.compression_per_level[0] = rocksdb::kNoCompression;
         options.compression_per_level[1] = rocksdb::kNoCompression;
-        if (rocksGlobalOptions.compression == "snappy") {
-            options.compression_per_level[2] = rocksdb::kSnappyCompression;
-        } else if (rocksGlobalOptions.compression == "zlib") {
-            options.compression_per_level[2] = rocksdb::kZlibCompression;
-        } else if (rocksGlobalOptions.compression == "none") {
+        if (isOplog) {
+            // NOTE(deyukong): with kNoCompression, storageSize precisely matches non-compressed userdata size.
+            // In this way, oplog capping will be timely.
             options.compression_per_level[2] = rocksdb::kNoCompression;
-        } else if (rocksGlobalOptions.compression == "lz4") {
-            options.compression_per_level[2] = rocksdb::kLZ4Compression;
-        } else if (rocksGlobalOptions.compression == "lz4hc") {
-            options.compression_per_level[2] = rocksdb::kLZ4HCCompression;
         } else {
-            // TODO(wolfkdy): replace none with snappy, only for compile
-            log() << "Unknown compression, will use default (none)";
-            options.compression_per_level[2] = rocksdb::kNoCompression;
+            if (rocksGlobalOptions.compression == "snappy") {
+                options.compression_per_level[2] = rocksdb::kSnappyCompression;
+            } else if (rocksGlobalOptions.compression == "zlib") {
+                options.compression_per_level[2] = rocksdb::kZlibCompression;
+            } else if (rocksGlobalOptions.compression == "none") {
+                options.compression_per_level[2] = rocksdb::kNoCompression;
+            } else if (rocksGlobalOptions.compression == "lz4") {
+                options.compression_per_level[2] = rocksdb::kLZ4Compression;
+            } else if (rocksGlobalOptions.compression == "lz4hc") {
+                options.compression_per_level[2] = rocksdb::kLZ4HCCompression;
+            } else {
+                log() << "Unknown compression, will use default (snappy)";
+                options.compression_per_level[2] = rocksdb::kSnappyCompression;
+            }
         }
 
         options.statistics = _statistics;
@@ -793,7 +799,7 @@ namespace mongo {
 
     bool RocksEngine::supportsReadConcernSnapshot() const { return true; }
 
-    bool RocksEngine::supportsReadConcernMajority() const { return true; }
+    bool RocksEngine::supportsReadConcernMajority() const { return _keepDataHistory; }
 
     void RocksEngine::startOplogManager(OperationContext* opCtx,
                                         RocksRecordStore* oplogRecordStore) {

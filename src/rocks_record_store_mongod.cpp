@@ -37,6 +37,7 @@
 #include "mongo/base/checked_cast.h"
 #include "mongo/db/catalog/collection.h"
 #include "mongo/db/catalog/database.h"
+#include "mongo/db/catalog/database_holder.h"
 #include "mongo/db/client.h"
 #include "mongo/db/concurrency/d_concurrency.h"
 #include "mongo/db/db_raii.h"
@@ -68,54 +69,64 @@ namespace mongo {
             virtual std::string name() const { return _name; }
 
             /**
-             * @return Number of documents deleted.
+             * @return if any oplog records are deleted.
              */
-            int64_t _deleteExcessDocuments() {
+            bool _deleteExcessDocuments() {
                 if (!getGlobalServiceContext()->getStorageEngine()) {
                     LOG(1) << "no global storage engine yet";
-                    return 0;
+                    return false;
                 }
 
                 const auto opCtx = cc().makeOperationContext();
 
                 try {
-                    AutoGetDb autoDb(opCtx.get(), _ns.db(), MODE_IX);
-                    Database* db = autoDb.getDb();
-                    if (!db) {
-                        LOG(2) << "no local database yet";
-                        return 0;
+                    // A Global IX lock should be good enough to protect the oplog truncation from
+                    // interruptions such as restartCatalog. PBWM, database lock or collection lock is not
+                    // needed. This improves concurrency if oplog truncation takes long time.
+                    ShouldNotConflictWithSecondaryBatchApplicationBlock shouldNotConflictBlock(
+                        opCtx.get()->lockState());
+                    Lock::GlobalLock lk(opCtx.get(), MODE_IX);
+        
+                    RocksRecordStore* rs = nullptr;
+                    {
+                        // Release the database lock right away because we don't want to
+                        // block other operations on the local database and given the
+                        // fact that oplog collection is so special, Global IX lock can
+                        // make sure the collection exists.
+                        Lock::DBLock dbLock(opCtx.get(), _ns.db(), MODE_IX);
+                        Database* db = DatabaseHolder::getDatabaseHolder().get(opCtx.get(), _ns.db());
+                        if (!db) {
+                            LOG(2) << "no local database yet";
+                            return false;
+                        }
+                        // We need to hold the database lock while getting the collection. Otherwise a
+                        // concurrent collection creation would write to the map in the Database object
+                        // while we concurrently read the map.
+                        Collection* collection = db->getCollection(opCtx.get(), _ns);
+                        if (!collection) {
+                            LOG(2) << "no collection " << _ns;
+                            return false;
+                        }
+                        rs = checked_cast<RocksRecordStore*>(collection->getRecordStore());
                     }
-
-                    Lock::CollectionLock collectionLock(opCtx->lockState(), _ns.ns(), MODE_IX);
-                    Collection* collection = db->getCollection(opCtx.get(), _ns);
-                    if (!collection) {
-                        LOG(2) << "no collection " << _ns;
-                        return 0;
-                    }
-
-                    OldClientContext ctx(opCtx.get(), _ns.ns(), false);
-                    RocksRecordStore* rs =
-                        checked_cast<RocksRecordStore*>(collection->getRecordStore());
-                    WriteUnitOfWork wuow(opCtx.get());
-                    stdx::lock_guard<stdx::timed_mutex> lock(rs->cappedDeleterMutex());
-                    int64_t removed = rs->cappedDeleteAsNeeded_inlock(opCtx.get(), RecordId::max());
-                    wuow.commit();
-                    return removed;
+        
+                    return rs->reclaimOplog(opCtx.get());
                 } catch (const std::exception& e) {
                     severe() << "error in RocksRecordStoreThread: " << redact(e.what());
                     fassertFailedNoTrace(!"error in RocksRecordStoreThread");
                 } catch (...) {
                     fassertFailedNoTrace(!"unknown error in RocksRecordStoreThread");
                 }
+                MONGO_UNREACHABLE
             }
 
             virtual void run() {
                 Client::initThread(_name.c_str());
 
                 while (!globalInShutdownDeprecated()) {
-                    int64_t removed = _deleteExcessDocuments();
+                    bool removed = _deleteExcessDocuments();
                     LOG(2) << "RocksRecordStoreThread deleted " << removed;
-                    if (removed == 0) {
+                    if (!removed) {
                         // If we removed 0 documents, sleep a bit in case we're on a laptop
                         // or something to be nice.
                         sleepmillis(1000);

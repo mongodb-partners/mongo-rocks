@@ -39,6 +39,7 @@
 #include "mongo/base/status.h"
 #include "mongo/stdx/mutex.h"
 #include "mongo/util/timer.h"
+#include "mongo/util/concurrency/notification.h"
 #include "mongo/bson/bsonobj.h"
 
 namespace rocksdb {
@@ -69,10 +70,11 @@ namespace mongo {
 
         // schedule compact range operation for execution in _compactionThread
         void compactAll();
-        void compactOplog(rocksdb::ColumnFamilyHandle* cf, const std::string& begin, const std::string& end);
+        Status compactOplog(rocksdb::ColumnFamilyHandle* cf, const std::string& begin, const std::string& end);
 
         rocksdb::CompactionFilterFactory* createCompactionFilterFactory() const;
         std::unordered_map<uint32_t, BSONObj> getDroppedPrefixes() const;
+        boost::optional<std::pair<uint32_t, std::pair<std::string, std::string>>> getOplogDeleteUntil() const;
 
         // load dropped prefixes, and re-schedule compaction of each dropped prefix.
         // as we don't know which cf a prefix exists, we have to compact each prefix out of each cf.
@@ -89,7 +91,7 @@ namespace mongo {
         void compactPrefix(rocksdb::ColumnFamilyHandle* cf, const std::string& prefix);
         void compactDroppedPrefix(rocksdb::ColumnFamilyHandle* cf, const std::string& prefix);
         void compact(rocksdb::ColumnFamilyHandle* cf, const std::string& begin, const std::string& end,
-                     bool rangeDropped, uint32_t order);
+                     bool rangeDropped, uint32_t order, boost::optional<std::shared_ptr<Notification<Status>>>);
         void droppedPrefixCompacted(const std::string& prefix, bool opSucceeded);
 
     private:
@@ -112,10 +114,10 @@ namespace mongo {
         std::unique_ptr<CompactionBackgroundJob> _compactionJob;
 
         // set of all prefixes that are deleted. we delete them in the background thread
-        mutable stdx::mutex _droppedPrefixesMutex;
+        mutable stdx::mutex _droppedDataMutex;
         std::unordered_map<uint32_t, BSONObj> _droppedPrefixes;
         std::atomic<uint32_t> _droppedPrefixesCount;
-
+        boost::optional<std::pair<uint32_t, std::pair<std::string, std::string>>> _oplogDeleteUntil;
         static const std::string kDroppedPrefix;
     };
 }
