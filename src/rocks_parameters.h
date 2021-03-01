@@ -28,6 +28,7 @@
 
 #include "mongo/base/disallow_copying.h"
 #include "mongo/db/server_parameters.h"
+#include "mongo/util/assert_util.h"
 
 #include "rocks_engine.h"
 
@@ -116,4 +117,37 @@ namespace mongo {
     private:
         RocksEngine* _engine;
     };
+
+#ifdef __linux__
+
+    const int64_t kMinRateLimitIops = 100;
+    const int64_t kDefaultRateLimitIops = 16000;
+    const int64_t kMaxRateLimitIops = 100000000;
+
+    const int64_t kMinRateLimitMbps = 50;
+    const int64_t kDefaultRateLimitMbps = 350;
+    const int64_t kMaxRateLimitMbps = 1000000;
+
+    class MongoRateLimitParameter : public ServerParameter {
+        MONGO_DISALLOW_COPYING(MongoRateLimitParameter);
+
+    public:
+        MongoRateLimitParameter();
+        virtual void append(OperationContext* opCtx, BSONObjBuilder& b, const std::string& name);
+        virtual Status set(const BSONElement& newValueElement);
+        virtual Status setFromString(const std::string& str);
+        virtual Status setInternal(const BSONObj& newValue);
+        virtual std::string getDisk() { return _disk; }
+        virtual uint64_t getIops() { return _iops; }
+        virtual uint64_t getMbps() { return _mbps; }
+
+    private:
+        std::string _disk;
+        uint64_t _iops;
+        uint64_t _mbps;
+    };
+
+    MongoRateLimitParameter& getMongoRateLimitParameter();
+#endif
 }
+

@@ -45,6 +45,19 @@
 #include "mongo/stdx/mutex.h"
 #include "mongo/stdx/thread.h"
 #include "mongo/util/timer.h"
+#include "mongo_rate_limiter_checker.h"
+
+template <typename F>
+auto ROCKS_CHECK_HELP(F&& f) {
+#ifdef __linux__
+    if (mongo::getMongoRateLimiter() != nullptr) {
+        mongo::getMongoRateLimiter()->request(1);
+    }
+#endif
+    return f();
+}
+#define ROCKS_OP_CHECK(f) ROCKS_CHECK_HELP([&] { return f; })
+#define ROCKS_READ_CHECK(f) ROCKS_CHECK_HELP(f)
 
 namespace rocksdb {
     class TOTransactionDB;
