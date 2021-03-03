@@ -80,7 +80,7 @@ namespace mongo {
             stdx::lock_guard<stdx::mutex> lk(_lock);
             _counters[counterKey] = count;
             ++_syncCounter;
-            if (!_syncing && _syncCounter >= kSyncEvery) {
+            if (_syncCounter >= kSyncEvery) {
                 // let's sync this now. piggyback on writeBatch
                 int64_t storage;
                 auto txn = _makeTxn();
@@ -96,25 +96,18 @@ namespace mongo {
     }
 
     void RocksCounterManager::sync() {
+        stdx::lock_guard<stdx::mutex> lk(_lock);
+        if (_counters.size() == 0) {
+            return;
+        }
         auto txn = _makeTxn();
-        {
-            stdx::lock_guard<stdx::mutex> lk(_lock);
-            if (_syncing || _counters.size() == 0) {
-                return;
-            }
-            int64_t storage;
-            for (const auto& counter : _counters) {
-                invariantRocksOK(txn->Put(_cf, counter.first, _encodeCounter(counter.second, &storage)));
-            }
-            _counters.clear();
-            _syncCounter = 0;
-            _syncing = true;
+        int64_t storage;
+        for (const auto& counter : _counters) {
+            invariantRocksOK(txn->Put(_cf, counter.first, _encodeCounter(counter.second, &storage)));
         }
+        _counters.clear();
+        _syncCounter = 0;
         invariantRocksOK(txn->Commit());
-        {
-            stdx::lock_guard<stdx::mutex> lk(_lock);
-            _syncing = false;
-        }
     }
 
     rocksdb::Slice RocksCounterManager::_encodeCounter(long long counter, int64_t* storage) {

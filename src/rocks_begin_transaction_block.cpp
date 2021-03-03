@@ -54,6 +54,11 @@ namespace mongo {
         auto status =
             _transaction->SetReadTimeStamp(ts, roundToOldest == RoundToOldest::kRound ? 1 : 0);
         if (!status.ok()) {
+            if (status.IsInvalidArgument()) {
+                return Status(ErrorCodes::SnapshotTooOld,
+                      str::stream() << "Read timestamp " << ts
+                                    << " is older than the oldest available timestamp.");
+            }
             return rocksToMongoStatus(status);
         }
         status = _transaction->GetReadTimeStamp(&ts);

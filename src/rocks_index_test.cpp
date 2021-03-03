@@ -82,7 +82,7 @@ namespace mongo {
                     _engine.getDB(), _engine.getOplogManager(),
                     checked_cast<RocksSnapshotManager*>(_engine.getSnapshotManager()),
                     _engine.getCounterManager(), _engine.getCompactionScheduler(),
-                    _engine.getDurabilityManager(), true /* durale */);
+                    _engine.getDurabilityManager(), true /* durale */, _engine);
             }
 
         private:

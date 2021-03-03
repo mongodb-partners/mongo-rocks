@@ -1,9 +1,10 @@
 /**
- *    Copyright (C) 2014 MongoDB Inc.
+ *    Copyright (C) 2018 MongoDB Inc.
  *
  *    This program is free software: you can redistribute it and/or  modify
  *    it under the terms of the GNU Affero General Public License, version 3,
  *    as published by the Free Software Foundation.
+ *
  *
  *    This program is distributed in the hope that it will be useful,
  *    but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -26,55 +27,21 @@
  *    it in the license file.
  */
 
-#pragma once
+#define MONGO_LOG_DEFAULT_COMPONENT ::mongo::logger::LogComponent::kStorage
 
-#include <atomic>
-#include <list>
-#include <memory>
-#include <set>
-#include <string>
-#include <unordered_map>
+#include "rocks_prepare_conflict.h"
 
-#include <rocksdb/db.h>
-#include <rocksdb/slice.h>
-#include <rocksdb/utilities/totransaction.h>
-#include <rocksdb/utilities/totransaction_db.h>
-
-#include "mongo/base/string_data.h"
-#include "mongo/stdx/mutex.h"
+#include "mongo/platform/basic.h"
+#include "mongo/util/fail_point_service.h"
+#include "mongo/util/log.h"
 
 namespace mongo {
 
-    class RocksCounterManager {
-    public:
-        RocksCounterManager(rocksdb::TOTransactionDB* db, rocksdb::ColumnFamilyHandle* cf, bool crashSafe)
-            : _db(db), _cf(cf), _crashSafe(crashSafe), _syncCounter(0) {}
+    MONGO_FAIL_POINT_DEFINE(RocksPrepareConflictForReads);
 
-        long long loadCounter(const std::string& counterKey);
+    void rocksPrepareConflictLog(int attempts) {
+        LOG(0) << "Caught WT_PREPARE_CONFLICT, attempt " << attempts
+               << ". Waiting for unit of work to commit or abort.";
+    }
 
-        void updateCounter(const std::string& counterKey, long long count);
-
-        void sync();
-
-        bool crashSafe() const { return _crashSafe; }
-
-    private:
-        static rocksdb::Slice _encodeCounter(long long counter, int64_t* storage);
-
-        std::unique_ptr<rocksdb::TOTransaction> _makeTxn();
-
-        rocksdb::TOTransactionDB* _db;  // not owned
-
-        rocksdb::ColumnFamilyHandle* _cf;  // not owned
-
-        const bool _crashSafe;
-
-        stdx::mutex _lock;
-        // protected by _lock
-        std::unordered_map<std::string, long long> _counters;
-        // protected by _lock
-        int _syncCounter;
-
-        static const int kSyncEvery = 10000;
-    };
-}
+}  // namespace mongo

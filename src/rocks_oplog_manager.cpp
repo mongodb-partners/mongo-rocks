@@ -45,9 +45,8 @@
 namespace mongo {
     namespace {
         // This is the minimum valid timestamp; it can be used for reads that need to see all
-        // untimestamped
-        // data but no timestamped data.  We cannot use 0 here because 0 means see all timestamped
-        // data.
+        // untimestamped data but no timestamped data.  We cannot use 0 here because 0
+        // means see all timestamped data.
         const uint64_t kMinimumTimestamp = 1;
     }  // namespace
 

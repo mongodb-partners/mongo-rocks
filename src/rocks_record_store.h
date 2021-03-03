@@ -45,6 +45,19 @@
 #include "mongo/stdx/mutex.h"
 #include "mongo/stdx/thread.h"
 #include "mongo/util/timer.h"
+#include "mongo_rate_limiter_checker.h"
+
+template <typename F>
+auto ROCKS_CHECK_HELP(F&& f) {
+#ifdef __linux__
+    if (mongo::getMongoRateLimiter() != nullptr) {
+        mongo::getMongoRateLimiter()->request(1);
+    }
+#endif
+    return f();
+}
+#define ROCKS_OP_CHECK(f) ROCKS_CHECK_HELP([&] { return f; })
+#define ROCKS_READ_CHECK(f) ROCKS_CHECK_HELP(f)
 
 namespace rocksdb {
     class TOTransactionDB;
@@ -59,7 +72,6 @@ namespace mongo {
     class RocksDurabilityManager;
     class RocksCompactionScheduler;
     class RocksRecoveryUnit;
-    class RocksOplogKeyTracker;
     class RocksRecordStore;
     class RocksOplogManager;
     class RocksEngine;
@@ -170,6 +182,10 @@ namespace mongo {
 
         int64_t cappedDeleteAsNeeded(OperationContext* opCtx, const RecordId& justInserted);
         int64_t cappedDeleteAsNeeded_inlock(OperationContext* opCtx, const RecordId& justInserted);
+
+        bool reclaimOplog(OperationContext* opCtx);
+        bool reclaimOplog(OperationContext* opCtx, Timestamp persistedTimestamp);
+
         bool haveCappedWaiters();
 
         void notifyCappedWaitersIfNeeded();
@@ -183,8 +199,6 @@ namespace mongo {
         class CappedInsertChange;
 
     private:
-        // we just need to expose _makePrefixedKey to RocksOplogKeyTracker
-        friend class RocksOplogKeyTracker;
         // NOTE: Cursor might outlive the RecordStore. That's why we use all those
         // shared_ptrs
         class Cursor : public SeekableRecordCursor {
@@ -194,6 +208,7 @@ namespace mongo {
 
             boost::optional<Record> next() final;
             boost::optional<Record> seekExact(const RecordId& id) final;
+            boost::optional<Record> seekToLast();
             void save() final;
             void saveUnpositioned() final;
             bool restore() final;
@@ -236,9 +251,12 @@ namespace mongo {
         // The use of this function requires that the passed in storage outlives the returned Slice
         static rocksdb::Slice _makeKey(const RecordId& loc, int64_t* storage);
         static std::string _makePrefixedKey(const std::string& prefix, const RecordId& loc);
+        Timestamp _prefixedKeyToTimestamp(const std::string& key) const;
 
         void _changeNumRecords(OperationContext* opCtx, int64_t amount);
         void _increaseDataSize(OperationContext* opCtx, int64_t amount);
+
+        void _loadCountFromCountManager(OperationContext* opCtx);
 
         RocksEngine* _engine;                            // not owned
         rocksdb::TOTransactionDB* _db;                   // not owned
@@ -259,15 +277,6 @@ namespace mongo {
         int _cappedDeleteCheckCount;                    // see comment in ::cappedDeleteAsNeeded
 
         const bool _isOplog;
-        // nullptr iff _isOplog == false
-        RocksOplogKeyTracker* _oplogKeyTracker;
-        // keep track of when we compacted oplog last time. only valid when _isOplog == true.
-        // Protected by _cappedDeleterMutex.
-        Timer _oplogSinceLastCompaction;
-        // compact oplog every 30 min
-        static const int kOplogCompactEveryMins = 30;
-        // compact oplog every 500K deletes
-        static const int kOplogCompactEveryDeletedRecords = 500000;
 
         // invariant: there is no live records earlier than _cappedOldestKeyHint. There might be
         // some records that are dead after _cappedOldestKeyHint.
@@ -285,6 +294,7 @@ namespace mongo {
 
         const std::string _dataSizeKey;
         const std::string _numRecordsKey;
+        const std::string _cappedOldestKey;
 
         bool _shuttingDown;
         bool _hasBackgroundThread;

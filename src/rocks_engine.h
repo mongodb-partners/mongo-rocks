@@ -208,13 +208,17 @@ namespace mongo {
 
         rocksdb::Statistics* getStatistics() const { return _statistics.get(); }
 
+        bool canRecoverToStableTimestamp() const;
+        std::uint64_t getStableTimestamp() const;
+        std::uint64_t getInitialDataTimestamp() const;
+
     private:
         Status _createIdent(StringData ident, BSONObjBuilder* configBuilder);
         BSONObj _getIdentConfig(StringData ident);
         BSONObj _tryGetIdentConfig(StringData ident);
         std::string _extractPrefix(const BSONObj& config);
 
-        rocksdb::Options _options() const;
+        rocksdb::Options _options(bool isOplog) const;
 
         void _initDatabase();
 
@@ -280,5 +284,10 @@ namespace mongo {
         std::unique_ptr<RocksDurabilityManager> _durabilityManager;
         class RocksJournalFlusher;
         std::unique_ptr<RocksJournalFlusher> _journalFlusher;  // Depends on _durabilityManager
+
+        AtomicWord<std::uint64_t> _stableTimestamp;
+        AtomicWord<std::uint64_t> _initialDataTimestamp;
+        AtomicWord<std::uint64_t> _lastStableCheckpointTimestamp;
+        Timestamp _recoveryTimestamp;
     };
 }
