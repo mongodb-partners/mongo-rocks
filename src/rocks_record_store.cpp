@@ -51,6 +51,7 @@
 #include "mongo/db/operation_context.h"
 #include "mongo/db/storage/oplog_hack.h"
 #include "mongo/db/server_parameters.h"
+#include "mongo/db/server_recovery.h"
 #include "mongo/platform/endian.h"
 #include "mongo/stdx/memory.h"
 #include "mongo/util/assert_util.h"
@@ -106,7 +107,7 @@ namespace mongo {
           _db(engine->getDB()),
           _cf(cf),
           _oplogManager(NamespaceString::oplog(ns) ? engine->getOplogManager() : nullptr),
-          _counterManager(NamespaceString::oplog(ns) ? nullptr : engine->getCounterManager()),
+          _counterManager(engine->getCounterManager()),
           _compactionScheduler(engine->getCompactionScheduler()),
           _prefix(std::move(prefix)),
           _isCapped(isCapped),
@@ -119,6 +120,8 @@ namespace mongo {
           _ident(id.toString()),
           _dataSizeKey(std::string("\0\0\0\0", 4) + "datasize-" + id.toString()),
           _numRecordsKey(std::string("\0\0\0\0", 4) + "numrecords-" + id.toString()),
+          _cappedOldestKey(NamespaceString::oplog(ns) ? 
+                           std::string("\0\0\0\0", 4) + "cappedOldestKey-" + id.toString() : ""),
           _shuttingDown(false) {
         LOG(1) << "opening collection " << ns << " with prefix "
                << rocksdb::Slice(_prefix).ToString(true);
@@ -131,6 +134,7 @@ namespace mongo {
             invariant(_cappedMaxDocs == -1);
         }
 
+        _loadCountFromCountManager(opCtx);
         // Get next id
         auto txn = std::unique_ptr<rocksdb::TOTransaction>(
             _db->BeginTransaction(rocksdb::WriteOptions(), rocksdb::TOTransactionOptions()));
@@ -153,9 +157,15 @@ namespace mongo {
         } else {
             // Need to start at 1 so we are always higher than RecordId::min()
             _nextIdNum.store(1);
+            _dataSize.store(0);
+            _numRecords.store(0);
+            if(!_isOplog) {
+                _counterManager->updateCounter(_numRecordsKey, 0);
+                _counterManager->updateCounter(_dataSizeKey, 0);
+                sizeRecoveryState(getGlobalServiceContext()).markCollectionAsAlwaysNeedsSizeAdjustment(_ident);
+            }
         }
 
-        _loadCountFromCountManager(opCtx);
 
         _hasBackgroundThread = RocksEngine::initRsOplogBackgroundThread(ns);
         invariant(_isOplog == (_oplogManager != nullptr));
@@ -179,6 +189,10 @@ namespace mongo {
 
     void RocksRecordStore::_loadCountFromCountManager(OperationContext* opCtx) {
         if (_isOplog) {
+            long long v = _counterManager->loadCounter(_cappedOldestKey);
+            if(v > 0) {
+                _cappedOldestKeyHint = RecordId(_counterManager->loadCounter(_cappedOldestKey)); 
+            }
             return;
         }
         _numRecords.store(_counterManager->loadCounter(_numRecordsKey));
@@ -286,6 +300,9 @@ namespace mongo {
 
     int64_t RocksRecordStore::cappedDeleteAsNeeded(OperationContext* opCtx,
                                                    const RecordId& justInserted) {
+        if (!sizeRecoveryState(getGlobalServiceContext()).collectionNeedsSizeAdjustment(_ident)) {
+            return 0;
+        }
         if (!_isCapped) {
             return 0;
         }
@@ -526,10 +543,20 @@ namespace mongo {
             // there is a small chance that DeleteFilesInRange successes but CompactRange fails
             // and then crashes and restarts. In this case, there is a hole at the front of oplogs.
             // Currently, we just log this error.
-            _cappedOldestKeyHint = _makeRecordId(iterator->key());
+            _cappedOldestKeyHint = std::max(_cappedOldestKeyHint, _makeRecordId(iterator->key()));
+
+            invariant(!_cappedOldestKey.empty());
+            _counterManager->updateCounter(_cappedOldestKey, _cappedOldestKeyHint.repr());
+            _counterManager->sync();
+            LOG(0) << "cuixin: save _cappedOldestKeyHint: " << _cappedOldestKeyHint;
+            {
+                // for test
+                _loadCountFromCountManager(opCtx);
+            }
         }
         auto s = _compactionScheduler->compactOplog(_cf, _prefix, maxDelKey);
-        if (!s.isOK()) {
+
+        if (s.isOK()) {
             LOG(0) << "reclaimOplog to " << _prefixedKeyToTimestamp(maxDelKey) << " success";
         } else {
             LOG(0) << "reclaimOplog to " << _prefixedKeyToTimestamp(maxDelKey) << " fail " << s;
@@ -781,7 +808,7 @@ namespace mongo {
         opCtx->recoveryUnit()->setOrderedCommit(orderedCommit);
         if (!orderedCommit) {
             // This labels the current transaction with a timestamp.
-            // This is required for oplog visibility to work correctly, as WiredTiger uses the
+            // This is required for oplog visibility to work correctly, as RocksDB uses the
             // transaction list to determine where there are holes in the oplog.
             return opCtx->recoveryUnit()->setTimestamp(opTime);
         }
@@ -880,7 +907,7 @@ namespace mongo {
 
         std::unique_ptr<SeekableRecordCursor> cursor = getCursor(opCtx, true);
         LOG(logLevel) << "Truncating capped collection '" << _ns
-                      << "' in WiredTiger record store, (inclusive=" << inclusive << ")";
+                      << "' in RocksDB record store, (inclusive=" << inclusive << ")";
 
         auto record = cursor->seekExact(end);
         invariant(record, str::stream() << "Failed to seek to the record located at " << end);
@@ -911,13 +938,6 @@ namespace mongo {
             LOG(0) << "firstRemovedId: " << Timestamp(lastKeptId.repr());
         }
 
-        // Compute the number and associated sizes of the records to delete.
-        // Truncate the collection starting from the record located at 'firstRemovedId' to the end
-        // of
-        // the collection.
-        LOG(logLevel) << "Truncating collection '" << _ns << "' from " << firstRemovedId << " ("
-                      << Timestamp(firstRemovedId.repr()) << ")"
-                      << " to the end. Number of records to delete: " << recordsRemoved;
         WriteUnitOfWork wuow(opCtx);
         auto ru = RocksRecoveryUnit::getRocksRecoveryUnit(opCtx);
         // NOTE(wolfkdy): truncate del should have no commit-ts
@@ -939,28 +959,50 @@ namespace mongo {
             } while ((record = cursor->next()));
         }
         wuow.commit();
+        // Compute the number and associated sizes of the records to delete.
+        // Truncate the collection starting from the record located at 'firstRemovedId' to the end
+        // of
+        // the collection.
+        LOG(0) << "Truncating collection '" << _ns << "' from " << firstRemovedId << " ("
+                      << Timestamp(firstRemovedId.repr()) << ")"
+                      << " to the (" <<  Timestamp(lastRemovedId.repr()) 
+                      << "). Number of records to delete: " << recordsRemoved;
 
         if (_isOplog) {
+            int retryCnt = 0;
+            Timestamp truncTs(lastKeptId.repr());
             {
-                // Set oldestTs to a large number first. after compaction, we set it back.
-                // This is to avoid some oplog entries being pinned in compaction.
-                rocksdb::RocksTimeStamp ts(0), preTs(0);
-                _db->QueryTimeStamp(rocksdb::TimeStampType::kOldest, &preTs);
-                LOG(logLevel) << "pre oldest ts: " << Timestamp(preTs);
-                const bool force = true;
-                _db->SetTimeStamp(rocksdb::TimeStampType::kOldest, 0, force);
-                invariantRocksOK(_db->QueryTimeStamp(rocksdb::TimeStampType::kOldest, &ts));
-                invariant(Timestamp(ts).isNull()); 
-                auto s = _compactionScheduler->compactOplog(_cf,
-                                                            _makePrefixedKey(_prefix, firstRemovedId),
-                                                            _makePrefixedKey(_prefix, lastRemovedId));
-                invariant(s.isOK());
-                invariantRocksOK(_db->SetTimeStamp(rocksdb::TimeStampType::kOldest, preTs, force));
-                LOG(logLevel) << "reset oldest ts to : " << Timestamp(preTs);
+
+                auto alterClient =
+                    opCtx->getServiceContext()->makeClient("reconstruct-check-oplog-removed");
+                AlternativeClientRegion acr(alterClient);
+                const auto tmpOpCtx = cc().makeOperationContext();
+                auto checkRemovedOK = [&] {
+                    RocksRecoveryUnit::getRocksRecoveryUnit(tmpOpCtx.get())->abandonSnapshot();
+                    std::unique_ptr<SeekableRecordCursor> cursor1 = getCursor(tmpOpCtx.get(), true);
+                    auto rocksCursor = dynamic_cast<RocksRecordStore::Cursor*>(cursor1.get());
+                    auto record = rocksCursor->seekToLast();
+                    
+                    Timestamp lastTs = record? Timestamp(record->id.repr()) : Timestamp();
+                    invariant(lastTs >= truncTs);
+                    LOG(logLevel) << "lastTs is " << lastTs << ", truncTs: " << truncTs;
+                    return (lastTs == truncTs);
+                };
+                while(true) {
+                    auto s = _compactionScheduler->compactOplog(_cf,
+                                                                _makePrefixedKey(_prefix, firstRemovedId),
+                                                                _makePrefixedKey(_prefix, lastRemovedId));
+                    invariant(s.isOK());
+                    invariant(retryCnt++ < 10);
+                    if(checkRemovedOK()) {
+                        break;
+                    }
+                    LOG(logLevel) << "retryCnt: " << retryCnt;
+                }
+
             }
             // Immediately rewind visibility to our truncation point, to prevent new
             // transactions from appearing.
-            Timestamp truncTs(lastKeptId.repr());
             LOG(logLevel) << "Rewinding oplog visibility point to " << truncTs
                           << " after truncation.";
 
@@ -1040,11 +1082,19 @@ namespace mongo {
     }
 
     void RocksRecordStore::_changeNumRecords(OperationContext* opCtx, int64_t amount) {
+        if (!sizeRecoveryState(getGlobalServiceContext()).collectionNeedsSizeAdjustment(_ident)) {
+            return;
+        }
+
         RocksRecoveryUnit* ru = RocksRecoveryUnit::getRocksRecoveryUnit(opCtx);
         ru->incrementCounter(_numRecordsKey, &_numRecords, amount);
     }
 
     void RocksRecordStore::_increaseDataSize(OperationContext* opCtx, int64_t amount) {
+        if (!sizeRecoveryState(getGlobalServiceContext()).collectionNeedsSizeAdjustment(_ident)) {
+            return;
+        }
+
         RocksRecoveryUnit* ru = RocksRecoveryUnit::getRocksRecoveryUnit(opCtx);
         ru->incrementCounter(_dataSizeKey, &_dataSize, amount);
     }
@@ -1193,6 +1243,19 @@ namespace mongo {
         _lastLoc = id;
 
         return {{_lastLoc, {_seekExactResult.data(), static_cast<int>(_seekExactResult.size())}}};
+    }
+    
+    boost::optional<Record> RocksRecordStore::Cursor::seekToLast() {
+        _needFirstSeek = false;
+        _skipNextAdvance = false;
+        // do not support backwoard
+        invariant(_forward);
+        auto iter = iterator();
+        rocksPrepareConflictRetry(_opCtx, [&] { 
+                                  iter->SeekToLast(); 
+                                  return iter->status(); 
+                                  });
+        return curr();
     }
 
     void RocksRecordStore::Cursor::save() {

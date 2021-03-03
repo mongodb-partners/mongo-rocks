@@ -79,6 +79,10 @@
 #include "mongo_rate_limiter_checker.h"
 
 #define ROCKS_TRACE log()
+#define LOG_FOR_RECOVERY(level) \
+    MONGO_LOG_COMPONENT(level, ::mongo::logger::LogComponent::kStorageRecovery)
+#define LOG_FOR_ROLLBACK(level) \
+    MONGO_LOG_COMPONENT(level, ::mongo::logger::LogComponent::kReplicationRollback)
 
 namespace mongo {
 
@@ -183,7 +187,10 @@ namespace mongo {
           _durable(durable),
           _formatVersion(formatVersion),
           _maxPrefix(0),
-          _keepDataHistory(serverGlobalParams.enableMajorityReadConcern) {
+          _keepDataHistory(serverGlobalParams.enableMajorityReadConcern),
+          _stableTimestamp(0),
+          _initialDataTimestamp(0) {
+
         {  // create block cache
             uint64_t cacheSizeGB = rocksGlobalOptions.cacheSizeGB;
             if (cacheSizeGB == 0) {
@@ -276,13 +283,25 @@ namespace mongo {
         _maxPrefix = std::max(_maxPrefix, maxDroppedPrefix);
 
         _durabilityManager.reset(new RocksDurabilityManager(_db.get(), _durable));
+        _oplogManager.reset(new RocksOplogManager(_db.get(), this, _durabilityManager.get()));
+
+        rocksdb::RocksTimeStamp ts(0);
+        auto status = _db->QueryTimeStamp(rocksdb::TimeStampType::kStable, &ts);
+        if (!status.IsNotFound()) {
+            invariant(status.ok(), status.ToString());
+            _recoveryTimestamp = Timestamp(ts);
+            if (!_recoveryTimestamp.isNull()) {
+                setInitialDataTimestamp(_recoveryTimestamp);
+                setStableTimestamp(_recoveryTimestamp);
+                LOG_FOR_RECOVERY(0) << "Rocksdb recoveryTimestamp. Ts: " << _recoveryTimestamp;
+            }
+        }
 
         if (_durable) {
             _journalFlusher = stdx::make_unique<RocksJournalFlusher>(_durabilityManager.get());
             _journalFlusher->go();
         }
 
-        _oplogManager.reset(new RocksOplogManager(_db.get(), this, _durabilityManager.get()));
 
         Locker::setGlobalThrottling(&openReadTransaction, &openWriteTransaction);
     }
@@ -348,6 +367,12 @@ namespace mongo {
         _db.reset(db);
         _defaultCf.reset(cfs[0]);
         _oplogCf.reset(cfs[1]);
+
+        rocksdb::RocksTimeStamp ts(0);
+        auto status = _db->QueryTimeStamp(rocksdb::TimeStampType::kStable, &ts);
+        if (!status.IsNotFound() && Timestamp(ts).asULL() >= 1) {
+            invariantRocksOK(_db->RollbackToStable(_defaultCf.get()));
+        }
     }
 
     void RocksEngine::appendGlobalStats(BSONObjBuilder& b) {
@@ -371,8 +396,8 @@ namespace mongo {
 
     RecoveryUnit* RocksEngine::newRecoveryUnit() {
         return new RocksRecoveryUnit(_db.get(), _oplogManager.get(), &_snapshotManager,
-                                     _counterManager.get(), _compactionScheduler.get(),
-                                     _durabilityManager.get(), _durable);
+                                     _compactionScheduler.get(),
+                                     _durabilityManager.get(), _durable, this);
     }
 
     Status RocksEngine::createRecordStore(OperationContext* opCtx, StringData ns, StringData ident,
@@ -684,7 +709,8 @@ namespace mongo {
                 options.compression_per_level[2] = rocksdb::kSnappyCompression;
             }
         }
-
+        options.info_log =
+            std::shared_ptr<rocksdb::Logger>(new MongoRocksLogger());
         options.statistics = _statistics;
 
         // create the DB if it's not already present
@@ -716,15 +742,55 @@ namespace mongo {
         if (!_keepDataHistory || stableTimestamp.isNull()) {
             return;
         }
-        // Communicate to Rocksdb that it can clean up timestamp data earlier than the timestamp
-        // provided.  No future queries will need point-in-time reads at a timestamp prior to the
-        // one
+
+        _stableTimestamp.store(stableTimestamp.asULL());
+        invariantRocksOK(_db->SetTimeStamp(rocksdb::TimeStampType::kStable, 
+                                           rocksdb::RocksTimeStamp(_stableTimestamp.load()), 
+                                           false /* force */ ));
+
+        const Timestamp initialDataTimestamp(_initialDataTimestamp.load());
+
+        // cases:
+        //
+        // First, initialDataTimestamp is Timestamp(0, 1) -> (i.e: during initial sync).
+        //
+        // Second, enableMajorityReadConcern is false. In this case, we are not tracking a
+        // stable timestamp. 
+        //
+        // Third, stableTimestamp < initialDataTimestamp: 
+        //
+        // Fourth, stableTimestamp >= initialDataTimestamp: Take stable checkpoint. Steady
+        // state case.
+        if (initialDataTimestamp.asULL() <= 1) {
+            ;
+        } else if (!_keepDataHistory) {
+            // Ensure '_lastStableCheckpointTimestamp' is set such that oplog truncation may
+            // take place entirely based on the oplog size.
+            _lastStableCheckpointTimestamp.store(std::numeric_limits<uint64_t>::max());
+        } else if (stableTimestamp < initialDataTimestamp) {
+            LOG_FOR_RECOVERY(2)
+                << "Stable timestamp is behind the initial data timestamp, skipping "
+                "a checkpoint. StableTimestamp: "
+                << stableTimestamp.toString()
+                << " InitialDataTimestamp: " << initialDataTimestamp.toString();
+        } else {
+            LOG_FOR_RECOVERY(2) << "Performing stable checkpoint. StableTimestamp: "
+                << stableTimestamp;
+
+            // Publish the checkpoint time after the checkpoint becomes durable.
+            _lastStableCheckpointTimestamp.store(stableTimestamp.asULL());
+        }
+
+        // Communicate to engine that it can clean up timestamp data earlier than the timestamp
+        // provided.  No future queries will need point-in-time reads at a timestamp prior to the one
         // provided here.
         const bool force = false;
         setOldestTimestamp(stableTimestamp, force);
     }
 
-    void RocksEngine::setInitialDataTimestamp(Timestamp initialDataTimestamp) {}
+    void RocksEngine::setInitialDataTimestamp(Timestamp initialDataTimestamp) {
+        _initialDataTimestamp.store(initialDataTimestamp.asULL());
+    }
 
     void RocksEngine::setOldestTimestamp(Timestamp oldestTimestamp, bool force) {
         if (MONGO_FAIL_POINT(RocksPreserveSnapshotHistoryIndefinitely)) {
@@ -773,15 +839,84 @@ namespace mongo {
         }
     }
 
-    bool RocksEngine::supportsRecoverToStableTimestamp() const { return false; }
+    bool RocksEngine::supportsRecoverToStableTimestamp() const { return _keepDataHistory; }
 
-    bool RocksEngine::supportsRecoveryTimestamp() const { return false; }
+    bool RocksEngine::supportsRecoveryTimestamp() const { return true; }
 
-    StatusWith<Timestamp> RocksEngine::recoverToStableTimestamp(OperationContext* opCtx) {
-        MONGO_UNREACHABLE
+    bool RocksEngine::canRecoverToStableTimestamp() const {
+        static const std::uint64_t allowUnstableCheckpointsSentinel =
+            static_cast<std::uint64_t>(Timestamp::kAllowUnstableCheckpointsSentinel.asULL());
+        const std::uint64_t initialDataTimestamp = _initialDataTimestamp.load();
+        // Illegal to be called when the dataset is incomplete.
+        invariant(initialDataTimestamp > allowUnstableCheckpointsSentinel);
+        return _stableTimestamp.load() >= initialDataTimestamp;
     }
 
-    boost::optional<Timestamp> RocksEngine::getRecoveryTimestamp() const { MONGO_UNREACHABLE }
+    std::uint64_t RocksEngine::getStableTimestamp() const { return _stableTimestamp.load(); }
+
+    std::uint64_t RocksEngine::getInitialDataTimestamp() const {
+        return _initialDataTimestamp.load();
+    }
+
+    StatusWith<Timestamp> RocksEngine::recoverToStableTimestamp(OperationContext* opCtx) {
+        if (!supportsRecoverToStableTimestamp()) {
+            severe() << "Rocksdb is configured to not support recover to a stable timestamp";
+            fassertFailed(90418);
+        }
+
+        if (!canRecoverToStableTimestamp()) {
+            Timestamp stableTS = Timestamp(getStableTimestamp());
+            Timestamp initialDataTS = Timestamp(getInitialDataTimestamp());
+            return Status(ErrorCodes::UnrecoverableRollbackError,
+                          str::stream()
+                          << "No stable timestamp available to recover to. Initial data timestamp: "
+                          << initialDataTS.toString() << ", Stable timestamp: " << stableTS.toString());
+        }
+
+        LOG_FOR_ROLLBACK(0) << "RocksEngine::RecoverToStableTimestamp syncing size storer to disk.";
+        _counterManager->sync();
+
+        if (_journalFlusher) {
+            _journalFlusher->shutdown();
+            _journalFlusher.reset();
+        }
+        LOG_FOR_ROLLBACK(0) << "RocksEngine::RecoverToStableTimestamp shutting down journal";
+        const auto stableTimestamp = Timestamp(getStableTimestamp());
+        const auto initialDataTimestamp = Timestamp(getInitialDataTimestamp());
+
+        LOG_FOR_ROLLBACK(0) << "Rolling back to the stable timestamp. StableTimestamp: "
+            << stableTimestamp
+            << " Initial Data Timestamp: " << initialDataTimestamp;
+        auto s = _db->RollbackToStable(_defaultCf.get());
+        if (!s.ok()) {
+            return {ErrorCodes::UnrecoverableRollbackError, 
+                str::stream() << "Error rolling back to stable. Err: " << s.ToString()};
+        }
+
+        setInitialDataTimestamp(initialDataTimestamp);
+        setStableTimestamp(stableTimestamp);
+
+        if (_durable) {
+            _journalFlusher = stdx::make_unique<RocksJournalFlusher>(_durabilityManager.get());
+            _journalFlusher->go();
+        }
+        _counterManager.reset(new RocksCounterManager(_db.get(), _defaultCf.get(),
+                                                      rocksGlobalOptions.crashSafeCounters));
+        return {stableTimestamp};
+    }
+
+    boost::optional<Timestamp> RocksEngine::getRecoveryTimestamp() const {
+        if (!supportsRecoveryTimestamp()) {
+            severe() << "RocksDB is configured to not support providing a recovery timestamp";
+            fassertFailed(90420);
+        }
+
+        if (_recoveryTimestamp.isNull()) {
+            return boost::none;
+        }
+
+        return _recoveryTimestamp;
+    }
 
     /**
      * Returns a timestamp value that is at or before the last checkpoint. Everything before
@@ -790,7 +925,21 @@ namespace mongo {
      * replay documents with an earlier time.
      */
     boost::optional<Timestamp> RocksEngine::getLastStableCheckpointTimestamp() const {
-        MONGO_UNREACHABLE
+        if (!supportsRecoverToStableTimestamp()) {
+            severe() << "Rocksdb is configured to not support recover to a stable timestamp";
+            fassertFailed(90419);
+        }
+
+        const auto ret = _lastStableCheckpointTimestamp.load();
+        if (ret) {
+            return Timestamp(ret);
+        }
+
+        if (!_recoveryTimestamp.isNull()) {
+            return _recoveryTimestamp;
+        }
+
+        return boost::none;
     }
 
     Timestamp RocksEngine::getAllCommittedTimestamp() const {

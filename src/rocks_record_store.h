@@ -208,6 +208,7 @@ namespace mongo {
 
             boost::optional<Record> next() final;
             boost::optional<Record> seekExact(const RecordId& id) final;
+            boost::optional<Record> seekToLast();
             void save() final;
             void saveUnpositioned() final;
             bool restore() final;
@@ -293,6 +294,7 @@ namespace mongo {
 
         const std::string _dataSizeKey;
         const std::string _numRecordsKey;
+        const std::string _cappedOldestKey;
 
         bool _shuttingDown;
         bool _hasBackgroundThread;

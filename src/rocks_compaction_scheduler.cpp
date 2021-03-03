@@ -45,6 +45,7 @@
 #include "mongo/util/fail_point.h"
 #include "mongo/util/fail_point_service.h"
 #include "rocks_util.h"
+#include "rocks_record_store.h"
 
 #include <rocksdb/compaction_filter.h>
 #include <rocksdb/convenience.h>
@@ -308,9 +309,9 @@ namespace mongo {
         LOG(1) << "Starting compaction of cf: " << op._cf->GetName()
                << " range: " << (start ? start->ToString(true) : "<begin>")
                << " .. " << (end ? end->ToString(true) : "<end>") << " (rangeDropped is "
-               << op._rangeDropped << ")";
+               << op._rangeDropped << ")" << " (isOplog is " << isOplog << ")";
 
-        if (op._rangeDropped || isOplog) {
+        if (op._rangeDropped) {
             auto s = rocksdb::DeleteFilesInRange(_db, op._cf, start, end);
             if (!s.ok()) {
                 // Do not fail the entire procedure, since there is still chance
@@ -322,7 +323,9 @@ namespace mongo {
         rocksdb::CompactRangeOptions compact_options;
         compact_options.bottommost_level_compaction = rocksdb::BottommostLevelCompaction::kForce;
         // if auto-compaction runs parallelly, oplog compact-range may leave a hole.
-        compact_options.exclusive_manual_compaction = isOplog ? true : false;
+        compact_options.exclusive_manual_compaction = isOplog;
+        compact_options.ignore_pin_timestamp = isOplog;
+
         auto s = _db->CompactRange(compact_options, op._cf, start, end);
         if (!s.ok()) {
             log() << "Failed to compact range: " << s.ToString();
@@ -388,16 +391,15 @@ namespace mongo {
     }
 
     Status RocksCompactionScheduler::compactOplog(rocksdb::ColumnFamilyHandle* cf,
-                                                  const std::string& begin, const std::string& end) {
+                                                  const std::string& begin, 
+                                                  const std::string& end) {
         {
             stdx::lock_guard<stdx::mutex> lk(_droppedDataMutex);
-            if (_oplogDeleteUntil == boost::none) {
-                _oplogDeleteUntil = {cf->GetID(), {begin, end}};
-            } else {
+            invariant(begin <= end);
+            if (_oplogDeleteUntil != boost::none) {
                 invariant(cf->GetID() == _oplogDeleteUntil->first);
-                // invariant(begin < end && end >= _oplogDeleteUntil->second);
-                _oplogDeleteUntil = {cf->GetID(), {begin, end}};
             }
+            _oplogDeleteUntil = {cf->GetID(), {begin, end}};
         }
         auto notification = std::make_shared<Notification<Status>>();
         compact(cf, begin, end, false, kOrderOplog, notification);
