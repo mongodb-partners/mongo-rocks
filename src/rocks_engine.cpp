@@ -443,19 +443,6 @@ namespace mongo {
         bb.done();
     }
 
-    void RocksEngine::cleanShutdown() {
-        if (_journalFlusher) {
-            _journalFlusher->shutdown();
-            _journalFlusher.reset();
-        }
-        _durabilityManager.reset();
-        _snapshotManager.dropAllSnapshots();
-        _counterManager->sync();
-        _counterManager.reset();
-        _compactionScheduler.reset();
-        _db.reset();
-    }
-
     Status RocksEngine::okToRename(OperationContext* opCtx, StringData fromNS, StringData toNS,
                                    StringData ident, const RecordStore* originalRecordStore) const {
         _counterManager->sync();
@@ -688,6 +675,21 @@ namespace mongo {
             indents.push_back(entry.first);
         }
         return indents;
+    }
+
+    void RocksEngine::cleanShutdown() {
+        if (_journalFlusher) {
+            _journalFlusher->shutdown();
+            _journalFlusher.reset();
+        }
+        _durabilityManager.reset();
+        _snapshotManager.dropAllSnapshots();
+        _counterManager->sync();
+        _counterManager.reset();
+        _compactionScheduler.reset();
+        _defaultCf.reset();
+        _oplogCf.reset();
+        _db.reset();
     }
 
     void RocksEngine::setJournalListener(JournalListener* jl) {

@@ -91,7 +91,7 @@ namespace mongo {
                                                                const std::string& ns) final {
             RocksRecordStore::Params params;
             params.ns = ns;
-            return stdx::make_unique<RocksRecordStore>(&_engine, opCtx, params);
+            return stdx::make_unique<RocksRecordStore>(&_engine, _engine.getCf_ForTest(ns), opCtx, params);
         }
 
     private:

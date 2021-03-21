@@ -96,7 +96,7 @@ namespace mongo {
             params.isCapped = false;
             params.cappedMaxSize = -1;
             params.cappedMaxDocs = -1;
-            return stdx::make_unique<RocksRecordStore>(&_engine, &opCtx, params);
+            return stdx::make_unique<RocksRecordStore>(&_engine, _engine.getCf_ForTest(ns), &opCtx, params);
         }
 
         std::unique_ptr<RecordStore> newCappedRecordStore(int64_t cappedMaxSize,
@@ -116,7 +116,7 @@ namespace mongo {
             params.isCapped = true;
             params.cappedMaxSize = cappedMaxSize;
             params.cappedMaxDocs = cappedMaxDocs;
-            return stdx::make_unique<RocksRecordStore>(&_engine, &opCtx, params);
+            return stdx::make_unique<RocksRecordStore>(&_engine, _engine.getCf_ForTest(ns), &opCtx, params);
         }
 
         std::unique_ptr<RecoveryUnit> newRecoveryUnit() final {
