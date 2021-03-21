@@ -89,7 +89,7 @@ namespace mongo {
 
         virtual std::unique_ptr<RecordStore> createRecordStore(OperationContext* opCtx,
                                                                const std::string& ns) final {
-            return stdx::make_unique<RocksRecordStore>(&_engine, opCtx, ns, "1", "prefix");
+            return stdx::make_unique<RocksRecordStore>(&_engine, _engine.getCf_ForTest(ns), opCtx, ns, "1", "prefix");
         }
 
     private:

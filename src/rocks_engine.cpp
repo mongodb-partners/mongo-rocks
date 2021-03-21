@@ -552,6 +552,8 @@ namespace mongo {
         _counterManager->sync();
         _counterManager.reset();
         _compactionScheduler.reset();
+        _defaultCf.reset();
+        _oplogCf.reset();
         _db.reset();
     }
 
