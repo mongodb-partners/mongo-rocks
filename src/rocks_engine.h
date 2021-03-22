@@ -211,6 +211,11 @@ namespace mongo {
         bool canRecoverToStableTimestamp() const;
         std::uint64_t getStableTimestamp() const;
         std::uint64_t getInitialDataTimestamp() const;
+        rocksdb::ColumnFamilyHandle* getDefaultCf_ForTest() const { return _defaultCf.get(); }
+        rocksdb::ColumnFamilyHandle* getOplogCf_ForTest() const { return _oplogCf.get(); }
+        rocksdb::ColumnFamilyHandle* getCf_ForTest(const std::string& ns) const {
+            return NamespaceString::oplog(ns)? getOplogCf_ForTest() : getDefaultCf_ForTest();
+        }
 
     private:
         Status _createIdent(StringData ident, BSONObjBuilder* configBuilder);

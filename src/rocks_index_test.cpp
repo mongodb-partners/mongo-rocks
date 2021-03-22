@@ -68,11 +68,13 @@ namespace mongo {
                 RocksIndexBase::generateConfig(&configBuilder, 3,
                                                IndexDescriptor::IndexVersion::kV2);
                 if (unique) {
-                    return stdx::make_unique<RocksUniqueIndex>(_engine.getDB(), "prefix", "ident",
+                    return stdx::make_unique<RocksUniqueIndex>(_engine.getDB(), _engine.getDefaultCf_ForTest(),
+                                                               "prefix", "ident",
                                                                _order, configBuilder.obj(),
                                                                "test.rocks", "testIndex");
                 } else {
-                    return stdx::make_unique<RocksStandardIndex>(_engine.getDB(), "prefix", "ident",
+                    return stdx::make_unique<RocksStandardIndex>(_engine.getDB(), _engine.getDefaultCf_ForTest(),
+                                                                 "prefix", "ident",
                                                                  _order, configBuilder.obj());
                 }
             }
@@ -81,8 +83,8 @@ namespace mongo {
                 return stdx::make_unique<RocksRecoveryUnit>(
                     _engine.getDB(), _engine.getOplogManager(),
                     checked_cast<RocksSnapshotManager*>(_engine.getSnapshotManager()),
-                    _engine.getCounterManager(), _engine.getCompactionScheduler(),
-                    _engine.getDurabilityManager(), true /* durale */, _engine);
+                    _engine.getCompactionScheduler(),
+                    _engine.getDurabilityManager(), true /* durale */, &_engine);
             }
 
         private:
