@@ -89,7 +89,7 @@ namespace mongo {
         std::unique_ptr<RecordStore> newNonCappedRecordStore(const std::string& ns) {
             RocksRecoveryUnit* ru = dynamic_cast<RocksRecoveryUnit*>(_engine.newRecoveryUnit());
             OperationContextNoop opCtx(ru);
-            return stdx::make_unique<RocksRecordStore>(&_engine, &opCtx, ns, "1", "prefix");
+            return stdx::make_unique<RocksRecordStore>(&_engine, _engine.getCf_ForTest(ns), &opCtx, ns, "1", "prefix");
         }
 
         std::unique_ptr<RecordStore> newCappedRecordStore(int64_t cappedMaxSize,
@@ -102,7 +102,7 @@ namespace mongo {
                                                           int64_t cappedMaxDocs) {
             RocksRecoveryUnit* ru = dynamic_cast<RocksRecoveryUnit*>(_engine.newRecoveryUnit());
             OperationContextNoop opCtx(ru);
-            return stdx::make_unique<RocksRecordStore>(&_engine, &opCtx, ns, "1", "prefix",
+            return stdx::make_unique<RocksRecordStore>(&_engine, _engine.getCf_ForTest(ns), &opCtx, ns, "1", "prefix",
                                                        true /* isCapped */, cappedMaxSize,
                                                        cappedMaxDocs);
         }
