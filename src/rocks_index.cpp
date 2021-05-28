@@ -117,7 +117,7 @@ namespace mongo {
             Status indexVersionStatus(
                 ErrorCodes::UnsupportedFormat,
                 "Unrecognized index format -- you might want to upgrade MongoDB");
-            fassertFailedWithStatusNoTrace(40264, indexVersionStatus);
+            fassertFailedWithStatusNoTrace(ErrorCodes::InternalError, indexVersionStatus);
         }
 
         _keyStringVersion = indexFormatVersion >= kKeyStringV1Version ? KeyString::Version::V1
@@ -806,7 +806,7 @@ namespace mongo {
             Status indexVersionStatus(
                 ErrorCodes::UnsupportedFormat,
                 "Unrecognized index format -- you might want to upgrade MongoDB");
-            fassertFailedWithStatusNoTrace(40264, indexVersionStatus);
+            fassertFailedWithStatusNoTrace(ErrorCodes::InternalError, indexVersionStatus);
         }
 
         _keyStringVersion = indexFormatVersion >= kKeyStringV1Version ? KeyString::Version::V1

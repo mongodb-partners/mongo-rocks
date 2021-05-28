@@ -1037,7 +1037,7 @@ namespace mongo {
     StatusWith<Timestamp> RocksEngine::recoverToStableTimestamp(OperationContext* opCtx) {
         if (!supportsRecoverToStableTimestamp()) {
             severe() << "Rocksdb is configured to not support recover to a stable timestamp";
-            fassertFailed(90418);
+            fassertFailed(ErrorCodes::InternalError);
         }
 
         if (!canRecoverToStableTimestamp()) {
@@ -1084,7 +1084,7 @@ namespace mongo {
     boost::optional<Timestamp> RocksEngine::getRecoveryTimestamp() const {
         if (!supportsRecoveryTimestamp()) {
             severe() << "RocksDB is configured to not support providing a recovery timestamp";
-            fassertFailed(90420);
+            fassertFailed(ErrorCodes::InternalError);
         }
 
         if (_recoveryTimestamp.isNull()) {
@@ -1103,7 +1103,7 @@ namespace mongo {
     boost::optional<Timestamp> RocksEngine::getLastStableCheckpointTimestamp() const {
         if (!supportsRecoverToStableTimestamp()) {
             severe() << "Rocksdb is configured to not support recover to a stable timestamp";
-            fassertFailed(90419);
+            fassertFailed(ErrorCodes::InternalError);
         }
 
         const auto ret = _lastStableCheckpointTimestamp.load();
