@@ -90,42 +90,6 @@
 
 namespace mongo {
 
-    class MongoRocksLogger : public rocksdb::Logger {
-    public:
-        MongoRocksLogger() : rocksdb::Logger(getLogLevel()) {}
-
-        static rocksdb::InfoLogLevel getLogLevel() {
-            return rocksdb::InfoLogLevel::DEBUG_LEVEL;
-            if (rocksGlobalOptions.logLevel == "debug") {
-                return rocksdb::InfoLogLevel::DEBUG_LEVEL;
-            }
-            if (rocksGlobalOptions.logLevel == "info") {
-                return rocksdb::InfoLogLevel::INFO_LEVEL;
-            }
-            if (rocksGlobalOptions.logLevel == "warn") {
-                return rocksdb::InfoLogLevel::WARN_LEVEL;
-            }
-            if (rocksGlobalOptions.logLevel == "error") {
-                return rocksdb::InfoLogLevel::ERROR_LEVEL;
-            }
-            LOG(0) << "unknown rocksdb loglevel:" << rocksGlobalOptions.logLevel;
-            return rocksdb::InfoLogLevel::INFO_LEVEL;
-        }
-
-        // Write an entry to the log file with the specified format.
-        virtual void Logv(const char* format, va_list ap) {
-            char buffer[8192];
-            int len = snprintf(buffer, sizeof(buffer), "[RocksDB]");
-            if (0 > len) {
-                mongo::log() << "MongoRocksLogger::Logv return NEGATIVE value.";
-                return;
-            }
-            vsnprintf(buffer + len, sizeof(buffer) - len, format, ap);
-            mongo::log() << buffer;
-        }
-        using rocksdb::Logger::Logv;
-    };
-
     class RocksEngine::RocksJournalFlusher : public BackgroundJob {
     public:
         explicit RocksJournalFlusher(RocksDurabilityManager* durabilityManager)
@@ -256,9 +220,6 @@ namespace mongo {
         }
 
         log() << "clusterRole is " << static_cast<int>(serverGlobalParams.clusterRole) << ";";
-#ifdef __linux__
-        startMongoRateLimiterChecker();
-#endif
 
         // used in building options for the db
         _compactionScheduler.reset(new RocksCompactionScheduler());
@@ -267,13 +228,11 @@ namespace mongo {
         setOldestActiveTransactionTimestampCallback(
             [](Timestamp) { return StatusWith(boost::make_optional(Timestamp::min())); });
 
-        // open DB
-        rocksdb::TOTransactionDB* db;
-        rocksdb::Status s;
 
         // TODO(wolfkdy): support readOnly mode
         invariant(!readOnly);
 
+        // open DB
         _initDatabase();
 
         _counterManager.reset(
@@ -341,7 +300,7 @@ namespace mongo {
             _recoveryTimestamp = Timestamp(ts);
             if (!_recoveryTimestamp.isNull()) {
                 setInitialDataTimestamp(_recoveryTimestamp);
-                setStableTimestamp(_recoveryTimestamp);
+                setStableTimestamp(_recoveryTimestamp, false);
                 LOG_FOR_RECOVERY(0) << "Rocksdb recoveryTimestamp. Ts: " << _recoveryTimestamp;
             }
         }
@@ -350,7 +309,6 @@ namespace mongo {
             _journalFlusher = stdx::make_unique<RocksJournalFlusher>(_durabilityManager.get());
             _journalFlusher->go();
         }
-
 
         Locker::setGlobalThrottling(&openReadTransaction, &openWriteTransaction);
     }
@@ -539,7 +497,7 @@ namespace mongo {
         params.cappedCallback = nullptr;
         params.tracksSizeAdjustments = true;
         std::unique_ptr<RocksRecordStore> recordStore =
-            stdx::make_unique<RocksRecordStore>(this, opCtx, params);
+            stdx::make_unique<RocksRecordStore>(this, cf, opCtx, params);
 
         {
             stdx::lock_guard<Latch> lk(_identObjectMapMutex);
@@ -565,7 +523,7 @@ namespace mongo {
         std::string prefix = _extractPrefix(config);
 
         // oplog have no indexes
-        invariant(!NamespaceString::oplog(desc->parentNS()));
+        invariant(!desc->parentNS().isOplog());
 
         RocksIndexBase* index;
         if (desc->unique()) {
@@ -610,7 +568,7 @@ namespace mongo {
         params.tracksSizeAdjustments = false;
 
         std::unique_ptr<RocksRecordStore> recordStore =
-            stdx::make_unique<RocksRecordStore>(this, opCtx, params);
+            stdx::make_unique<RocksRecordStore>(this, _defaultCf.get(), opCtx, params);
 
         {
             stdx::lock_guard<Latch> lk(_identObjectMapMutex);
@@ -696,16 +654,6 @@ namespace mongo {
         _durabilityManager->setJournalListener(jl);
     }
 
-    void RocksEngine::setStableTimestamp(Timestamp stableTimestamp, bool force) {
-        if (!_keepDataHistory || stableTimestamp.isNull()) {
-            return;
-        }
-        // Communicate to Rocksdb that it can clean up timestamp data earlier than the timestamp
-        // provided.  No future queries will need point-in-time reads at a timestamp prior to the
-        // one provided here.
-        setOldestTimestamp(stableTimestamp, false /*force*/);
-    }
-
     void RocksEngine::setOldestTimestampFromStable() {
         Timestamp stableTimestamp(_stableTimestamp.load());
 
@@ -732,28 +680,6 @@ namespace mongo {
     boost::optional<Timestamp> RocksEngine::getOplogNeededForCrashRecovery() const {
         return boost::none;
     }
-
-    bool RocksEngine::supportsReadConcernSnapshot() const { return true; }
-
-    bool RocksEngine::supportsReadConcernMajority() const { return true; }
-
-    void RocksEngine::startOplogManager(OperationContext* opCtx,
-                                        RocksRecordStore* oplogRecordStore) {
-        stdx::lock_guard<Latch> lock(_oplogManagerMutex);
-        if (_oplogManagerCount == 0) _oplogManager->start(opCtx, oplogRecordStore);
-        _oplogManagerCount++;
-    }
-
-    void RocksEngine::haltOplogManager() {
-        stdx::unique_lock<Latch> lock(_oplogManagerMutex);
-        invariant(_oplogManagerCount > 0);
-        _oplogManagerCount--;
-        if (_oplogManagerCount == 0) {
-            _oplogManager->halt();
-        }
-    }
-
-    void RocksEngine::replicationBatchIsComplete() const { _oplogManager->triggerJournalFlush(); }
 
     bool RocksEngine::isCacheUnderPressure(OperationContext* opCtx) const {
         // TODO(wolfkdy): review rocksdb's memory-stats for answer
@@ -912,7 +838,11 @@ namespace mongo {
 
     }  // namespace
 
-    void RocksEngine::setStableTimestamp(Timestamp stableTimestamp) {
+    Timestamp RocksEngine::getInitialDataTimestamp() const {
+        return Timestamp(_initialDataTimestamp.load());
+    }
+
+    void RocksEngine::setStableTimestamp(Timestamp stableTimestamp, bool force) {
         if (!_keepDataHistory || stableTimestamp.isNull()) {
             return;
         }
@@ -920,7 +850,7 @@ namespace mongo {
         _stableTimestamp.store(stableTimestamp.asULL());
         invariantRocksOK(_db->SetTimeStamp(rocksdb::TimeStampType::kStable, 
                                            rocksdb::RocksTimeStamp(_stableTimestamp.load()), 
-                                           false /* force */ ));
+                                           force));
 
         const Timestamp initialDataTimestamp(_initialDataTimestamp.load());
 
@@ -955,10 +885,6 @@ namespace mongo {
             _lastStableCheckpointTimestamp.store(stableTimestamp.asULL());
         }
 
-        // Communicate to engine that it can clean up timestamp data earlier than the timestamp
-        // provided.  No future queries will need point-in-time reads at a timestamp prior to the one
-        // provided here.
-        const bool force = false;
         setOldestTimestamp(stableTimestamp, force);
     }
 
@@ -1028,12 +954,6 @@ namespace mongo {
         return _stableTimestamp.load() >= initialDataTimestamp;
     }
 
-    std::uint64_t RocksEngine::getStableTimestamp() const { return _stableTimestamp.load(); }
-
-    std::uint64_t RocksEngine::getInitialDataTimestamp() const {
-        return _initialDataTimestamp.load();
-    }
-
     StatusWith<Timestamp> RocksEngine::recoverToStableTimestamp(OperationContext* opCtx) {
         if (!supportsRecoverToStableTimestamp()) {
             severe() << "Rocksdb is configured to not support recover to a stable timestamp";
@@ -1041,8 +961,8 @@ namespace mongo {
         }
 
         if (!canRecoverToStableTimestamp()) {
-            Timestamp stableTS = Timestamp(getStableTimestamp());
-            Timestamp initialDataTS = Timestamp(getInitialDataTimestamp());
+            Timestamp stableTS = getStableTimestamp();
+            Timestamp initialDataTS = getInitialDataTimestamp();
             return Status(ErrorCodes::UnrecoverableRollbackError,
                           str::stream()
                           << "No stable timestamp available to recover to. Initial data timestamp: "
@@ -1057,8 +977,8 @@ namespace mongo {
             _journalFlusher.reset();
         }
         LOG_FOR_ROLLBACK(0) << "RocksEngine::RecoverToStableTimestamp shutting down journal";
-        const auto stableTimestamp = Timestamp(getStableTimestamp());
-        const auto initialDataTimestamp = Timestamp(getInitialDataTimestamp());
+        const auto stableTimestamp = getStableTimestamp();
+        const auto initialDataTimestamp = getInitialDataTimestamp();
 
         LOG_FOR_ROLLBACK(0) << "Rolling back to the stable timestamp. StableTimestamp: "
             << stableTimestamp
@@ -1070,7 +990,7 @@ namespace mongo {
         }
 
         setInitialDataTimestamp(initialDataTimestamp);
-        setStableTimestamp(stableTimestamp);
+        setStableTimestamp(stableTimestamp, false);
 
         if (_durable) {
             _journalFlusher = stdx::make_unique<RocksJournalFlusher>(_durabilityManager.get());
@@ -1100,7 +1020,7 @@ namespace mongo {
      * value is guaranteed to be persisted on disk and replication recovery will not need to
      * replay documents with an earlier time.
      */
-    boost::optional<Timestamp> RocksEngine::getLastStableCheckpointTimestamp() const {
+    boost::optional<Timestamp> RocksEngine::getLastStableRecoveryTimestamp() const {
         if (!supportsRecoverToStableTimestamp()) {
             severe() << "Rocksdb is configured to not support recover to a stable timestamp";
             fassertFailed(ErrorCodes::InternalError);
@@ -1118,24 +1038,20 @@ namespace mongo {
         return boost::none;
     }
 
-    Timestamp RocksEngine::getAllCommittedTimestamp() const {
-        return _oplogManager->fetchAllCommittedValue();
-    }
-
     bool RocksEngine::supportsReadConcernSnapshot() const { return true; }
 
     bool RocksEngine::supportsReadConcernMajority() const { return _keepDataHistory; }
 
     void RocksEngine::startOplogManager(OperationContext* opCtx,
                                         RocksRecordStore* oplogRecordStore) {
-        stdx::lock_guard<stdx::mutex> lock(_oplogManagerMutex);
+        stdx::lock_guard<Latch> lock(_oplogManagerMutex);
         if (_oplogManagerCount == 0)
             _oplogManager->start(opCtx, oplogRecordStore, !_keepDataHistory);
         _oplogManagerCount++;
     }
 
     void RocksEngine::haltOplogManager() {
-        stdx::unique_lock<stdx::mutex> lock(_oplogManagerMutex);
+        stdx::unique_lock<Latch> lock(_oplogManagerMutex);
         invariant(_oplogManagerCount > 0);
         _oplogManagerCount--;
         if (_oplogManagerCount == 0) {

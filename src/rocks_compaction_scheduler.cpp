@@ -394,12 +394,12 @@ namespace mongo {
                                                   const std::string& begin, 
                                                   const std::string& end) {
         {
-            stdx::lock_guard<stdx::mutex> lk(_droppedDataMutex);
+            stdx::lock_guard<Latch> lk(_droppedDataMutex);
             invariant(begin <= end);
             if (_oplogDeleteUntil != boost::none) {
                 invariant(cf->GetID() == _oplogDeleteUntil->first);
             }
-            _oplogDeleteUntil = {cf->GetID(), {begin, end}};
+            _oplogDeleteUntil = std::make_pair(cf->GetID(), std::make_pair(begin, end));
         }
         auto notification = std::make_shared<Notification<Status>>();
         compact(cf, begin, end, false, kOrderOplog, notification);
@@ -481,7 +481,7 @@ namespace mongo {
     }
 
     boost::optional<std::pair<uint32_t, std::pair<std::string, std::string>>> RocksCompactionScheduler::getOplogDeleteUntil() const {
-        stdx::lock_guard<stdx::mutex> lk(_droppedDataMutex);
+        stdx::lock_guard<Latch> lk(_droppedDataMutex);
         return _oplogDeleteUntil;
     }
 

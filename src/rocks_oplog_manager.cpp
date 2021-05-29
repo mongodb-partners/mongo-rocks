@@ -56,7 +56,8 @@ namespace mongo {
                                          RocksDurabilityManager* durabilityManager)
         : _db(db), _kvEngine(kvEngine), _durabilityManager(durabilityManager) {}
 
-    void RocksOplogManager::start(OperationContext* opCtx, RocksRecordStore* oplogRecordStore) {
+    void RocksOplogManager::start(OperationContext* opCtx, RocksRecordStore* oplogRecordStore,
+                                  const bool updateOldestTimestamp) {
         invariant(!_isRunning);
         auto reverseOplogCursor =
             oplogRecordStore->getCursor(opCtx, false /* false = reverse cursor */);
@@ -79,7 +80,7 @@ namespace mongo {
         // see _shuttingDown as true and quit prematurely.
         stdx::lock_guard<Latch> lk(_oplogVisibilityStateMutex);
         _oplogJournalThread =
-            stdx::thread(&RocksOplogManager::_oplogJournalThreadLoop, this, oplogRecordStore);
+            stdx::thread(&RocksOplogManager::_oplogJournalThreadLoop, this, oplogRecordStore, updateOldestTimestamp);
         _isRunning = true;
         _shuttingDown = false;
     }
@@ -164,7 +165,8 @@ namespace mongo {
         }
     }
 
-    void RocksOplogManager::_oplogJournalThreadLoop(RocksRecordStore* oplogRecordStore) noexcept {
+    void RocksOplogManager::_oplogJournalThreadLoop(RocksRecordStore* oplogRecordStore,
+                                                    const bool updateOldestTimestamp) noexcept {
         Client::initThread("RocksOplogJournalThread");
 
         // This thread updates the oplog read timestamp, the timestamp used to read from the oplog
@@ -245,6 +247,11 @@ namespace mongo {
                 _setOplogReadTimestamp(lk, newTimestamp);
             }
             lk.unlock();
+
+            if (updateOldestTimestamp) {
+                const bool force = false;
+                _kvEngine->setOldestTimestamp(Timestamp(newTimestamp), force);
+            }
 
             // Wake up any await_data cursors and tell them more data might be visible now.
             oplogRecordStore->notifyCappedWaitersIfNeeded();

@@ -70,7 +70,7 @@ namespace mongo {
                 if (unique) {
                     return stdx::make_unique<RocksUniqueIndex>(
                         _engine.getDB(), _engine.getDefaultCf_ForTest(),
-			"prefix", "ident", _order, configBuilder.obj(),
+                        "prefix", "ident", _order, configBuilder.obj(),
                         "test.rocks", "testIndex", BSONObj(), partial);
                 } else {
                     return stdx::make_unique<RocksStandardIndex>(_engine.getDB(), _engine.getDefaultCf_ForTest(),

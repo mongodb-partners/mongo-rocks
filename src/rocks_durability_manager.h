@@ -87,7 +87,7 @@ namespace mongo {
         // Protects _journalListener.
         Mutex _journalListenerMutex =
             MONGO_MAKE_LATCH("RocksDurabilityManager::_journalListenerMutex");
-        AtomicUInt32 _lastSyncTime;
+        AtomicWord<unsigned> _lastSyncTime;
         Mutex _lastSyncMutex = MONGO_MAKE_LATCH("RocksDurabilityManager::_lastSyncMutex");
 
         // Mutex and cond var for waiting on prepare commit or abort.

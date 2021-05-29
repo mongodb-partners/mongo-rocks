@@ -96,7 +96,7 @@ namespace mongo {
     }
 
     void RocksCounterManager::sync() {
-        stdx::lock_guard<stdx::mutex> lk(_lock);
+        stdx::lock_guard<Latch> lk(_lock);
         if (_counters.size() == 0) {
             return;
         }

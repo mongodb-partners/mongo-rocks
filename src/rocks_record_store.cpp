@@ -47,10 +47,10 @@
 #include "mongo/base/checked_cast.h"
 #include "mongo/bson/bsonobjbuilder.h"
 #include "mongo/db/concurrency/write_conflict_exception.h"
+#include "mongo/db/modules/rocks/src/rocks_parameters_gen.h"
 #include "mongo/db/namespace_string.h"
 #include "mongo/db/operation_context.h"
 #include "mongo/db/storage/oplog_hack.h"
-#include "mongo/db/server_parameters.h"
 #include "mongo/db/server_recovery.h"
 #include "mongo/platform/endian.h"
 #include "mongo/stdx/memory.h"
@@ -82,66 +82,37 @@ namespace mongo {
     MONGO_FAIL_POINT_DEFINE(RocksWriteConflictException);
     MONGO_FAIL_POINT_DEFINE(RocksWriteConflictExceptionForReads);
 
-    // this object keeps track of keys in oplog. The format is this:
-    // <prefix>RecordId --> dataSize (small endian 32 bytes)
-    // <prefix> is oplog_prefix+1 (reserved by rocks_engine.cpp)
-    // That way we can cheaply delete old record in the oplog without actually reading oplog
-    // collection.
-    // All of the locking is done somewhere else -- we write exactly the same data as oplog, so we
-    // assume oplog already locked the relevant keys
-    class RocksOplogKeyTracker {
-    public:
-        RocksOplogKeyTracker(rocksdb::ColumnFamilyHandle* cf, std::string prefix)
-            : _cf(cf),
-              _prefix(std::move(prefix)) {}
+    namespace {
+        AtomicWord<std::uint32_t> minSSTFileCountReserved{4}; 
+    }
+    ExportedMinSSTFileCountReservedParameter::ExportedMinSSTFileCountReservedParameter(StringData name,
+            ServerParameterType spt)
+        : ServerParameter(name, spt), _data(&minSSTFileCountReserved) {}
+    
+    void ExportedMinSSTFileCountReservedParameter::append(OperationContext* opCtx, BSONObjBuilder& b,
+                                            const std::string& name) {
+        b.append(name, _data->load());
+    }
 
-        void insertKey(RocksRecoveryUnit* ru, const RecordId& loc, int len) {
-            uint32_t lenLittleEndian = endian::nativeToLittle(static_cast<uint32_t>(len));
-            invariant(ru);
-            auto transaction = ru->getTransaction();
-            invariant(transaction);
-            invariantRocksOK(ROCKS_OP_CHECK(
-                transaction->Put(_cf, RocksRecordStore::_makePrefixedKey(_prefix, loc),
-                                 rocksdb::Slice(reinterpret_cast<const char*>(&lenLittleEndian),
-                                                sizeof(lenLittleEndian)))));
+    Status ExportedMinSSTFileCountReservedParameter::setFromString(const std::string& str) {
+        int num = 0;
+        Status status = parseNumberFromString(str, &num);
+        if (!status.isOK()) {
+            return status;
         }
-        void deleteKey(RocksRecoveryUnit* ru, const RecordId& loc) {
-            invariant(ru);
-            auto transaction = ru->getTransaction();
-            invariant(transaction);
-            invariantRocksOK(ROCKS_OP_CHECK(
-                transaction->Delete(_cf, RocksRecordStore::_makePrefixedKey(_prefix, loc))));
-            _deletedKeysSinceCompaction++;
+        if (num < 1 || num > (1000 * 1000)) {
+            return Status(ErrorCodes::BadValue, "minSSTFileCountReserved must be between 1 and 1 million, inclusive");
         }
-
-        AtomicInt32 minSSTFileCountReserved{1}; 
-
-        class ExportedMinSSTFileCountReservedParameter
-            : public ExportedServerParameter<int, ServerParameterType::kStartupAndRuntime> {
-        public:
-            ExportedMinSSTFileCountReservedParameter()
-                : ExportedServerParameter<int, ServerParameterType::kStartupAndRuntime>(
-                      ServerParameterSet::getGlobal(),
-                      "minSSTFileCountReserved",
-                      &minSSTFileCountReserved) {}
-        
-            virtual Status validate(const int& potentialNewValue) {
-                if (potentialNewValue < 1 || potentialNewValue > (1000 * 1000)) {
-                    return Status(ErrorCodes::BadValue,
-                                  "minSSTFileCountReserved must be between 1 and 1 million, inclusive");
-                }
-        
-                return Status::OK();
-            }
-        } exportedMinSSTFileCountReservedParameter;
-    }  // namespace
+        _data->store(static_cast<uint32_t>(num));
+        return Status::OK();
+    }
 
     RocksRecordStore::RocksRecordStore(RocksEngine* engine, rocksdb::ColumnFamilyHandle* cf,
-		    		       OperationContext* opCtx, Params params)
+          OperationContext* opCtx, Params params)
         : RecordStore(params.ns),
           _engine(engine),
           _db(engine->getDB()),
-	  _cf(cf),
+          _cf(cf),
           _oplogManager(NamespaceString::oplog(params.ns) ? engine->getOplogManager() : nullptr),
           _counterManager(engine->getCounterManager()),
           _compactionScheduler(engine->getCompactionScheduler()),
@@ -156,11 +127,10 @@ namespace mongo {
           _ident(params.ident),
           _dataSizeKey(std::string("\0\0\0\0", 4) + "datasize-" + params.ident),
           _numRecordsKey(std::string("\0\0\0\0", 4) + "numrecords-" + params.ident),
-          _cappedOldestKey(NamespaceString::oplog(ns) ? 
-                           std::string("\0\0\0\0", 4) + "cappedOldestKey-" + id.toString() : ""),
+          _cappedOldestKey(NamespaceString::oplog(params.ns) ? 
+                           std::string("\0\0\0\0", 4) + "cappedOldestKey-" + params.ident : ""),
           _shuttingDown(false),
           _tracksSizeAdjustments(params.tracksSizeAdjustments) {
-        _oplogSinceLastCompaction.reset();
 
         LOG(1) << "opening collection " << params.ns << " with prefix "
                << rocksdb::Slice(_prefix).ToString(true);
@@ -520,7 +490,7 @@ namespace mongo {
             // For non-RTT storage engines, the oplog can always be truncated.
             return reclaimOplog(opCtx, Timestamp::max());
         }
-        const auto lastStableCheckpointTimestamp = _engine->getLastStableCheckpointTimestamp();
+        const auto lastStableCheckpointTimestamp = _engine->getLastStableRecoveryTimestamp();
         return reclaimOplog(opCtx,
                             lastStableCheckpointTimestamp ? *lastStableCheckpointTimestamp : Timestamp::min());
     }
@@ -648,10 +618,6 @@ namespace mongo {
         }
         invariantRocksOK(
             ROCKS_OP_CHECK(txn->Put(_cf, _makePrefixedKey(_prefix, loc), rocksdb::Slice(data, len))));
-
-        if (_isOplog) {
-            _oplogKeyTracker->insertKey(ru, loc, len);
-        }
 
         _changeNumRecords(opCtx, 1);
         _increaseDataSize(opCtx, len);
@@ -862,6 +828,12 @@ namespace mongo {
         invariant(ru);
         ru->setIsOplogReader();
 
+        RecordId searchFor = startingPosition;
+        auto visibilityTs = ru->getOplogVisibilityTs();
+        if (visibilityTs && searchFor.repr() > *visibilityTs) {
+            searchFor = RecordId(*visibilityTs);
+        }
+
         std::unique_ptr<rocksdb::Iterator> iter(ru->NewIterator(_cf, _prefix));
         int64_t storage;
         rocksPrepareConflictRetry(opCtx, [&] {
@@ -980,11 +952,16 @@ namespace mongo {
             int retryCnt = 0;
             Timestamp truncTs(lastKeptId.repr());
             {
-
                 auto alterClient =
                     opCtx->getServiceContext()->makeClient("reconstruct-check-oplog-removed");
                 AlternativeClientRegion acr(alterClient);
                 const auto tmpOpCtx = cc().makeOperationContext();
+                /* TODO(wolfkdy): RocksHarnessHelper did not register global rocksEngine
+                 * so RocksRecoveryUnit wont be set atomitly by StorageClientObserver::onCreateOperationContext
+                 * remove this line below when this issue is fixed
+                 */ 
+                tmpOpCtx->setRecoveryUnit(std::unique_ptr<RecoveryUnit>(_engine->newRecoveryUnit()),
+                                          WriteUnitOfWork::RecoveryUnitState::kNotInUnitOfWork);
                 auto checkRemovedOK = [&] {
                     RocksRecoveryUnit::getRocksRecoveryUnit(tmpOpCtx.get())->abandonSnapshot();
                     std::unique_ptr<SeekableRecordCursor> cursor1 = getCursor(tmpOpCtx.get(), true);

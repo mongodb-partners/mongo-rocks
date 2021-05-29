@@ -234,15 +234,8 @@ namespace mongo {
 
         Timestamp getStableTimestamp() const override;
         Timestamp getOldestTimestamp() const override;
-
-        // TODO(cuixin): skip getCheckpointTimestamp
-        //             : skip getInitialDataTimestamp
-        //
-        //             : rocks 4.0.3 no include getDataFilePathForIdent, keep this in 4.2.5
-        //             : getOplogNeededForRollback is used for
-        // WiredTigerKVEngine::WiredTigerCheckpointThread
-        //         rocks db do not need it
-
+        Timestamp getInitialDataTimestamp() const;
+    
         /**
          * Returns the minimum possible Timestamp value in the oplog that replication may need for
          * recovery in the event of a crash. This value gets updated every time a checkpoint is
@@ -275,8 +268,6 @@ namespace mongo {
         rocksdb::Statistics* getStatistics() const { return _statistics.get(); }
 
         bool canRecoverToStableTimestamp() const;
-        std::uint64_t getStableTimestamp() const;
-        std::uint64_t getInitialDataTimestamp() const;
         rocksdb::ColumnFamilyHandle* getDefaultCf_ForTest() const { return _defaultCf.get(); }
         rocksdb::ColumnFamilyHandle* getOplogCf_ForTest() const { return _oplogCf.get(); }
         rocksdb::ColumnFamilyHandle* getCf_ForTest(const std::string& ns) const {

@@ -99,7 +99,7 @@ namespace mongo {
         public:
             // baseIterator is consumed
             PrefixStrippingIterator(rocksdb::ColumnFamilyHandle* cf, std::string prefix,
-			            rocksdb::TOTransaction* txn, Iterator* baseIterator,
+                                    rocksdb::TOTransaction* txn, Iterator* baseIterator,
                                     RocksCompactionScheduler* compactionScheduler,
                                     std::unique_ptr<rocksdb::Slice> upperBound)
                 : _cf(cf),

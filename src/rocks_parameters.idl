@@ -94,3 +94,12 @@ server_parameters:
             override_set: true
       condition: { expr: false }
 
+    minSSTFileCountReserved:
+      description: 'delete oplogs until minSSTFileCountReserved files exceeds the total max size'
+      set_at: [ startup, runtime ]
+      cpp_class:
+            name: ExportedMinSSTFileCountReservedParameter
+            data: 'AtomicWord<std::uint32_t>*'
+            override_ctor: true
+
+

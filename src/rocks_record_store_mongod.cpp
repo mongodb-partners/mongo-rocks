@@ -94,7 +94,8 @@ namespace mongo {
                         // fact that oplog collection is so special, Global IX lock can
                         // make sure the collection exists.
                         Lock::DBLock dbLock(opCtx.get(), _ns.db(), MODE_IX);
-                        Database* db = DatabaseHolder::getDatabaseHolder().get(opCtx.get(), _ns.db());
+                        auto databaseHolder = DatabaseHolder::get(opCtx.get());
+                        auto db = databaseHolder->getDb(opCtx.get(), _ns.db());
                         if (!db) {
                             LOG(2) << "no local database yet";
                             return false;

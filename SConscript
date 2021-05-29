@@ -31,7 +31,6 @@ env.Library(
         'src/rocks_prepare_conflict.cpp',
         env.Idlc('src/rocks_parameters.idl')[0],
         env.Idlc('src/rocks_global_options.idl')[0],
-        'src/mongo_rate_limiter_checker.cpp',
         'src/rocks_parameters.cpp',
     ],
     LIBDEPS= [
@@ -75,7 +74,7 @@ env.Library(
     LIBDEPS= [
         'storage_rocks_base',
         ],
-    LIBDEPS_DEPENDENTS=['$BUILD_DIR/mongo/db/serveronly']
+    PROGDEPS_DEPENDENTS=['$BUILD_DIR/mongo/mongod']
 )
 
 env.Library(
