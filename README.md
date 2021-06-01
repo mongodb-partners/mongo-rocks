@@ -1,61 +1,15 @@
 ## RocksDB Storage Engine Module for MongoDB
 
-**Important:** Last stable version of MongoRocks is 3.4 and 4.0(.3). MongoRocks 3.6 should compile, but are not yet ready to be used in production. MongoRocks 4.2 is under development, please refer [v4.2.5_rc1](https://github.com/mongodb-partners/mongo-rocks/tree/v4.2.5_rc1) for more details.
+### Stable Versions/Branches
++ v3.2
++ v3.4
++ v4.0.3
++ v4.2.5_rc2
 
-### TL;DR
-
-#### MongoRocks3.2 and MongoRocks3.4
-Execute this series of commands to compile MongoDB with RocksDB storage engine:
-
-    # install compression libraries (zlib, bzip2, snappy):
-    sudo apt-get install zlib1g-dev; sudo apt-get install libbz2-dev; sudo apt-get install libsnappy-dev
-    # get rocksdb
-    git clone https://github.com/facebook/rocksdb.git
-    # compile rocksdb
-    cd rocksdb; USE_RTTI=1 CFLAGS=-fPIC make static_lib; sudo INSTALL_PATH=/usr make install; cd ..
-    # get mongo
-    git clone https://github.com/mongodb/mongo.git
-    # get mongorocks
-    git clone https://github.com/mongodb-partners/mongo-rocks
-    # add rocksdb module to mongo
-    mkdir -p mongo/src/mongo/db/modules/
-    ln -sf ~/mongo-rocks mongo/src/mongo/db/modules/rocks
-    # compile mongo
-    cd mongo; scons
-
-#### MongoRocks4.0(.3)
-To support HLC(hyper-logical-clock) and timestamp ordering transactions([some literals](https://www.researchgate.net/publication/37423502_Generalized_Snapshot_Isolation_and_a_Prefix-Consistent_Implementation) referred as Generalized Snapshot Isolation), RocksDB should provide necessary transaction APIs.
-which can be found here: https://github.com/wolfkdy/rocksdb/tree/fb5.18_totdb. This branch is based on official RocksDB's
-branch 5.18.3, there is a merge request for timestamp transactions into official RocksDB's repo, which can be found here:
-https://github.com/facebook/rocksdb/pull/6407.
-
-Execute this series of commands to compile MongoDB with RocksDB storage engine:
-
-    # install compression libraries (zlib, bzip2, snappy):
-    sudo apt-get install zlib1g-dev; sudo apt-get install libbz2-dev; sudo apt-get install libsnappy-dev
-    # get rocksdb
-    git clone https://github.com/wolfkdy/rocksdb.git
-    git checkout fb5.18_totdb
-    # compile rocksdb
-    cd rocksdb; USE_RTTI=1 CFLAGS=-fPIC make static_lib; sudo INSTALL_PATH=/usr make install; cd ..
-    # get mongo
-    git clone https://github.com/mongodb/mongo.git
-    git checkout tags/r4.0.3 -b branch_tags_4.0.3
-    # get mongorocks
-    git clone https://github.com/mongodb-partners/mongo-rocks
-    git checkout v4.0.3
-    # add rocksdb module to mongo
-    mkdir -p mongo/src/mongo/db/modules/
-    ln -sf ~/mongo-rocks mongo/src/mongo/db/modules/rocks
-    # compile mongo
-    cd mongo; scons
-
-
-
-Start `mongod` using the `--storageEngine=rocksdb` option.
+### How to build
+See BUILD.md
 
 ### More information
-
 To use this module, it has to be linked from `mongo/src/mongo/db/modules`. The build system will automatically recognize it. In the `mongo` repository directory do the following:
 
     mkdir -p src/mongo/db/modules/
@@ -69,5 +23,4 @@ environment variables:
     CPPPATH=/myrocksdb/include LIBPATH=/myrocksdb/lib scons
 
 ### Reach out
-
-If you have any issues with MongoRocks, feel free to leave an issue on github's issue board.
+If you have any issues with MongoRocks, leave an issue on github's issue board.
