@@ -753,8 +753,9 @@ namespace mongo {
         }
 
         if (!dupsAllowed) {
-            return Status(ErrorCodes::DuplicateKey,
-                          dupKeyError(key, _collectionNamespace, _indexName));
+            return buildDupKeyErrorStatus(key,
+                                          NamespaceString(StringData(_collectionNamespace)),
+                                          _indexName, _keyPattern);
         }
 
         if (!insertedLoc) {
@@ -903,8 +904,9 @@ namespace mongo {
         }
 
         if (records > 1) {
-            return Status(ErrorCodes::DuplicateKey,
-                          dupKeyError(key, _collectionNamespace, _indexName));
+            return buildDupKeyErrorStatus(key,
+                                          NamespaceString(StringData(_collectionNamespace)),
+                                          _indexName, _keyPattern);
         }
         return Status::OK();
     }

@@ -688,6 +688,9 @@ namespace mongo {
 
     Timestamp RocksEngine::getStableTimestamp() const { return Timestamp(_stableTimestamp.load()); }
     Timestamp RocksEngine::getOldestTimestamp() const { return Timestamp(_oldestTimestamp.load()); }
+    Timestamp RocksEngine::getCheckpointTimestamp() const {
+        return Timestamp(_lastStableCheckpointTimestamp.load());
+    }
 
     void RocksEngine::setMaxWriteMBPerSec(int maxWriteMBPerSec) {
         _maxWriteMBPerSec = maxWriteMBPerSec;

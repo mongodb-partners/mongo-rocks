@@ -234,6 +234,7 @@ namespace mongo {
 
         Timestamp getStableTimestamp() const override;
         Timestamp getOldestTimestamp() const override;
+        Timestamp getCheckpointTimestamp() const override;
         Timestamp getInitialDataTimestamp() const;
     
         /**
