@@ -40,9 +40,9 @@ namespace mongo {
     class RocksServerStatusSection : public ServerStatusSection {
     public:
         RocksServerStatusSection(RocksEngine* engine);
-        virtual bool includeByDefault() const;
-        virtual BSONObj generateSection(OperationContext* opCtx,
-                                        const BSONElement& configElement) const;
+        bool includeByDefault() const override;
+        BSONObj generateSection(OperationContext* opCtx,
+                                const BSONElement& configElement) const override;
 
     private:
         RocksEngine* _engine;

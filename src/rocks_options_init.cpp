@@ -34,18 +34,12 @@
 
 #include "rocks_global_options.h"
 
+namespace moe = mongo::optionenvironment;
+
 namespace mongo {
 
-    MONGO_MODULE_STARTUP_OPTIONS_REGISTER(RocksOptions)(InitializerContext* context) {
-        return rocksGlobalOptions.add(&moe::startupOptions);
-    }
-
-    MONGO_STARTUP_OPTIONS_VALIDATE(RocksOptions)(InitializerContext* context) {
-        return Status::OK();
-    }
-
     MONGO_STARTUP_OPTIONS_STORE(RocksOptions)(InitializerContext* context) {
-        Status ret = rocksGlobalOptions.store(moe::startupOptionsParsed, context->args());
+        Status ret = rocksGlobalOptions.store(moe::startupOptionsParsed);
         if (!ret.isOK()) {
             std::cerr << ret.toString() << std::endl;
             std::cerr << "try '" << context->args()[0] << " --help' for more information"
@@ -54,4 +48,4 @@ namespace mongo {
         }
         return Status::OK();
     }
-}
+}  // namespace mongo

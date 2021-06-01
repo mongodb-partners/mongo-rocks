@@ -27,6 +27,8 @@
  */
 #define MONGO_LOG_DEFAULT_COMPONENT ::mongo::logger::LogComponent::kStorage
 
+#define MONGO_LOG_DEFAULT_COMPONENT ::mongo::logger::LogComponent::kStorage
+
 #include "rocks_util.h"
 
 #include <rocksdb/status.h>
@@ -76,7 +78,7 @@ namespace mongo {
             throw WriteConflictException();
         }
 
-        if (status.IsCorruption()) {
+        if (status.IsCorruption() || status.IsInvalidArgument()) {
             return Status(ErrorCodes::BadValue, status.ToString());
         }
 

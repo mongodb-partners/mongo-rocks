@@ -39,6 +39,8 @@
 #include "mongo/base/checked_cast.h"
 #include "mongo/bson/bsonobjbuilder.h"
 #include "mongo/db/concurrency/d_concurrency.h"
+#include "mongo/db/db_raii.h"
+#include "mongo/db/namespace_string.h"
 #include "mongo/util/assert_util.h"
 #include "mongo/util/scopeguard.h"
 

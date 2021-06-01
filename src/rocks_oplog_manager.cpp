@@ -33,7 +33,7 @@
 
 #include <cstring>
 
-#include "mongo/stdx/mutex.h"
+#include "mongo/platform/mutex.h"
 #include "mongo/util/concurrency/idle_thread_block.h"
 #include "mongo/util/fail_point.h"
 #include "mongo/util/fail_point_service.h"
@@ -57,40 +57,37 @@ namespace mongo {
         : _db(db), _kvEngine(kvEngine), _durabilityManager(durabilityManager) {}
 
     void RocksOplogManager::start(OperationContext* opCtx, RocksRecordStore* oplogRecordStore,
-                                  bool updateOldestTimestamp) {
+                                  const bool updateOldestTimestamp) {
         invariant(!_isRunning);
         auto reverseOplogCursor =
             oplogRecordStore->getCursor(opCtx, false /* false = reverse cursor */);
         auto lastRecord = reverseOplogCursor->next();
         if (lastRecord) {
-            _oplogMaxAtStartup = lastRecord->id;
-
             // Although the oplog may have holes, using the top of the oplog should be safe. In the
             // event of a secondary crashing, replication recovery will truncate the oplog,
             // resetting
             // visibility to the truncate point. In the event of a primary crashing, it will perform
             // rollback before servicing oplog reads.
-            auto oplogVisibility = Timestamp(_oplogMaxAtStartup.repr());
+            auto oplogVisibility = Timestamp(lastRecord->id.repr());
             setOplogReadTimestamp(oplogVisibility);
             LOG(1) << "Setting oplog visibility at startup. Val: " << oplogVisibility;
         } else {
-            _oplogMaxAtStartup = RecordId();
             // Avoid setting oplog visibility to 0. That means "everything is visible".
             setOplogReadTimestamp(Timestamp(kMinimumTimestamp));
         }
 
         // Need to obtain the mutex before starting the thread, as otherwise it may race ahead
         // see _shuttingDown as true and quit prematurely.
-        stdx::lock_guard<stdx::mutex> lk(_oplogVisibilityStateMutex);
-        _oplogJournalThread = stdx::thread(&RocksOplogManager::_oplogJournalThreadLoop, this,
-                                           oplogRecordStore, updateOldestTimestamp);
+        stdx::lock_guard<Latch> lk(_oplogVisibilityStateMutex);
+        _oplogJournalThread =
+            stdx::thread(&RocksOplogManager::_oplogJournalThreadLoop, this, oplogRecordStore, updateOldestTimestamp);
         _isRunning = true;
         _shuttingDown = false;
     }
 
     void RocksOplogManager::halt() {
         {
-            stdx::lock_guard<stdx::mutex> lk(_oplogVisibilityStateMutex);
+            stdx::lock_guard<Latch> lk(_oplogVisibilityStateMutex);
             invariant(_isRunning);
             _shuttingDown = true;
             _isRunning = false;
@@ -125,18 +122,21 @@ namespace mongo {
         // Close transaction before we wait.
         opCtx->recoveryUnit()->abandonSnapshot();
 
-        stdx::unique_lock<stdx::mutex> lk(_oplogVisibilityStateMutex);
+        stdx::unique_lock<Latch> lk(_oplogVisibilityStateMutex);
 
         // Prevent any scheduled journal flushes from being delayed and blocking this wait
         // excessively.
         _opsWaitingForVisibility++;
         invariant(_opsWaitingForVisibility > 0);
-        auto exitGuard = MakeGuard([&] { _opsWaitingForVisibility--; });
+        auto exitGuard = makeGuard([&] { _opsWaitingForVisibility--; });
 
         opCtx->waitForConditionOrInterrupt(_opsBecameVisibleCV, lk, [&] {
             auto newLatestVisibleTimestamp = getOplogReadTimestamp();
             if (newLatestVisibleTimestamp < currentLatestVisibleTimestamp) {
-                LOG(1) << "oplog latest visible timestamp went backwards";
+                LOG(1)
+                    << "Oplog latest visible timestamp went backwards. newLatestVisibleTimestamp: "
+                    << Timestamp(newLatestVisibleTimestamp) << " currentLatestVisibleTimestamp: "
+                    << Timestamp(currentLatestVisibleTimestamp);
                 // If the visibility went backwards, this means a rollback occurred.
                 // Thus, we are finished waiting.
                 return true;
@@ -148,19 +148,17 @@ namespace mongo {
             // timestamp
             // the last oplog document had when it was written, which is the _oplogMaxAtStartup
             // value.
-            RecordId latestVisible =
-                std::max(RecordId(currentLatestVisibleTimestamp), _oplogMaxAtStartup);
+            RecordId latestVisible = RecordId(currentLatestVisibleTimestamp);
             if (latestVisible < waitingFor) {
                 LOG(2) << "Operation is waiting for " << waitingFor << "; latestVisible is "
-                       << currentLatestVisibleTimestamp << " oplogMaxAtStartup is "
-                       << _oplogMaxAtStartup;
+                       << Timestamp(currentLatestVisibleTimestamp);
             }
             return latestVisible >= waitingFor;
         });
     }
 
     void RocksOplogManager::triggerJournalFlush() {
-        stdx::lock_guard<stdx::mutex> lk(_oplogVisibilityStateMutex);
+        stdx::lock_guard<Latch> lk(_oplogVisibilityStateMutex);
         if (!_opsWaitingForJournal) {
             _opsWaitingForJournal = true;
             _opsWaitingForJournalCV.notify_one();
@@ -176,7 +174,7 @@ namespace mongo {
         // forward cursors.  The timestamp is used to hide oplog entries that might be committed but
         // have uncommitted entries ahead of them.
         while (true) {
-            stdx::unique_lock<stdx::mutex> lk(_oplogVisibilityStateMutex);
+            stdx::unique_lock<Latch> lk(_oplogVisibilityStateMutex);
             {
                 MONGO_IDLE_THREAD_BLOCK;
                 _opsWaitingForJournalCV.wait(
@@ -186,9 +184,6 @@ namespace mongo {
                 // durable, delay journaling a bit to reduce the sync rate.
                 auto journalDelay =
                     Milliseconds(storageGlobalParams.journalCommitIntervalMs.load());
-                if (journalDelay == Milliseconds(0)) {
-                    journalDelay = Milliseconds(RocksEngine::kDefaultJournalDelayMillis);
-                }
                 auto now = Date_t::now();
                 auto deadline = now + journalDelay;
                 auto shouldSyncOpsWaitingForJournal = [&] {
@@ -224,20 +219,20 @@ namespace mongo {
             }
 
             if (_shuttingDown) {
-                log() << "oplog journal thread loop shutting down";
+                log() << "Oplog journal thread loop shutting down";
                 return;
             }
             invariant(_opsWaitingForJournal);
             _opsWaitingForJournal = false;
             lk.unlock();
 
-            const uint64_t newTimestamp = fetchAllCommittedValue().asULL();
+            const uint64_t newTimestamp = fetchAllDurableValue().asULL();
 
             // The newTimestamp may actually go backward during secondary batch application,
             // where we commit data file changes separately from oplog changes, so ignore
             // a non-incrementing timestamp.
             if (newTimestamp <= _oplogReadTimestamp.load()) {
-                LOG(2) << "no new oplog entries were made visible: " << newTimestamp;
+                LOG(2) << "No new oplog entries were made visible: " << Timestamp(newTimestamp);
                 continue;
             }
 
@@ -268,18 +263,19 @@ namespace mongo {
     }
 
     void RocksOplogManager::setOplogReadTimestamp(Timestamp ts) {
-        stdx::lock_guard<stdx::mutex> lk(_oplogVisibilityStateMutex);
+        stdx::lock_guard<Latch> lk(_oplogVisibilityStateMutex);
         _setOplogReadTimestamp(lk, ts.asULL());
     }
 
     void RocksOplogManager::_setOplogReadTimestamp(WithLock, uint64_t newTimestamp) {
         _oplogReadTimestamp.store(newTimestamp);
         _opsBecameVisibleCV.notify_all();
-        LOG(2) << "setting new oplogReadTimestamp: " << newTimestamp;
+        LOG(2) << "Setting new oplogReadTimestamp: " << Timestamp(newTimestamp);
     }
 
-    Timestamp RocksOplogManager::fetchAllCommittedValue() {
+    Timestamp RocksOplogManager::fetchAllDurableValue() {
         rocksdb::RocksTimeStamp ts(0);
+        // all kAllDurrable is same with kAllCommitted
         auto status = _db->QueryTimeStamp(rocksdb::TimeStampType::kAllCommitted, &ts);
         if (status.IsNotFound()) {
             return Timestamp(kMinimumTimestamp);

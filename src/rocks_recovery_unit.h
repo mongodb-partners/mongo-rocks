@@ -1,30 +1,30 @@
 /**
-*    Copyright (C) 2014 MongoDB Inc.
-*
-*    This program is free software: you can redistribute it and/or  modify
-*    it under the terms of the GNU Affero General Public License, version 3,
-*    as published by the Free Software Foundation.
-*
-*    This program is distributed in the hope that it will be useful,
-*    but WITHOUT ANY WARRANTY; without even the implied warranty of
-*    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-*    GNU Affero General Public License for more details.
-*
-*    You should have received a copy of the GNU Affero General Public License
-*    along with this program.  If not, see <http://www.gnu.org/licenses/>.
-*
-*    As a special exception, the copyright holders give permission to link the
-*    code of portions of this program with the OpenSSL library under certain
-*    conditions as described in each individual source file and distribute
-*    linked combinations including the program with the OpenSSL library. You
-*    must comply with the GNU Affero General Public License in all respects for
-*    all of the code used other than as permitted herein. If you modify file(s)
-*    with this exception, you may extend this exception to your version of the
-*    file(s), but you are not obligated to do so. If you do not wish to do so,
-*    delete this exception statement from your version. If you delete this
-*    exception statement from all source files in the program, then also delete
-*    it in the license file.
-*/
+ *    Copyright (C) 2014 MongoDB Inc.
+ *
+ *    This program is free software: you can redistribute it and/or  modify
+ *    it under the terms of the GNU Affero General Public License, version 3,
+ *    as published by the Free Software Foundation.
+ *
+ *    This program is distributed in the hope that it will be useful,
+ *    but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *    GNU Affero General Public License for more details.
+ *
+ *    You should have received a copy of the GNU Affero General Public License
+ *    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ *    As a special exception, the copyright holders give permission to link the
+ *    code of portions of this program with the OpenSSL library under certain
+ *    conditions as described in each individual source file and distribute
+ *    linked combinations including the program with the OpenSSL library. You
+ *    must comply with the GNU Affero General Public License in all respects for
+ *    all of the code used other than as permitted herein. If you modify file(s)
+ *    with this exception, you may extend this exception to your version of the
+ *    file(s), but you are not obligated to do so. If you do not wish to do so,
+ *    delete this exception statement from your version. If you delete this
+ *    exception statement from all source files in the program, then also delete
+ *    it in the license file.
+ */
 
 #pragma once
 
@@ -42,7 +42,6 @@
 #include <rocksdb/utilities/write_batch_with_index.h>
 #include <rocksdb/write_batch.h>
 
-#include "mongo/base/disallow_copying.h"
 #include "mongo/base/owned_pointer_vector.h"
 #include "mongo/db/record_id.h"
 #include "mongo/db/storage/recovery_unit.h"
@@ -61,9 +60,11 @@ namespace rocksdb {
     class Status;
     class Slice;
     class Iterator;
-}
+}  // namespace rocksdb
 
 namespace mongo {
+    using RoundUpPreparedTimestamps = RocksBeginTxnBlock::RoundUpPreparedTimestamps;
+    using RoundUpReadTimestamp = RocksBeginTxnBlock::RoundUpReadTimestamp;
     class RocksEngine;
 
     // Same as rocksdb::Iterator, but adds couple more useful functions
@@ -80,7 +81,8 @@ namespace mongo {
     class RocksOplogManager;
 
     class RocksRecoveryUnit : public RecoveryUnit {
-        MONGO_DISALLOW_COPYING(RocksRecoveryUnit);
+        RocksRecoveryUnit(const RocksRecoveryUnit&) = delete;
+        RocksRecoveryUnit& operator=(const RocksRecoveryUnit&) = delete;
 
     public:
         RocksRecoveryUnit(rocksdb::TOTransactionDB* db, RocksOplogManager* oplogManager,
@@ -97,7 +99,7 @@ namespace mongo {
 
         bool waitUntilDurable() override;
 
-        bool waitUntilUnjournaledWritesDurable() override;
+        bool waitUntilUnjournaledWritesDurable(bool stableCheckpoint = true) override;
 
         void registerChange(Change* change) override;
 
@@ -106,7 +108,8 @@ namespace mongo {
 
         Status obtainMajorityCommittedSnapshot() override;
 
-        boost::optional<Timestamp> getPointInTimeReadTimestamp() const override;
+        // TODO(cuixin), need to know why the abstract interface layer remove the const
+        boost::optional<Timestamp> getPointInTimeReadTimestamp() override;
 
         SnapshotId getSnapshotId() const override;
 
@@ -116,20 +119,30 @@ namespace mongo {
 
         void clearCommitTimestamp() override;
 
-        Timestamp getCommitTimestamp() override;
+        Timestamp getCommitTimestamp() const override;
+
+        void setDurableTimestamp(Timestamp timestamp) override;
+
+        Timestamp getDurableTimestamp() const override;
 
         void setPrepareTimestamp(Timestamp timestamp) override;
 
-        void setIgnorePrepared(bool ignore) override;
+        Timestamp getPrepareTimestamp() const override;
+
+        void setPrepareConflictBehavior(PrepareConflictBehavior behavior) override;
+
+        PrepareConflictBehavior getPrepareConflictBehavior() const override;
+
+        void setRoundUpPreparedTimestamps(bool value) override;
+
+        void setCatalogConflictingTimestamp(Timestamp timestamp) override;
+
+        Timestamp getCatalogConflictingTimestamp() const override;
 
         void setTimestampReadSource(ReadSource source,
                                     boost::optional<Timestamp> provided = boost::none) override;
 
         ReadSource getTimestampReadSource() const override;
-
-        void* writingPtr(void* data, size_t len) override;
-
-        void setRollbackWritesDisabled() override {}
 
         virtual void setOrderedCommit(bool orderedCommit) override {
             _orderedCommit = orderedCommit;
@@ -137,6 +150,13 @@ namespace mongo {
 
         // local api
         void setIsOplogReader() { _isOplogReader = true; }
+
+        /**
+         * Returns a session without starting a new txn. Will not close any already
+         * running session.
+         */
+
+        rocksdb::TOTransaction* getTxnNoCreate();
 
         rocksdb::Status Get(rocksdb::ColumnFamilyHandle* cf, const rocksdb::Slice& key, std::string* value);
 
@@ -175,9 +195,60 @@ namespace mongo {
 
         rocksdb::TOTransaction* getTransaction();
 
-        bool inActiveTxn() const { return _active; }
+        bool inActiveTxn() const { return _isActive(); }
 
         void assertInActiveTxn() const;
+
+        RocksDurabilityManager* getDurabilityManager() const { return _durabilityManager; }
+
+        boost::optional<int64_t> getOplogVisibilityTs();
+
+        /**
+         * State transitions:
+         *
+         *   /------------------------> Inactive <-----------------------------\
+         *   |                             |                                   |
+         *   |                             |                                   |
+         *   |              /--------------+--------------\                    |
+         *   |              |                             |                    | abandonSnapshot()
+         *   |              |                             |                    |
+         *   |   beginUOW() |                             | _txnOpen()         |
+         *   |              |                             |                    |
+         *   |              V                             V                    |
+         *   |    InactiveInUnitOfWork          ActiveNotInUnitOfWork ---------/
+         *   |              |                             |
+         *   |              |                             |
+         *   |   _txnOpen() |                             | beginUOW()
+         *   |              |                             |
+         *   |              \--------------+--------------/
+         *   |                             |
+         *   |                             |
+         *   |                             V
+         *   |                           Active
+         *   |                             |
+         *   |                             |
+         *   |              /--------------+--------------\
+         *   |              |                             |
+         *   |              |                             |
+         *   |   abortUOW() |                             | commitUOW()
+         *   |              |                             |
+         *   |              V                             V
+         *   |          Aborting                      Committing
+         *   |              |                             |
+         *   |              |                             |
+         *   |              |                             |
+         *   \--------------+-----------------------------/
+         *
+         */
+        enum class State {
+            kInactive,
+            kInactiveInUnitOfWork,
+            kActiveNotInUnitOfWork,
+            kActive,
+            kAborting,
+            kCommitting,
+        };
+        State getState_forTest() const;
 
     private:
         void _abort();
@@ -187,10 +258,42 @@ namespace mongo {
         void _txnOpen();
 
         /**
-         * Starts a transaction at the current all-committed timestamp.
+         * Starts a transaction at the current all_durable timestamp.
          * Returns the timestamp the transaction was started at.
          */
-        Timestamp _beginTransactionAtAllCommittedTimestamp();
+        Timestamp _beginTransactionAtAllDurableTimestamp();
+
+        /**
+         * Starts a transaction at the no-overlap timestamp. Returns the timestamp the transaction
+         * was started at.
+         */
+        Timestamp _beginTransactionAtNoOverlapTimestamp(
+            std::unique_ptr<rocksdb::TOTransaction>* txn);
+
+        /**
+         * Returns the timestamp at which the current transaction is reading.
+         */
+        Timestamp _getTransactionReadTimestamp(rocksdb::TOTransaction* txn);
+
+        /**
+         * Transitions to new state.
+         */
+        void _setState(State newState);
+
+        /**
+         * Returns true if active.
+         */
+        bool _isActive() const;
+
+        /**
+         * Returns true if currently managed by a WriteUnitOfWork.
+         */
+        bool _inUnitOfWork() const;
+
+        /**
+         * Returns true if currently running commit or rollback handlers
+         */
+        bool _isCommittingOrAborting() const;
 
         rocksdb::TOTransactionDB* _db;                   // not owned
         RocksOplogManager* _oplogManager;                // not owned
@@ -202,8 +305,7 @@ namespace mongo {
 
         bool _durable;
         bool _areWriteUnitOfWorksBanned;
-        bool _inUnitOfWork;
-        bool _active;
+        State _state = State::kInactive;
         bool _isTimestamped;
 
         // Specifies which external source to use when setting read timestamps on transactions.
@@ -212,21 +314,30 @@ namespace mongo {
         // Commits are assumed ordered.  Unordered commits are assumed to always need to reserve a
         // new optime, and thus always call oplogDiskLocRegister() on the record store.
         bool _orderedCommit;
-        Timestamp _commitTimestamp;
 
+        // When 'true', data read from disk should not be kept in the storage engine cache.
+        bool _readOnce = false;
+
+        // The behavior of handling prepare conflicts.
+        PrepareConflictBehavior _prepareConflictBehavior{PrepareConflictBehavior::kEnforce};
+        // Dictates whether to round up prepare and commit timestamp of a prepared transaction.
+        RoundUpPreparedTimestamps _roundUpPreparedTimestamps{RoundUpPreparedTimestamps::kNoRound};
+
+        Timestamp _commitTimestamp;
+        Timestamp _durableTimestamp;
         Timestamp _prepareTimestamp;
         boost::optional<Timestamp> _lastTimestampSet;
         uint64_t _mySnapshotId;
         Timestamp _majorityCommittedSnapshot;
         Timestamp _readAtTimestamp;
+        Timestamp _catalogConflictTimestamp;
         std::unique_ptr<Timer> _timer;
         CounterMap _deltaCounters;
-
         bool _isOplogReader;
+        boost::optional<int64_t> _oplogVisibleTs = boost::none;
         typedef std::vector<std::unique_ptr<Change>> Changes;
         Changes _changes;
-
         static std::atomic<int> _totalLiveRecoveryUnits;
         RocksEngine* _engine; // not owned
     };
-}
+}  // namespace mongo

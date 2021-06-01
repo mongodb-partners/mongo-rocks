@@ -41,7 +41,7 @@
 #include <rocksdb/utilities/totransaction_db.h>
 
 #include "mongo/base/string_data.h"
-#include "mongo/stdx/mutex.h"
+#include "mongo/platform/mutex.h"
 
 namespace mongo {
 
@@ -69,7 +69,8 @@ namespace mongo {
 
         const bool _crashSafe;
 
-        stdx::mutex _lock;
+        Mutex _lock = MONGO_MAKE_LATCH("RocksCounterManager::_lock");
+
         // protected by _lock
         std::unordered_map<std::string, long long> _counters;
         // protected by _lock
@@ -77,4 +78,4 @@ namespace mongo {
 
         static const int kSyncEvery = 10000;
     };
-}
+}  // namespace mongo

@@ -89,7 +89,9 @@ namespace mongo {
 
         virtual std::unique_ptr<RecordStore> createRecordStore(OperationContext* opCtx,
                                                                const std::string& ns) final {
-            return stdx::make_unique<RocksRecordStore>(&_engine, _engine.getCf_ForTest(ns), opCtx, ns, "1", "prefix");
+            RocksRecordStore::Params params;
+            params.ns = ns;
+            return stdx::make_unique<RocksRecordStore>(&_engine, _engine.getCf_ForTest(ns), opCtx, params);
         }
 
     private:
@@ -118,7 +120,7 @@ namespace mongo {
             auto sc = harnessHelper->serviceContext();
             auto client = sc->makeClient(clientName);
             auto opCtx = client->makeOperationContext();
-            opCtx->setRecoveryUnit(harnessHelper->newRecoveryUnit().release(),
+            opCtx->setRecoveryUnit(std::move(harnessHelper->newRecoveryUnit()),
                                    WriteUnitOfWork::RecoveryUnitState::kNotInUnitOfWork);
             return std::make_pair(std::move(client), std::move(opCtx));
         }
@@ -408,7 +410,7 @@ namespace mongo {
         auto opCtx = clientAndCtx.second.get();
         const auto rs = harnessHelper->createRecordStore(opCtx, "table1");
         ru->beginUnitOfWork(opCtx);
-        StatusWith<RecordId> s = rs->insertRecord(opCtx, "data", 4, Timestamp(), false);
+        StatusWith<RecordId> s = rs->insertRecord(opCtx, "data", 4, Timestamp());
         ASSERT_TRUE(s.isOK());
         ASSERT_EQUALS(1, rs->numRecords(opCtx));
         ru->commitUnitOfWork();
@@ -420,7 +422,7 @@ namespace mongo {
         auto opCtx = clientAndCtx.second.get();
         const auto rs = harnessHelper->createRecordStore(opCtx, "table1");
         ru->beginUnitOfWork(opCtx);
-        StatusWith<RecordId> s = rs->insertRecord(opCtx, "data", 4, Timestamp(), false);
+        StatusWith<RecordId> s = rs->insertRecord(opCtx, "data", 4, Timestamp());
         ASSERT_TRUE(s.isOK());
         ASSERT_EQUALS(1, rs->numRecords(opCtx));
         ru->abortUnitOfWork();

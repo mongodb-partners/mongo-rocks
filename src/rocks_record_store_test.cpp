@@ -89,7 +89,14 @@ namespace mongo {
         std::unique_ptr<RecordStore> newNonCappedRecordStore(const std::string& ns) {
             RocksRecoveryUnit* ru = dynamic_cast<RocksRecoveryUnit*>(_engine.newRecoveryUnit());
             OperationContextNoop opCtx(ru);
-            return stdx::make_unique<RocksRecordStore>(&_engine, _engine.getCf_ForTest(ns), &opCtx, ns, "1", "prefix");
+            RocksRecordStore::Params params;
+            params.ns = ns;
+            params.ident = "1";
+            params.prefix = "prefix";
+            params.isCapped = false;
+            params.cappedMaxSize = -1;
+            params.cappedMaxDocs = -1;
+            return stdx::make_unique<RocksRecordStore>(&_engine, _engine.getCf_ForTest(ns), &opCtx, params);
         }
 
         std::unique_ptr<RecordStore> newCappedRecordStore(int64_t cappedMaxSize,
@@ -102,9 +109,14 @@ namespace mongo {
                                                           int64_t cappedMaxDocs) {
             RocksRecoveryUnit* ru = dynamic_cast<RocksRecoveryUnit*>(_engine.newRecoveryUnit());
             OperationContextNoop opCtx(ru);
-            return stdx::make_unique<RocksRecordStore>(&_engine, _engine.getCf_ForTest(ns), &opCtx, ns, "1", "prefix",
-                                                       true /* isCapped */, cappedMaxSize,
-                                                       cappedMaxDocs);
+            struct RocksRecordStore::Params params;
+            params.ns = ns;
+            params.ident = "1";
+            params.prefix = "prefix";
+            params.isCapped = true;
+            params.cappedMaxSize = cappedMaxSize;
+            params.cappedMaxDocs = cappedMaxDocs;
+            return stdx::make_unique<RocksRecordStore>(&_engine, _engine.getCf_ForTest(ns), &opCtx, params);
         }
 
         std::unique_ptr<RecoveryUnit> newRecoveryUnit() final {
@@ -142,8 +154,7 @@ namespace mongo {
             {
                 WriteUnitOfWork uow(opCtx.get());
                 for (int i = 0; i < N; i++) {
-                    StatusWith<RecordId> res =
-                        rs->insertRecord(opCtx.get(), "a", 2, Timestamp(), false);
+                    StatusWith<RecordId> res = rs->insertRecord(opCtx.get(), "a", 2, Timestamp());
                     ASSERT_OK(res.getStatus());
                 }
                 uow.commit();

@@ -29,9 +29,8 @@
 
 #pragma once
 
-#include "mongo/base/disallow_copying.h"
+#include "mongo/platform/mutex.h"
 #include "mongo/stdx/condition_variable.h"
-#include "mongo/stdx/mutex.h"
 #include "mongo/stdx/thread.h"
 #include "mongo/util/concurrency/with_lock.h"
 #include "rocks_engine.h"
@@ -48,20 +47,20 @@ namespace mongo {
     // and
     // then using that timestamp for all transactions that read the oplog collection.
     class RocksOplogManager {
-        MONGO_DISALLOW_COPYING(RocksOplogManager);
+        RocksOplogManager(const RocksOplogManager&) = delete;
+        RocksOplogManager& operator=(const RocksOplogManager&) = delete;
 
     public:
         RocksOplogManager(rocksdb::TOTransactionDB* db, RocksEngine* kvEngine,
                           RocksDurabilityManager* durabilityManager);
         virtual ~RocksOplogManager(){};
 
-        void start(OperationContext* opCtx, RocksRecordStore* oplogRecordStore,
-                   bool updateOldestTimestamp);
+        void start(OperationContext* opCtx, RocksRecordStore* oplogRecordStore, const bool updateOldestTimestamp);
 
         void halt();
 
         bool isRunning() {
-            stdx::lock_guard<stdx::mutex> lk(_oplogVisibilityStateMutex);
+            stdx::lock_guard<Latch> lk(_oplogVisibilityStateMutex);
             return _isRunning && !_shuttingDown;
         }
         // The oplogReadTimestamp is the timestamp used for oplog reads, to prevent readers from
@@ -80,18 +79,18 @@ namespace mongo {
         void waitForAllEarlierOplogWritesToBeVisible(const RocksRecordStore* oplogRecordStore,
                                                      OperationContext* opCtx);
 
-        // Returns the all committed timestamp. All transactions with timestamps earlier than the
-        // all committed timestamp are committed.
-        Timestamp fetchAllCommittedValue();
+        // Returns the all_durable timestamp. All transactions with timestamps earlier than the
+        // all_durable timestamp are committed.
+        Timestamp fetchAllDurableValue();
 
     private:
-        void _oplogJournalThreadLoop(RocksRecordStore* oplogRecordStore,
-                                     const bool updateOldestTimestamp) noexcept;
+        void _oplogJournalThreadLoop(RocksRecordStore* oplogRecordStore, const bool updateOldestTimestamp) noexcept;
 
         void _setOplogReadTimestamp(WithLock, uint64_t newTimestamp);
 
         stdx::thread _oplogJournalThread;
-        mutable stdx::mutex _oplogVisibilityStateMutex;
+        mutable Mutex _oplogVisibilityStateMutex =
+            MONGO_MAKE_LATCH("RocksOplogManager::_oplogVisibilityStateMutex");
         mutable stdx::condition_variable
             _opsWaitingForJournalCV;  // Signaled to trigger a journal flush.
         mutable stdx::condition_variable
@@ -100,18 +99,14 @@ namespace mongo {
         bool _isRunning = false;     // Guarded by the oplogVisibilityStateMutex.
         bool _shuttingDown = false;  // Guarded by oplogVisibilityStateMutex.
 
-        // This is the RecordId of the newest oplog document in the oplog on startup.  It is used as
-        // a
-        // floor in waitForAllEarlierOplogWritesToBeVisible().
-        RecordId _oplogMaxAtStartup = RecordId(0);  // Guarded by oplogVisibilityStateMutex.
-        bool _opsWaitingForJournal = false;         // Guarded by oplogVisibilityStateMutex.
+        bool _opsWaitingForJournal = false;  // Guarded by oplogVisibilityStateMutex.
 
         // When greater than 0, indicates that there are operations waiting for oplog visibility,
         // and
         // journal flushing should not be delayed.
         std::int64_t _opsWaitingForVisibility = 0;  // Guarded by oplogVisibilityStateMutex.
 
-        AtomicUInt64 _oplogReadTimestamp;
+        AtomicWord<unsigned long long> _oplogReadTimestamp;
 
         rocksdb::TOTransactionDB* _db;  // not owned
 

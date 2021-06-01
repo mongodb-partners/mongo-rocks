@@ -38,7 +38,7 @@ namespace mongo {
         : _db(db), _durable(durable), _journalListener(&NoOpJournalListener::instance) {}
 
     void RocksDurabilityManager::setJournalListener(JournalListener* jl) {
-        stdx::unique_lock<stdx::mutex> lk(_journalListenerMutex);
+        stdx::unique_lock<Latch> lk(_journalListenerMutex);
         _journalListener = jl;
     }
 
@@ -47,7 +47,7 @@ namespace mongo {
         uint32_t start = _lastSyncTime.load();
         // Do the remainder in a critical section that ensures only a single thread at a time
         // will attempt to synchronize.
-        stdx::unique_lock<stdx::mutex> lk(_lastSyncMutex);
+        stdx::unique_lock<Latch> lk(_lastSyncMutex);
         uint32_t current = _lastSyncTime.loadRelaxed();  // synchronized with writes through mutex
         if (current != start) {
             // Someone else synced already since we read lastSyncTime, so we're done!
@@ -55,7 +55,7 @@ namespace mongo {
         }
         _lastSyncTime.store(current + 1);
  
-        stdx::unique_lock<stdx::mutex> jlk(_journalListenerMutex);
+        stdx::unique_lock<Latch> jlk(_journalListenerMutex);
         JournalListener::Token token = _journalListener->getToken();
         if (!_durable || forceFlush) {
             invariantRocksOK(_db->Flush(rocksdb::FlushOptions()));
@@ -65,4 +65,20 @@ namespace mongo {
         _journalListener->onDurable(token);
     }
 
+    void RocksDurabilityManager::waitUntilPreparedUnitOfWorkCommitsOrAborts(
+        OperationContext* opCtx, std::uint64_t lastCount) {
+        invariant(opCtx);
+        stdx::unique_lock<Latch> lk(_prepareCommittedOrAbortedMutex);
+        if (lastCount == _prepareCommitOrAbortCounter.loadRelaxed()) {
+            opCtx->waitForConditionOrInterrupt(_prepareCommittedOrAbortedCond, lk, [&] {
+                return _prepareCommitOrAbortCounter.loadRelaxed() > lastCount;
+            });
+        }
+    }
+
+    void RocksDurabilityManager::notifyPreparedUnitOfWorkHasCommittedOrAborted() {
+        stdx::unique_lock<Latch> lk(_prepareCommittedOrAbortedMutex);
+        _prepareCommitOrAbortCounter.fetchAndAdd(1);
+        _prepareCommittedOrAbortedCond.notify_all();
+    }
 }  // namespace mongo

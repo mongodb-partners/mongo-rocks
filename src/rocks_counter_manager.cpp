@@ -40,7 +40,7 @@
 
 // for invariant()
 #include <rocksdb/db.h>
-#include "mongo/stdx/mutex.h"
+#include "mongo/platform/mutex.h"
 #include "mongo/util/assert_util.h"
 #include "mongo/util/log.h"
 
@@ -50,7 +50,7 @@ namespace mongo {
 
     long long RocksCounterManager::loadCounter(const std::string& counterKey) {
         {
-            stdx::lock_guard<stdx::mutex> lk(_lock);
+            stdx::lock_guard<Latch> lk(_lock);
             auto itr = _counters.find(counterKey);
             if (itr != _counters.end()) {
                 return itr->second;
@@ -77,7 +77,7 @@ namespace mongo {
             invariantRocksOK(txn->Put(_cf, counterKey, _encodeCounter(count, &storage)));
             invariantRocksOK(txn->Commit());
         } else {
-            stdx::lock_guard<stdx::mutex> lk(_lock);
+            stdx::lock_guard<Latch> lk(_lock);
             _counters[counterKey] = count;
             ++_syncCounter;
             if (_syncCounter >= kSyncEvery) {
@@ -96,7 +96,7 @@ namespace mongo {
     }
 
     void RocksCounterManager::sync() {
-        stdx::lock_guard<stdx::mutex> lk(_lock);
+        stdx::lock_guard<Latch> lk(_lock);
         if (_counters.size() == 0) {
             return;
         }
