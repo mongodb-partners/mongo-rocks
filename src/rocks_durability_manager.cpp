@@ -34,8 +34,14 @@
 #include "rocks_util.h"
 
 namespace mongo {
-    RocksDurabilityManager::RocksDurabilityManager(rocksdb::DB* db, bool durable)
-        : _db(db), _durable(durable), _journalListener(&NoOpJournalListener::instance) {}
+    RocksDurabilityManager::RocksDurabilityManager(rocksdb::DB* db, bool durable,
+                                                   rocksdb::ColumnFamilyHandle* defaultCf,
+                                                   rocksdb::ColumnFamilyHandle* oplogCf)
+        : _db(db),
+          _durable(durable),
+          _defaultCf(defaultCf),
+          _oplogCf(oplogCf),
+          _journalListener(&NoOpJournalListener::instance) {}
 
     void RocksDurabilityManager::setJournalListener(JournalListener* jl) {
         stdx::unique_lock<Latch> lk(_journalListenerMutex);
@@ -58,7 +64,7 @@ namespace mongo {
         stdx::unique_lock<Latch> jlk(_journalListenerMutex);
         JournalListener::Token token = _journalListener->getToken();
         if (!_durable || forceFlush) {
-            invariantRocksOK(_db->Flush(rocksdb::FlushOptions()));
+            invariantRocksOK(_db->Flush(rocksdb::FlushOptions(), {_defaultCf, _oplogCf}));
         } else {
             invariantRocksOK(_db->SyncWAL());
         }

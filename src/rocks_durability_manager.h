@@ -45,7 +45,9 @@ namespace mongo {
         RocksDurabilityManager& operator=(const RocksDurabilityManager&) = delete;
 
     public:
-        RocksDurabilityManager(rocksdb::DB* db, bool durable);
+        RocksDurabilityManager(rocksdb::DB* db, bool durable,
+                               rocksdb::ColumnFamilyHandle* defaultCf,
+                               rocksdb::ColumnFamilyHandle* oplogCf);
 
         void setJournalListener(JournalListener* jl);
 
@@ -80,7 +82,8 @@ namespace mongo {
         rocksdb::DB* _db;  // not owned
 
         bool _durable;
-
+        rocksdb::ColumnFamilyHandle* _defaultCf;  // not owned
+        rocksdb::ColumnFamilyHandle* _oplogCf;    // not owned
         // Notified when we commit to the journal.
         JournalListener* _journalListener;
 

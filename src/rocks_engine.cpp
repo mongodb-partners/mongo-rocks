@@ -290,7 +290,8 @@ namespace mongo {
                                                                           {_defaultCf.get(), _oplogCf.get()});
         _maxPrefix = std::max(_maxPrefix, maxDroppedPrefix);
 
-        _durabilityManager.reset(new RocksDurabilityManager(_db.get(), _durable));
+        _durabilityManager.reset(
+            new RocksDurabilityManager(_db.get(), _durable, _defaultCf.get(), _oplogCf.get()));
         _oplogManager.reset(new RocksOplogManager(_db.get(), this, _durabilityManager.get()));
 
         rocksdb::RocksTimeStamp ts(0);
