@@ -54,16 +54,17 @@ namespace mongo {
         void waitUntilDurable(bool forceFlush);
 
         /**
-         * Waits until a prepared unit of work has ended (either been commited or aborted).
-         * This should be used when encountering WT_PREPARE_CONFLICT errors. The caller is
-         * required to retry the conflicting WiredTiger API operation. A return from this
-         * function does not guarantee that the conflicting transaction has ended, only
-         * that one prepared unit of work in the process has signaled that it has ended.
-         * Accepts an OperationContext that will throw an AssertionException when interrupted.
+         * Waits until a prepared unit of work has ended (either been commited or aborted). This
+         * should be used when encountering ROCKS_PREPARE_CONFLICT errors. The caller is required to
+         * retry the conflicting WiredTiger API operation. A return from this function does not
+         * guarantee that the conflicting transaction has ended, only that one prepared unit of work
+         * in the process has signaled that it has ended. Accepts an OperationContext that will
+         * throw an AssertionException when interrupted.
+         *
          * This method is provided in RocksDurabilityManager and not RecoveryUnit because all
-         * recovery units share the same durable manager, and we want a recovery unit on one
-         * thread to signal all recovery units waiting for prepare conflicts across all
-         * other threads.
+         * recovery units share the same RocksDurabilityManager, and we want a recovery unit on one
+         * thread to signal all recovery units waiting for prepare conflicts across all other
+         * threads.
          */
         void waitUntilPreparedUnitOfWorkCommitsOrAborts(OperationContext* opCtx,
                                                         uint64_t lastCount);

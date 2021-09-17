@@ -174,13 +174,6 @@ namespace mongo {
         return _data->resize(num);
     }
 
-    // TODO(cuixin): consider interfaces below, mongoRocks has not implemented them yet
-    //         WiredTigerKVEngine::setInitRsOplogBackgroundThreadCallback skip
-    //         WiredTigerKVEngine::initRsOplogBackgroundThread skip
-    //         getBackupInformationFromBackupCursor is used in
-    //         WiredTigerKVEngine::beginNonBlockingBackup
-    //         rocks db skip it
-
     // first four bytes are the default prefix 0
     const std::string RocksEngine::kMetadataPrefix("\0\0\0\0metadata-", 13);
 
