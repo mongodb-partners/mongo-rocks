@@ -203,7 +203,7 @@ namespace mongo {
                 unsigned long long memSizeMB = pi.getMemSizeMB();
                 if (memSizeMB > 0) {
                     // reserve 1GB for system and binaries, and use 30% of the rest
-                    double cacheMB = (memSizeMB - 1024) * 0.3;
+                    double cacheMB = (memSizeMB - 1024) * 0.5;
                     cacheSizeGB = static_cast<uint64_t>(cacheMB / 1024);
                 }
                 if (cacheSizeGB < 1) {
