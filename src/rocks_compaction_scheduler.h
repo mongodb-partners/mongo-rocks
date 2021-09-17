@@ -57,12 +57,19 @@ namespace mongo {
 
     class CompactionBackgroundJob;
 
+    struct OplogDelCompactStats {
+        uint64_t oplogEntriesDeleted;
+        uint64_t oplogSizeDeleted;
+        uint64_t oplogCompactSkip;
+        uint64_t oplogCompactKeep;
+    };
+
     class RocksCompactionScheduler {
     public:
         RocksCompactionScheduler();
         ~RocksCompactionScheduler();
 
-        void start(rocksdb::DB* db, rocksdb::ColumnFamilyHandle* cf);
+        void start(rocksdb::TOTransactionDB* db, rocksdb::ColumnFamilyHandle* cf);
 
         static int getSkippedDeletionsThreshold() { return kSkippedDeletionsThreshold; }
 
@@ -71,8 +78,9 @@ namespace mongo {
         // schedule compact range operation for execution in _compactionThread
         void compactAll();
         Status compactOplog(rocksdb::ColumnFamilyHandle* cf, const std::string& begin, const std::string& end);
+        Status rollbackToStable(rocksdb::ColumnFamilyHandle* cf);
 
-        rocksdb::CompactionFilterFactory* createCompactionFilterFactory() const;
+        rocksdb::CompactionFilterFactory* createCompactionFilterFactory();
         std::unordered_map<uint32_t, BSONObj> getDroppedPrefixes() const;
         boost::optional<std::pair<uint32_t, std::pair<std::string, std::string>>> getOplogDeleteUntil() const;
 
@@ -87,11 +95,24 @@ namespace mongo {
         void notifyCompacted(const std::string& begin, const std::string& end, bool rangeDropped,
                              bool opSucceeded);
 
+        // calculate Oplog Delete Entries
+        void addOplogEntriesDeleted(const uint64_t entries);
+        // calculate Oplog Delete Size
+        void addOplogSizeDeleted(const uint64_t size);
+        // add up to Oplog Compact Removed Entries
+        void addOplogCompactRemoved();
+        // add up tp Oplog Compact Preserved Entries
+        void addOplogCompactPreserved();
+        // query Oplog Delete and Compact all Stats
+        const OplogDelCompactStats getOplogDelCompactStats() const;
+
     private:
         void compactPrefix(rocksdb::ColumnFamilyHandle* cf, const std::string& prefix);
         void compactDroppedPrefix(rocksdb::ColumnFamilyHandle* cf, const std::string& prefix);
-        void compact(rocksdb::ColumnFamilyHandle* cf, const std::string& begin, const std::string& end,
-                     bool rangeDropped, uint32_t order, boost::optional<std::shared_ptr<Notification<Status>>>);
+        void compact(rocksdb::ColumnFamilyHandle* cf, const std::string& begin,
+                     const std::string& end, bool rangeDropped, uint32_t order,
+                     const bool trimHistory,
+                     boost::optional<std::shared_ptr<Notification<Status>>>);
         void droppedPrefixCompacted(const std::string& prefix, bool opSucceeded);
 
     private:
@@ -99,7 +120,7 @@ namespace mongo {
         // protected by _lock
         Timer _timer;
 
-        rocksdb::DB* _db;  // not owned
+        rocksdb::TOTransactionDB* _db;  // not owned
 
         // not owned, cf where compaction_scheduler's metadata exists.
         rocksdb::ColumnFamilyHandle* _metaCf;
@@ -123,5 +144,10 @@ namespace mongo {
         std::atomic<uint32_t> _droppedPrefixesCount;
         boost::optional<std::pair<uint32_t, std::pair<std::string, std::string>>> _oplogDeleteUntil;
         static const std::string kDroppedPrefix;
+
+        std::atomic<uint64_t> _oplogEntriesDeleted;
+        std::atomic<uint64_t> _oplogSizeDeleted;
+        std::atomic<uint64_t> _oplogCompactSkip;
+        std::atomic<uint64_t> _oplogCompactKeep;
     };
 }  // namespace mongo
