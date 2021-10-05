@@ -69,7 +69,7 @@ namespace mongo {
                 // Intentionally leaked.
                 auto leaked __attribute__((unused)) = new RocksServerStatusSection(engine);
                 auto leaked2 __attribute__((unused)) = new RocksRateLimiterServerParameter(
-                    "rocksdbRuntimeConfigMaxWriteMBPerSec", ServerParameterType::kRuntimeOnly);
+                    "rocksdbRateLimiter", ServerParameterType::kRuntimeOnly);
                 auto leaked3 __attribute__((unused)) = new RocksBackupServerParameter(
                     "rocksdbBackup", ServerParameterType::kRuntimeOnly);
                 auto leaked4 __attribute__((unused)) = new RocksCompactServerParameter(
@@ -78,11 +78,14 @@ namespace mongo {
                     "rocksdbRuntimeConfigCacheSizeGB", ServerParameterType::kRuntimeOnly);
                 auto leaked6 __attribute__((unused)) =
                     new RocksOptionsParameter("rocksdbOptions", ServerParameterType::kRuntimeOnly);
+                auto leaked7 __attribute__((unused)) = new RocksdbMaxConflictCheckSizeParameter(
+                    "rocksdbRuntimeConfigMaxWriteMBPerSec", ServerParameterType::kRuntimeOnly);
                 leaked2->_data = engine;
                 leaked3->_data = engine;
                 leaked4->_data = engine;
                 leaked5->_data = engine;
                 leaked6->_data = engine;
+                leaked7->_data = engine;
 
                 return new StorageEngineImpl(engine, options);
             }
