@@ -120,12 +120,22 @@ namespace mongo {
             {"num-snapshots", false},
             {"oldest-snapshot-time", false},
             {"num-live-versions", false}};
-        for (auto const& property : properties) {
+        auto getProperties = [&](const std::pair<std::string, bool>& property,
+                                 const std::string& prefix) {
             std::string statsString;
-            if (!_engine->getDB()->GetProperty("rocksdb." + property.first, &statsString)) {
-                statsString = "<error> unable to retrieve statistics";
-                bob->append(property.first, statsString);
-                continue;
+            if (prefix == "oplogcf-") {
+                if (!_engine->getDB()->GetProperty(_engine->getOplogCFHandle(),
+                                                   "rocksdb." + property.first, &statsString)) {
+                    statsString = "<error> unable to retrieve statistics by oplogCF";
+                    bob->append(property.first, statsString);
+                    return;
+                }
+            } else {
+                if (!_engine->getDB()->GetProperty("rocksdb." + property.first, &statsString)) {
+                    statsString = "<error> unable to retrieve statistics";
+                    bob->append(property.first, statsString);
+                    return;
+                }
             }
             if (property.first == "stats") {
                 // special casing because we want to turn it into array
@@ -135,13 +145,19 @@ namespace mongo {
                 while (std::getline(ss, line)) {
                     a.append(line);
                 }
-                bob->appendArray(property.first, a.arr());
+                bob->appendArray(prefix + property.first, a.arr());
             } else if (property.second) {
-                bob->append(property.first, PrettyPrintBytes(std::stoll(statsString)));
+                bob->append(prefix + property.first, PrettyPrintBytes(std::stoll(statsString)));
             } else {
-                bob->append(property.first, statsString);
+                bob->append(prefix + property.first, statsString);
             }
+        };
+
+        for (auto const& property : properties) {
+            getProperties(property, "");
+            getProperties(property, "oplogcf-");
         }
+
         bob->append("total-live-recovery-units", RocksRecoveryUnit::getTotalLiveRecoveryUnits());
         bob->append("block-cache-usage", PrettyPrintBytes(_engine->getBlockCacheUsage()));
     }
