@@ -27,6 +27,8 @@
  *    it in the license file.
  */
 
+#define MONGO_LOG_DEFAULT_COMPONENT ::mongo::logger::LogComponent::kStorage
+
 #include <sstream>
 
 #include "mongo/platform/basic.h"
@@ -42,6 +44,7 @@
 #include "mongo/db/db_raii.h"
 #include "mongo/db/namespace_string.h"
 #include "mongo/util/assert_util.h"
+#include "mongo/util/log.h"
 #include "mongo/util/scopeguard.h"
 
 #include "rocks_engine.h"
@@ -75,6 +78,33 @@ namespace mongo {
 
         BSONObjBuilder bob;
 
+        generatePropertiesSection(&bob);
+        generateThreadStatusSection(&bob);
+        generateCountersSection(&bob);
+        generateTxnStatsSection(&bob);
+        generateOplogDelStatsSection(&bob);
+        generateCompactSchedulerSection(&bob);
+        generateDefaultCFEntriesNumSection(&bob);
+
+        RocksEngine::appendGlobalStats(bob);
+
+        return bob.obj();
+    }
+
+    void RocksServerStatusSection::generateDefaultCFEntriesNumSection(BSONObjBuilder* bob) const {
+        auto defaultCFNumEntries = _engine->getDefaultCFNumEntries();
+
+        BSONObjBuilder objBuilder;
+        for (auto& numVec : defaultCFNumEntries) {
+            BSONObjBuilder ob;
+            ob.append("num-entries", static_cast<long long>(numVec.second[0]));
+            ob.append("num-deletions", static_cast<long long>(numVec.second[1]));
+            objBuilder.append("L" + std::to_string(numVec.first), ob.obj());
+        }
+        bob->append("file-num-entries", objBuilder.obj());
+    }
+
+    void RocksServerStatusSection::generatePropertiesSection(BSONObjBuilder* bob) const {
         // if the second is true, that means that we pass the value through PrettyPrintBytes
         std::vector<std::pair<std::string, bool>> properties = {
             {"stats", false},
@@ -94,7 +124,7 @@ namespace mongo {
             std::string statsString;
             if (!_engine->getDB()->GetProperty("rocksdb." + property.first, &statsString)) {
                 statsString = "<error> unable to retrieve statistics";
-                bob.append(property.first, statsString);
+                bob->append(property.first, statsString);
                 continue;
             }
             if (property.first == "stats") {
@@ -105,16 +135,18 @@ namespace mongo {
                 while (std::getline(ss, line)) {
                     a.append(line);
                 }
-                bob.appendArray(property.first, a.arr());
+                bob->appendArray(property.first, a.arr());
             } else if (property.second) {
-                bob.append(property.first, PrettyPrintBytes(std::stoll(statsString)));
+                bob->append(property.first, PrettyPrintBytes(std::stoll(statsString)));
             } else {
-                bob.append(property.first, statsString);
+                bob->append(property.first, statsString);
             }
         }
-        bob.append("total-live-recovery-units", RocksRecoveryUnit::getTotalLiveRecoveryUnits());
-        bob.append("block-cache-usage", PrettyPrintBytes(_engine->getBlockCacheUsage()));
+        bob->append("total-live-recovery-units", RocksRecoveryUnit::getTotalLiveRecoveryUnits());
+        bob->append("block-cache-usage", PrettyPrintBytes(_engine->getBlockCacheUsage()));
+    }
 
+    void RocksServerStatusSection::generateThreadStatusSection(BSONObjBuilder* bob) const {
         std::vector<rocksdb::ThreadStatus> threadList;
         auto s = rocksdb::Env::Default()->GetThreadList(&threadList);
         if (s.ok()) {
@@ -171,9 +203,11 @@ namespace mongo {
 
                 threadStatus.append(threadObjBuilder.obj());
             }
-            bob.appendArray("thread-status", threadStatus.arr());
+            bob->appendArray("thread-status", threadStatus.arr());
         }
+    }
 
+    void RocksServerStatusSection::generateCountersSection(BSONObjBuilder* bob) const {
         // add counters
         auto stats = _engine->getStatistics();
         if (stats) {
@@ -200,74 +234,92 @@ namespace mongo {
                     static_cast<long long>(stats->getTickerCount(counter_name.first)));
             }
 
-            bob.append("counters", countersObjBuilder.obj());
+            bob->append("counters", countersObjBuilder.obj());
         }
+    }
 
+    void RocksServerStatusSection::generateTxnStatsSection(BSONObjBuilder* bob) const {
         //  transaction stats
-        {
-            rocksdb::TOTransactionStat txnStat;
-            memset(&txnStat, 0, sizeof txnStat);
-            rocksdb::TOTransactionDB* db = _engine->getDB();
-            invariant(db->Stat(&txnStat).ok());
-            BSONObjBuilder txnObjBuilder;
-            txnObjBuilder.append("max-conflict-bytes",
-                                 static_cast<long long>(txnStat.max_conflict_bytes));
-            txnObjBuilder.append("cur-conflict-bytes",
-                                 static_cast<long long>(txnStat.cur_conflict_bytes));
-            txnObjBuilder.append("uncommitted-keys", static_cast<long long>(txnStat.uk_num));
-            txnObjBuilder.append("committed-keys", static_cast<long long>(txnStat.ck_num));
-            txnObjBuilder.append("alive-txn-num", static_cast<long long>(txnStat.alive_txns_num));
-            txnObjBuilder.append("read-queue-num", static_cast<long long>(txnStat.read_q_num));
-            txnObjBuilder.append("commit-queue-num", static_cast<long long>(txnStat.commit_q_num));
-            txnObjBuilder.append("oldest-timestamp", static_cast<long long>(txnStat.oldest_ts));
-            txnObjBuilder.append("min-read-timestamp", static_cast<long long>(txnStat.min_read_ts));
-            txnObjBuilder.append("max-commit-timestamp",
-                                 static_cast<long long>(txnStat.max_commit_ts));
-            txnObjBuilder.append("committed-max-txnid",
-                                 static_cast<long long>(txnStat.committed_max_txnid));
-            txnObjBuilder.append("min-uncommit-ts",
-                                 static_cast<long long>(txnStat.min_uncommit_ts));
-            txnObjBuilder.append("update-max-commit-ts-times",
-                                 static_cast<long long>(txnStat.update_max_commit_ts_times));
-            txnObjBuilder.append("update-max-commit-ts-retries",
-                                 static_cast<long long>(txnStat.update_max_commit_ts_retries));
-            txnObjBuilder.append("txn-commits", static_cast<long long>(txnStat.txn_commits));
-            txnObjBuilder.append("txn-aborts", static_cast<long long>(txnStat.txn_aborts));
-            txnObjBuilder.append("commit-without-ts-times",
-                                 static_cast<long long>(txnStat.commit_without_ts_times));
-            txnObjBuilder.append("read-without-ts-times",
-                                 static_cast<long long>(txnStat.read_without_ts_times));
-            txnObjBuilder.append("read-with-ts-times",
-                                 static_cast<long long>(txnStat.read_with_ts_times));
-            txnObjBuilder.append("read-queue-walk-len-sum",
-                                 static_cast<long long>(txnStat.read_q_walk_len_sum));
-            txnObjBuilder.append("read-queue-walk-times",
-                                 static_cast<long long>(txnStat.read_q_walk_times));
-            txnObjBuilder.append("commit-queue-walk-len-sum",
-                                 static_cast<long long>(txnStat.commit_q_walk_len_sum));
-            txnObjBuilder.append("commit-queue-walk-times",
-                                 static_cast<long long>(txnStat.commit_q_walk_times));
-            bob.append("transaction-stats", txnObjBuilder.obj());
-        }
+        rocksdb::TOTransactionStat txnStat;
+        memset(&txnStat, 0, sizeof txnStat);
+        rocksdb::TOTransactionDB* db = _engine->getDB();
+        invariant(db->Stat(&txnStat).ok());
+        BSONObjBuilder txnObjBuilder;
+        txnObjBuilder.append("max-conflict-bytes",
+                             static_cast<long long>(txnStat.max_conflict_bytes));
+        txnObjBuilder.append("cur-conflict-bytes",
+                             static_cast<long long>(txnStat.cur_conflict_bytes));
+        txnObjBuilder.append("uncommitted-keys", static_cast<long long>(txnStat.uk_num));
+        txnObjBuilder.append("committed-keys", static_cast<long long>(txnStat.ck_num));
+        txnObjBuilder.append("alive-txn-num", static_cast<long long>(txnStat.alive_txns_num));
+        txnObjBuilder.append("read-queue-num", static_cast<long long>(txnStat.read_q_num));
+        txnObjBuilder.append("commit-queue-num", static_cast<long long>(txnStat.commit_q_num));
+        txnObjBuilder.append("oldest-timestamp", static_cast<long long>(txnStat.oldest_ts));
+        txnObjBuilder.append("min-read-timestamp", static_cast<long long>(txnStat.min_read_ts));
+        txnObjBuilder.append("max-commit-timestamp", static_cast<long long>(txnStat.max_commit_ts));
+        txnObjBuilder.append("committed-max-txnid",
+                             static_cast<long long>(txnStat.committed_max_txnid));
+        txnObjBuilder.append("min-uncommit-ts", static_cast<long long>(txnStat.min_uncommit_ts));
+        txnObjBuilder.append("update-max-commit-ts-times",
+                             static_cast<long long>(txnStat.update_max_commit_ts_times));
+        txnObjBuilder.append("update-max-commit-ts-retries",
+                             static_cast<long long>(txnStat.update_max_commit_ts_retries));
+        txnObjBuilder.append("txn-commits", static_cast<long long>(txnStat.txn_commits));
+        txnObjBuilder.append("txn-aborts", static_cast<long long>(txnStat.txn_aborts));
+        txnObjBuilder.append("commit-without-ts-times",
+                             static_cast<long long>(txnStat.commit_without_ts_times));
+        txnObjBuilder.append("read-without-ts-times",
+                             static_cast<long long>(txnStat.read_without_ts_times));
+        txnObjBuilder.append("read-with-ts-times",
+                             static_cast<long long>(txnStat.read_with_ts_times));
+        txnObjBuilder.append("read-queue-walk-len-sum",
+                             static_cast<long long>(txnStat.read_q_walk_len_sum));
+        txnObjBuilder.append("read-queue-walk-times",
+                             static_cast<long long>(txnStat.read_q_walk_times));
+        txnObjBuilder.append("commit-queue-walk-len-sum",
+                             static_cast<long long>(txnStat.commit_q_walk_len_sum));
+        txnObjBuilder.append("commit-queue-walk-times",
+                             static_cast<long long>(txnStat.commit_q_walk_times));
+        bob->append("transaction-stats", txnObjBuilder.obj());
+    }
 
+    void RocksServerStatusSection::generateOplogDelStatsSection(BSONObjBuilder* bob) const {
+        // oplog compact delete stats
+        BSONObjBuilder oplogDelBuilder;
+        auto oplogStats = _engine->getCompactionScheduler()->getOplogDelCompactStats();
+        oplogDelBuilder.append("oplog-deleted-entries",
+                               static_cast<long long>(oplogStats.oplogEntriesDeleted));
+        oplogDelBuilder.append("oplog-deleted-size",
+                               static_cast<long long>(oplogStats.oplogSizeDeleted));
+        oplogDelBuilder.append("oplog-compact-skip-entries",
+                               static_cast<long long>(oplogStats.oplogCompactSkip));
+        oplogDelBuilder.append("opLog-compact-keep-entries",
+                               static_cast<long long>(oplogStats.oplogCompactKeep));
+        bob->append("oplog-compact-stats", oplogDelBuilder.obj());
+    }
+    void RocksServerStatusSection::generateCompactSchedulerSection(BSONObjBuilder* bob) const {
         // compaction scheduler stats
         // TODO(wolfkdy): use jstests and failPoints to test primary/secondary status after dropIndex
         // and dropCollection, test prefixes draining before and after mongod reboot
+        BSONObjBuilder bb;
+        bool large = false;
+        auto droppedPrefixes = _engine->getCompactionScheduler()->getDroppedPrefixes();
         {
-            BSONObjBuilder bb;
-            auto droppedPrefixes = _engine->getCompactionScheduler()->getDroppedPrefixes();
-            {
-                BSONArrayBuilder a;
-                for (auto p : droppedPrefixes) {
-                    a.append(BSON("prefix" << static_cast<long long>(p.first) << "debug-info" << p.second));
+            BSONArrayBuilder a;
+            for (auto p : droppedPrefixes) {
+                a.append(
+                    BSON("prefix" << static_cast<long long>(p.first) << "debug-info" << p.second));
+                if (a.len() > 1024 * 1024 * 15) {
+                    large = true;
+                    break;
                 }
-                bb.appendArray("dropped-prefixes", a.arr());
             }
-            bob.append("compaction-scheduler", bb.obj());
+            bb.appendArray("dropped-prefixes", a.arr());
         }
-        RocksEngine::appendGlobalStats(bob);
-
-        return bob.obj();
+        auto obj = bb.obj();
+        if (large) {
+            log() << "status is over 15MB";
+        }
+        bob->append("compaction-scheduler", obj);
     }
-
 }  // namespace mongo
