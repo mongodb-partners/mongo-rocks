@@ -42,7 +42,8 @@ namespace mongo {
               crashSafeCounters(false),
               counters(true),
               singleDeleteIndex(false),
-              logLevel("info") {}
+              logLevel("info"),
+              maxConflictCheckSizeMB(200) {}
 
         Status store(const optionenvironment::Environment& params);
         static Status validateRocksdbLogLevel(const std::string& value);
@@ -58,6 +59,20 @@ namespace mongo {
         bool singleDeleteIndex;
 
         std::string logLevel;
+        int maxConflictCheckSizeMB;
+        int maxBackgroundJobs;
+        long maxTotalWalSize;
+        long dbWriteBufferSize;
+        long writeBufferSize;
+        long delayedWriteRate;
+        int numLevels;
+        int maxWriteBufferNumber;
+        int level0FileNumCompactionTrigger;
+        int level0SlowdownWritesTrigger;
+        int level0StopWritesTrigger;
+        long maxBytesForLevelBase;
+        unsigned long long softPendingCompactionBytesLimit;
+        unsigned long long hardPendingCompactionBytesLimit;
     };
 
     extern RocksGlobalOptions rocksGlobalOptions;

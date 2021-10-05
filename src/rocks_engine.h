@@ -268,6 +268,10 @@ namespace mongo {
 
         rocksdb::Statistics* getStatistics() const { return _statistics.get(); }
 
+        std::map<int, std::vector<uint64_t>> getDefaultCFNumEntries() const;
+
+        rocksdb::ColumnFamilyHandle* getOplogCFHandle() const { return _oplogCf.get(); }
+        rocksdb::ColumnFamilyHandle* getDefaultCfHandle() const { return _defaultCf.get(); }
         bool canRecoverToStableTimestamp() const;
         rocksdb::ColumnFamilyHandle* getDefaultCf_ForTest() const { return _defaultCf.get(); }
         rocksdb::ColumnFamilyHandle* getOplogCf_ForTest() const { return _oplogCf.get(); }

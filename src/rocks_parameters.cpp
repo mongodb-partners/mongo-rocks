@@ -181,14 +181,29 @@ namespace mongo {
 
     Status RocksOptionsParameter::setFromString(const std::string& str) {
         log() << "RocksDB: Attempting to apply settings: " << str;
+        std::set<std::string> supported_db_options = {"db_write_buffer_size", "delayed_write_rate",
+                                                      "max_background_jobs", "max_total_wal_size"};
 
+        std::set<std::string> supported_cf_options = {"max_write_buffer_number",
+                                                      "disable_auto_compactions",
+                                                      "level0_slowdown_writes_trigger",
+                                                      "level0_stop_writes_trigger",
+                                                      "soft_pending_compaction_bytes_limit",
+                                                      "hard_pending_compaction_bytes_limit"};
         std::unordered_map<std::string, std::string> optionsMap;
         rocksdb::Status s = rocksdb::StringToMap(str, &optionsMap);
         if (!s.ok()) {
             return Status(ErrorCodes::BadValue, s.ToString());
         }
-
-        s = _data->getDB()->SetOptions(optionsMap);
+        for (const auto& v : optionsMap) {
+            if (supported_db_options.find(v.first) != supported_db_options.end()) {
+                s = _data->getDB()->SetDBOptions({v});
+            } else if (supported_cf_options.find(v.first) != supported_cf_options.end()) {
+                s = _data->getDB()->SetOptions({v});
+            } else {
+                return Status(ErrorCodes::BadValue, str::stream() << "unknown param: " << v.first);
+            }
+        }
         if (!s.ok()) {
             return Status(ErrorCodes::BadValue, s.ToString());
         }

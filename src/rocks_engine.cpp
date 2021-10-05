@@ -321,10 +321,10 @@ namespace mongo {
         }();
         if (newDB) {
             // init manifest so list column families will not fail when db is empty.
-            invariantRocksOK(rocksdb::TOTransactionDB::Open(_options(false /* isOplog */), 
-                                                            rocksdb::TOTransactionDBOptions(),
-                                                            _path,
-                                                            &db));
+            invariantRocksOK(rocksdb::TOTransactionDB::Open(
+                _options(false /* isOplog */),
+                rocksdb::TOTransactionDBOptions(rocksGlobalOptions.maxConflictCheckSizeMB), _path,
+                &db));
             invariantRocksOK(db->Close());
         }
 
@@ -340,10 +340,10 @@ namespace mongo {
         // init oplog columnfamily if not exists.
         if (!hasOplog) {
             rocksdb::ColumnFamilyHandle* cf = nullptr;
-            invariantRocksOK(rocksdb::TOTransactionDB::Open(_options(false /* isOplog */), 
-                                                            rocksdb::TOTransactionDBOptions(),
-                                                            _path,
-                                                            &db));
+            invariantRocksOK(rocksdb::TOTransactionDB::Open(
+                _options(false /* isOplog */),
+                rocksdb::TOTransactionDBOptions(rocksGlobalOptions.maxConflictCheckSizeMB), _path,
+                &db));
             invariantRocksOK(db->CreateColumnFamily(_options(true /* isOplog */),
                                                     NamespaceString::kRsOplogNamespace.toString(),
                                                     &cf));
@@ -353,14 +353,12 @@ namespace mongo {
         }
 
         std::vector<rocksdb::ColumnFamilyHandle*> cfs;
-        s = rocksdb::TOTransactionDB::Open(_options(false /* isOplog */),
-                                           rocksdb::TOTransactionDBOptions(), _path,
-                                           {{rocksdb::kDefaultColumnFamilyName,
-                                             _options(false /* isOplog */)},
-                                            {NamespaceString::kRsOplogNamespace.toString(),
-                                             _options(true /* isOplog */)}},
-                                           &cfs,
-                                           &db);
+        s = rocksdb::TOTransactionDB::Open(
+            _options(false /* isOplog */),
+            rocksdb::TOTransactionDBOptions(rocksGlobalOptions.maxConflictCheckSizeMB), _path,
+            {{rocksdb::kDefaultColumnFamilyName, _options(false /* isOplog */)},
+             {NamespaceString::kRsOplogNamespace.toString(), _options(true /* isOplog */)}},
+            &cfs, &db);
         invariantRocksOK(s);
         invariant(cfs.size() == 2);
         invariant(cfs[0]->GetName() == rocksdb::kDefaultColumnFamilyName);
@@ -393,6 +391,27 @@ namespace mongo {
             bbb.done();
         }
         bb.done();
+    }
+
+    std::map<int, std::vector<uint64_t>> RocksEngine::getDefaultCFNumEntries() const {
+        std::map<int, std::vector<uint64_t>> numEntriesMap;
+
+        std::vector<rocksdb::LiveFileMetaData> allFiles;
+        _db->GetRootDB()->GetLiveFilesMetaData(&allFiles);
+        for (const auto& f : allFiles) {
+            if (NamespaceString::oplog(f.column_family_name)) {
+                continue;
+            }
+
+            if (numEntriesMap.find(f.level) == numEntriesMap.end()) {
+                numEntriesMap[f.level] = std::vector<uint64_t>(2, 0);
+            }
+
+            numEntriesMap[f.level][0] += f.num_entries;
+            numEntriesMap[f.level][1] += f.num_deletions;
+        }
+
+        return numEntriesMap;
     }
 
     Status RocksEngine::okToRename(OperationContext* opCtx, StringData fromNS, StringData toNS,
@@ -761,17 +780,27 @@ namespace mongo {
         table_options.format_version = 2;
         options.table_factory.reset(rocksdb::NewBlockBasedTableFactory(table_options));
 
-        // options.info_log = std::shared_ptr<rocksdb::Logger>(new MongoRocksLogger);
-        options.write_buffer_size = 64 * 1024 * 1024;  // 64MB
-        options.level0_slowdown_writes_trigger = 8;
-        options.max_write_buffer_number = 4;
-        options.max_background_compactions = 8;
-        options.max_background_flushes = 2;
+        options.write_buffer_size = rocksGlobalOptions.writeBufferSize;
+        options.max_write_buffer_number = rocksGlobalOptions.maxWriteBufferNumber;
+        options.max_background_jobs = rocksGlobalOptions.maxBackgroundJobs;
+        options.max_total_wal_size = rocksGlobalOptions.maxTotalWalSize;
+        options.db_write_buffer_size = rocksGlobalOptions.dbWriteBufferSize;
+        options.num_levels = rocksGlobalOptions.numLevels;
+
+        options.delayed_write_rate = rocksGlobalOptions.delayedWriteRate;
+        options.level0_file_num_compaction_trigger =
+            rocksGlobalOptions.level0FileNumCompactionTrigger;
+        options.level0_slowdown_writes_trigger = rocksGlobalOptions.level0SlowdownWritesTrigger;
+        options.level0_stop_writes_trigger = rocksGlobalOptions.level0StopWritesTrigger;
+        options.soft_pending_compaction_bytes_limit =
+            rocksGlobalOptions.softPendingCompactionBytesLimit;
+        options.hard_pending_compaction_bytes_limit =
+            rocksGlobalOptions.hardPendingCompactionBytesLimit;
         options.target_file_size_base = 64 * 1024 * 1024;  // 64MB
         options.soft_rate_limit = 2.5;
         options.hard_rate_limit = 3;
         options.level_compaction_dynamic_level_bytes = true;
-        options.max_bytes_for_level_base = 512 * 1024 * 1024;  // 512 MB
+        options.max_bytes_for_level_base = rocksGlobalOptions.maxBytesForLevelBase;
         // This means there is no limit on open files. Make sure to always set ulimit so that it can
         // keep all RocksDB files opened.
         options.max_open_files = -1;
@@ -832,6 +861,7 @@ namespace mongo {
     namespace {
 
         MONGO_FAIL_POINT_DEFINE(RocksPreserveSnapshotHistoryIndefinitely);
+        MONGO_FAIL_POINT_DEFINE(RocksSetOldestTSToStableTS);
 
     }  // namespace
 
@@ -892,6 +922,11 @@ namespace mongo {
     // TODO(wolfkdy): in 4.0.3, setOldestTimestamp considers oplogReadTimestamp
     // it disappears in mongo4.2, find why it happens
     void RocksEngine::setOldestTimestamp(Timestamp oldestTimestamp, bool force) {
+        // Set the oldest timestamp to the stable timestamp to ensure that there is no lag window
+        // between the two.
+        if (MONGO_FAIL_POINT(RocksSetOldestTSToStableTS)) {
+            force = false;
+        }
         if (MONGO_FAIL_POINT(RocksPreserveSnapshotHistoryIndefinitely)) {
             return;
         }
