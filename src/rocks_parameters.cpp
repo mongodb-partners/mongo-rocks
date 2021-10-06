@@ -36,6 +36,7 @@
 #include "mongo/logger/parse_log_component_settings.h"
 #include "mongo/util/log.h"
 #include "mongo/util/str.h"
+#include "rocks_global_options.h"
 
 #include <rocksdb/cache.h>
 #include <rocksdb/convenience.h>
@@ -208,6 +209,31 @@ namespace mongo {
             return Status(ErrorCodes::BadValue, s.ToString());
         }
 
+        return Status::OK();
+    }
+
+    void RocksdbMaxConflictCheckSizeParameter::append(OperationContext* opCtx, BSONObjBuilder& b,
+                                                      const std::string& name) {
+        b << name << rocksGlobalOptions.maxConflictCheckSizeMB;
+    }
+
+    Status RocksdbMaxConflictCheckSizeParameter::set(const BSONElement& newValueElement) {
+        return setFromString(newValueElement.toString(false));
+    }
+
+    Status RocksdbMaxConflictCheckSizeParameter::setFromString(const std::string& str) {
+        std::string trimStr;
+        size_t pos = str.find('.');
+        if (pos != std::string::npos) {
+            trimStr = str.substr(0, pos);
+        }
+        int newValue;
+        Status status = parseNumberFromString(trimStr, &newValue);
+        if (!status.isOK()) {
+            return status;
+        }
+        rocksGlobalOptions.maxConflictCheckSizeMB = newValue;
+        _data->getDB()->SetMaxConflictBytes(newValue * 1024 * 1024);
         return Status::OK();
     }
 }  // namespace mongo

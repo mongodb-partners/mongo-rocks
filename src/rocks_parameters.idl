@@ -102,4 +102,11 @@ server_parameters:
             data: 'AtomicWord<std::uint32_t>*'
             override_ctor: true
 
-
+    rocksdbRuntimeConfigMaxConflictCheckSize:
+        description: 'rocksdb max conflict check size'
+        set_at: startup
+        cpp_class:
+            name: RocksdbMaxConflictCheckSizeParameter
+            data: 'RocksEngine*'
+            override_set: true
+        condition: { expr: false }
