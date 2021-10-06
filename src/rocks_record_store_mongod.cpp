@@ -41,9 +41,11 @@
 #include "mongo/db/client.h"
 #include "mongo/db/concurrency/d_concurrency.h"
 #include "mongo/db/db_raii.h"
+#include "mongo/db/dbdirectclient.h"
 #include "mongo/db/namespace_string.h"
 #include "mongo/db/operation_context.h"
 #include "mongo/db/service_context.h"
+#include "mongo/db/session_txn_record_gen.h"
 #include "mongo/util/background.h"
 #include "mongo/util/exit.h"
 #include "mongo/util/log.h"
@@ -55,6 +57,25 @@
 namespace mongo {
 
     namespace {
+        Timestamp getoldestPrepareTs(OperationContext* opCtx) {
+            auto alterClient = opCtx->getServiceContext()->makeClient("get-oldest-prepared-txn");
+            AlternativeClientRegion acr(alterClient);
+            const auto tmpOpCtx = cc().makeOperationContext();
+            tmpOpCtx->recoveryUnit()->setTimestampReadSource(
+                RecoveryUnit::ReadSource::kNoTimestamp);
+            DBDirectClient client(tmpOpCtx.get());
+            Query query = QUERY("txnState"
+                                << "kPrepared")
+                              .sort("lastWriteOpTime", 1);
+            auto c = client.query(NamespaceString::kSessionTransactionsTableNamespace, query, 1);
+            if (c->more()) {
+                auto raw = c->next();
+                SessionTxnRecord record =
+                    SessionTxnRecord::parse(IDLParserErrorContext("init prepared txns"), raw);
+                return record.getLastWriteOpTime().getTimestamp();
+            }
+            return Timestamp::max();
+        }
 
         std::set<NamespaceString> _backgroundThreadNamespaces;
         Mutex _backgroundThreadMutex;
@@ -76,10 +97,11 @@ namespace mongo {
                     LOG(1) << "no global storage engine yet";
                     return false;
                 }
-
+                auto engine = getGlobalServiceContext()->getStorageEngine();
                 const auto opCtx = cc().makeOperationContext();
 
                 try {
+                    const Timestamp oldestPreparedTxnTs = getoldestPrepareTs(opCtx.get());
                     // A Global IX lock should be good enough to protect the oplog truncation from
                     // interruptions such as restartCatalog. PBWM, database lock or collection lock is not
                     // needed. This improves concurrency if oplog truncation takes long time.
@@ -110,8 +132,18 @@ namespace mongo {
                         }
                         rs = checked_cast<RocksRecordStore*>(collection->getRecordStore());
                     }
-        
-                    return rs->reclaimOplog(opCtx.get());
+                    if (!engine->supportsRecoverToStableTimestamp()) {
+                        // For non-RTT storage engines, the oplog can always be truncated.
+                        return rs->reclaimOplog(opCtx.get(), oldestPreparedTxnTs);
+                    }
+                    const auto lastStableCheckpointTsPtr = engine->getLastStableRecoveryTimestamp();
+                    Timestamp lastStableCheckpointTimestamp =
+                        lastStableCheckpointTsPtr ? *lastStableCheckpointTsPtr : Timestamp::min();
+                    Timestamp persistedTimestamp =
+                        std::min(oldestPreparedTxnTs, lastStableCheckpointTimestamp);
+                    return rs->reclaimOplog(opCtx.get(), persistedTimestamp);
+                } catch (const ExceptionForCat<ErrorCategory::Interruption>&) {
+                    return false;
                 } catch (const std::exception& e) {
                     severe() << "error in RocksRecordStoreThread: " << redact(e.what());
                     fassertFailedNoTrace(!"error in RocksRecordStoreThread");
