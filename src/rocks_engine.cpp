@@ -793,9 +793,9 @@ namespace mongo {
         options.level0_slowdown_writes_trigger = rocksGlobalOptions.level0SlowdownWritesTrigger;
         options.level0_stop_writes_trigger = rocksGlobalOptions.level0StopWritesTrigger;
         options.soft_pending_compaction_bytes_limit =
-            rocksGlobalOptions.softPendingCompactionBytesLimit;
+            static_cast<unsigned long long>(rocksGlobalOptions.softPendingCompactionMBLimit) * 1024 * 1024;
         options.hard_pending_compaction_bytes_limit =
-            rocksGlobalOptions.hardPendingCompactionBytesLimit;
+            static_cast<unsigned long long>(rocksGlobalOptions.hardPendingCompactionMBLimit) * 1024 * 1024;
         options.target_file_size_base = 64 * 1024 * 1024;  // 64MB
         options.soft_rate_limit = 2.5;
         options.hard_rate_limit = 3;

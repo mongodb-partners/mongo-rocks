@@ -71,8 +71,8 @@ namespace mongo {
         int level0SlowdownWritesTrigger;
         int level0StopWritesTrigger;
         long maxBytesForLevelBase;
-        unsigned long long softPendingCompactionBytesLimit;
-        unsigned long long hardPendingCompactionBytesLimit;
+        int softPendingCompactionMBLimit;
+        int hardPendingCompactionMBLimit;
     };
 
     extern RocksGlobalOptions rocksGlobalOptions;

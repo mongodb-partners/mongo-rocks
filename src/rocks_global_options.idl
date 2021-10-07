@@ -186,17 +186,17 @@ configs:
         short_name: rocksdbMaxBytesForLevelBase
         # 512 MB
         default: 536870912
-    "storage.rocksdb.softPendingCompactionBytesLimit":
-        description: 'rocksdb engine soft pending compaction bytes limit'
-        arg_vartype: Long
-        cpp_varname: 'rocksGlobalOptions.softPendingCompactionBytesLimit'
-        short_name: rocksdbSoftPendingCompactionBytesLimit
+    "storage.rocksdb.softPendingCompactionMBLimit":
+        description: 'rocksdb engine soft pending compaction MB limit'
+        arg_vartype: Int
+        cpp_varname: 'rocksGlobalOptions.softPendingCompactionMBLimit'
+        short_name: rocksdbSoftPendingCompactionMBLimit
         # 300 GB
-        default: 322122547200
-    "storage.rocksdb.hardPendingCompactionBytesLimit":
-        description: 'rocksdb engine hard pending compaction bytes limit'
-        arg_vartype: Long
-        cpp_varname: 'rocksGlobalOptions.hardPendingCompactionBytesLimit'
-        short_name: rocksdbHardPendingCompactionBytesLimit
+        default: 307200
+    "storage.rocksdb.hardPendingCompactionMBLimit":
+        description: 'rocksdb engine hard pending compaction MB limit'
+        arg_vartype: Int
+        cpp_varname: 'rocksGlobalOptions.hardPendingCompactionMBLimit'
+        short_name: rocksdbHardPendingCompactionMBLimit
         # 500 GB
-        default: 536870912000
+        default: 512000
