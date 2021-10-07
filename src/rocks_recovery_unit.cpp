@@ -655,7 +655,7 @@ namespace mongo {
             }
         }
 
-        LOG(0) << "Rocks begin_transaction for snapshot id " << _mySnapshotId << ",src "
+        LOG(1) << "Rocks begin_transaction for snapshot id " << _mySnapshotId << ",src "
                << (int)_timestampReadSource;
     }
 
