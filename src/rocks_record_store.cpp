@@ -744,7 +744,9 @@ namespace mongo {
         } else {
             iterator->SeekToFirst();
             if(iterator->Valid()){
-               cappedTruncateAfter(opCtx, _makeRecordId(iterator->key()), true);
+                const bool inclusive = true;
+                const bool isTruncate = true;
+                cappedTruncateAfter(opCtx, _makeRecordId(iterator->key()), inclusive, isTruncate);
             }
         }
 
