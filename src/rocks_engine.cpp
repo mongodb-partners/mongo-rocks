@@ -1015,10 +1015,10 @@ namespace mongo {
         LOG_FOR_ROLLBACK(0) << "Rolling back to the stable timestamp. StableTimestamp: "
             << stableTimestamp
             << " Initial Data Timestamp: " << initialDataTimestamp;
-        auto s = _db->RollbackToStable(_defaultCf.get());
-        if (!s.ok()) {
-            return {ErrorCodes::UnrecoverableRollbackError, 
-                str::stream() << "Error rolling back to stable. Err: " << s.ToString()};
+        auto s = _compactionScheduler->rollbackToStable(_defaultCf.get());
+        if (!s.isOK()) {
+            return {ErrorCodes::UnrecoverableRollbackError,
+                    str::stream() << "Error rolling back to stable. Err: " << s};
         }
 
         setInitialDataTimestamp(initialDataTimestamp);
