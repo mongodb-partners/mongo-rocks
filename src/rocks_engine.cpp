@@ -1078,7 +1078,7 @@ namespace mongo {
                                         RocksRecordStore* oplogRecordStore) {
         stdx::lock_guard<Latch> lock(_oplogManagerMutex);
         if (_oplogManagerCount == 0)
-            _oplogManager->start(opCtx, oplogRecordStore, !_keepDataHistory);
+            _oplogManager->start(opCtx, oplogRecordStore);
         _oplogManagerCount++;
     }
 
