@@ -36,6 +36,7 @@
 #include "mongo/logger/parse_log_component_settings.h"
 #include "mongo/util/log.h"
 #include "mongo/util/str.h"
+#include "rocks_global_options.h"
 
 #include <rocksdb/cache.h>
 #include <rocksdb/convenience.h>
@@ -181,18 +182,58 @@ namespace mongo {
 
     Status RocksOptionsParameter::setFromString(const std::string& str) {
         log() << "RocksDB: Attempting to apply settings: " << str;
+        std::set<std::string> supported_db_options = {"db_write_buffer_size", "delayed_write_rate",
+                                                      "max_background_jobs", "max_total_wal_size"};
 
+        std::set<std::string> supported_cf_options = {"max_write_buffer_number",
+                                                      "disable_auto_compactions",
+                                                      "level0_slowdown_writes_trigger",
+                                                      "level0_stop_writes_trigger",
+                                                      "soft_pending_compaction_bytes_limit",
+                                                      "hard_pending_compaction_bytes_limit"};
         std::unordered_map<std::string, std::string> optionsMap;
         rocksdb::Status s = rocksdb::StringToMap(str, &optionsMap);
         if (!s.ok()) {
             return Status(ErrorCodes::BadValue, s.ToString());
         }
-
-        s = _data->getDB()->SetOptions(optionsMap);
+        for (const auto& v : optionsMap) {
+            if (supported_db_options.find(v.first) != supported_db_options.end()) {
+                s = _data->getDB()->SetDBOptions({v});
+            } else if (supported_cf_options.find(v.first) != supported_cf_options.end()) {
+                s = _data->getDB()->SetOptions({v});
+            } else {
+                return Status(ErrorCodes::BadValue, str::stream() << "unknown param: " << v.first);
+            }
+        }
         if (!s.ok()) {
             return Status(ErrorCodes::BadValue, s.ToString());
         }
 
+        return Status::OK();
+    }
+
+    void RocksdbMaxConflictCheckSizeParameter::append(OperationContext* opCtx, BSONObjBuilder& b,
+                                                      const std::string& name) {
+        b << name << rocksGlobalOptions.maxConflictCheckSizeMB;
+    }
+
+    Status RocksdbMaxConflictCheckSizeParameter::set(const BSONElement& newValueElement) {
+        return setFromString(newValueElement.toString(false));
+    }
+
+    Status RocksdbMaxConflictCheckSizeParameter::setFromString(const std::string& str) {
+        std::string trimStr;
+        size_t pos = str.find('.');
+        if (pos != std::string::npos) {
+            trimStr = str.substr(0, pos);
+        }
+        int newValue;
+        Status status = parseNumberFromString(trimStr, &newValue);
+        if (!status.isOK()) {
+            return status;
+        }
+        rocksGlobalOptions.maxConflictCheckSizeMB = newValue;
+        _data->getDB()->SetMaxConflictBytes(newValue * 1024 * 1024);
         return Status::OK();
     }
 }  // namespace mongo

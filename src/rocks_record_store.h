@@ -170,6 +170,8 @@ namespace mongo {
                                        double scale) const;
 
         virtual void cappedTruncateAfter(OperationContext* opCtx, RecordId end, bool inclusive);
+        void cappedTruncateAfter(OperationContext* opCtx, RecordId end, bool inclusive,
+                                 bool isTruncate);
 
         virtual boost::optional<RecordId> oplogStartHack(OperationContext* opCtx,
                                                          const RecordId& startingPosition) const;

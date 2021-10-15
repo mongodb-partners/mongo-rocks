@@ -32,7 +32,7 @@
 #include "mongo_rate_limiter_checker.h"
 
 #ifdef __linux__
-#include "rocks_parameters.h"
+#include "mongo/db/modules/rocks/src/rocks_parameters_gen.h"
 #include "rocks_util.h"
 #include "mongo/db/server_options.h"
 #include "mongo/db/service_context.h"

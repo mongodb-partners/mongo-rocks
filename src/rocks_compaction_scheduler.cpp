@@ -71,15 +71,22 @@ namespace mongo {
 
         class OplogCompactionFilter: public rocksdb::CompactionFilter {
         public:
-            explicit OplogCompactionFilter(const std::string& from, const std::string& until)
-                : _from(from), _until(until) {}
+            explicit OplogCompactionFilter(const std::string& from, const std::string& until,
+                                           RocksCompactionScheduler* compactionScheduler)
+                : _from(from), _until(until), _compactionScheduler(compactionScheduler) {}
 
             // filter is not called from multiple threads simultaneously
             virtual bool Filter(int level, const rocksdb::Slice& key,
                                 const rocksdb::Slice& existing_value, std::string* new_value,
                                 bool* value_changed) const {
-                return key.compare(rocksdb::Slice(_until)) <= 0 &&
-                       key.compare(rocksdb::Slice(_from)) >= 0;
+                bool filter = (key.compare(rocksdb::Slice(_until)) <= 0 &&
+                               key.compare(rocksdb::Slice(_from)) >= 0);
+                if (filter) {
+                    _compactionScheduler->addOplogCompactRemoved();
+                } else {
+                    _compactionScheduler->addOplogCompactPreserved();
+                }
+                return filter;
             }
 
 // IgnoreSnapshots is available since RocksDB 4.3
@@ -92,6 +99,7 @@ namespace mongo {
         private:
             const std::string _from;
             const std::string _until;
+            RocksCompactionScheduler* _compactionScheduler;
         };
 
         class PrefixDeletingCompactionFilter : public rocksdb::CompactionFilter {
@@ -135,8 +143,7 @@ namespace mongo {
 
         class PrefixDeletingCompactionFilterFactory : public rocksdb::CompactionFilterFactory {
         public:
-            explicit PrefixDeletingCompactionFilterFactory(
-                const RocksCompactionScheduler* scheduler)
+            explicit PrefixDeletingCompactionFilterFactory(RocksCompactionScheduler* scheduler)
                 : _compactionScheduler(scheduler) {}
 
             virtual std::unique_ptr<rocksdb::CompactionFilter> CreateCompactionFilter(
@@ -146,8 +153,9 @@ namespace mongo {
                     if (!context.is_manual_compaction) {
                         return std::unique_ptr<rocksdb::CompactionFilter>(nullptr);
                     }
-                    return std::unique_ptr<rocksdb::CompactionFilter>(
-                        new OplogCompactionFilter(oplogDelUntil->second.first, oplogDelUntil->second.second));
+                    return std::unique_ptr<rocksdb::CompactionFilter>(new OplogCompactionFilter(
+                        oplogDelUntil->second.first, oplogDelUntil->second.second,
+                        _compactionScheduler));
                 }
                 auto droppedPrefixes = _compactionScheduler->getDroppedPrefixes();
                 if (droppedPrefixes.size() == 0) {
@@ -168,18 +176,20 @@ namespace mongo {
             }
 
         private:
-            const RocksCompactionScheduler* _compactionScheduler;
+            RocksCompactionScheduler* _compactionScheduler;
         };
     }  // namespace
 
     class CompactionBackgroundJob : public BackgroundJob {
     public:
-        CompactionBackgroundJob(rocksdb::DB* db, RocksCompactionScheduler* compactionScheduler);
+        CompactionBackgroundJob(rocksdb::TOTransactionDB* db,
+                                RocksCompactionScheduler* compactionScheduler);
         virtual ~CompactionBackgroundJob();
 
         // schedule compact range operation for execution in _compactionThread
         void scheduleCompactOp(rocksdb::ColumnFamilyHandle* cf, const std::string& begin,
                                const std::string& end, bool rangeDropped, uint32_t order,
+                               const bool trimHistory,
                                boost::optional<std::shared_ptr<Notification<Status>>>);
 
     private:
@@ -190,6 +200,7 @@ namespace mongo {
             std::string _end_str;
             bool _rangeDropped;
             uint32_t _order;
+            bool _trimHistory;
             boost::optional<std::shared_ptr<Notification<Status>>> _notification;
             bool operator>(const CompactOp& other) const { return _order > other._order; }
         };
@@ -202,7 +213,7 @@ namespace mongo {
 
         void compact(const CompactOp& op);
 
-        rocksdb::DB* _db;                                // not owned
+        rocksdb::TOTransactionDB* _db;                   // not owned
         RocksCompactionScheduler* _compactionScheduler;  // not owned
 
         bool _compactionThreadRunning = true;
@@ -215,7 +226,7 @@ namespace mongo {
 
     const char* const CompactionBackgroundJob::_name = "RocksCompactionThread";
 
-    CompactionBackgroundJob::CompactionBackgroundJob(rocksdb::DB* db,
+    CompactionBackgroundJob::CompactionBackgroundJob(rocksdb::TOTransactionDB* db,
                                                      RocksCompactionScheduler* compactionScheduler)
         : _db(db), _compactionScheduler(compactionScheduler) {
         go();
@@ -288,13 +299,13 @@ namespace mongo {
         LOG(1) << "Compaction thread terminating" << std::endl;
     }
 
-    void CompactionBackgroundJob::scheduleCompactOp(rocksdb::ColumnFamilyHandle* cf,
-                                                    const std::string& begin, const std::string& end,
-                                                    bool rangeDropped, uint32_t order,
-                                                    boost::optional<std::shared_ptr<Notification<Status>>> notification) {
+    void CompactionBackgroundJob::scheduleCompactOp(
+        rocksdb::ColumnFamilyHandle* cf, const std::string& begin, const std::string& end,
+        bool rangeDropped, uint32_t order, bool trimHistory,
+        boost::optional<std::shared_ptr<Notification<Status>>> notification) {
         {
             stdx::lock_guard<Latch> lk(_compactionMutex);
-            _compactionQueue.push({cf, begin, end, rangeDropped, order, notification});
+            _compactionQueue.push({cf, begin, end, rangeDropped, order, trimHistory, notification});
         }
         _compactionWakeUp.notify_one();
     }
@@ -302,33 +313,116 @@ namespace mongo {
     void CompactionBackgroundJob::compact(const CompactOp& op) {
         rocksdb::Slice start_slice(op._start_str);
         rocksdb::Slice end_slice(op._end_str);
+        rocksdb::Status s = rocksdb::Status::OK();
 
         rocksdb::Slice* start = !op._start_str.empty() ? &start_slice : nullptr;
         rocksdb::Slice* end = !op._end_str.empty() ? &end_slice : nullptr;
         const bool isOplog = NamespaceString::oplog(op._cf->GetName());
         LOG(1) << "Starting compaction of cf: " << op._cf->GetName()
-               << " range: " << (start ? start->ToString(true) : "<begin>")
-               << " .. " << (end ? end->ToString(true) : "<end>") << " (rangeDropped is "
-               << op._rangeDropped << ")" << " (isOplog is " << isOplog << ")";
+               << " range: " << (start ? start->ToString(true) : "<begin>") << " .. "
+               << (end ? end->ToString(true) : "<end>") << " (rangeDropped is " << op._rangeDropped
+               << ")"
+               << " (isOplog is " << isOplog << ")"
+               << " (trimHistory is " << op._trimHistory << ")";
 
-        if (op._rangeDropped) {
-            auto s = rocksdb::DeleteFilesInRange(_db, op._cf, start, end);
-            if (!s.ok()) {
-                // Do not fail the entire procedure, since there is still chance
-                // to purge the range below, in CompactRange
-                log() << "Failed to delete files in compacted range: " << s.ToString();
+        if (op._trimHistory) {
+            invariant(!start && !end && !op._rangeDropped && !isOplog);
+            s = _db->RollbackToStable(op._cf);
+        } else {
+            if (op._rangeDropped || isOplog) {
+                std::vector<rocksdb::LiveFileMetaData> beforeDelFiles;
+                std::vector<rocksdb::LiveFileMetaData> afterDelFiles;
+                std::vector<rocksdb::LiveFileMetaData> diffFiles;
+                auto queryDelFilesInRange = [&]() -> std::vector<rocksdb::LiveFileMetaData> {
+                    if (op._start_str.empty() && op._end_str.empty()) {
+                        return {};
+                    }
+                    std::vector<rocksdb::LiveFileMetaData> toDelFiles;
+                    std::vector<rocksdb::LiveFileMetaData> allFiles;
+                    _db->GetRootDB()->GetLiveFilesMetaData(&allFiles);
+                    for (const auto& f : allFiles) {
+                        if (!NamespaceString::oplog(f.column_family_name)) {
+                            continue;
+                        }
+                        // [start, end]
+                        if (!op._start_str.empty() && !op._end_str.empty()) {
+                            if ((op._start_str <= f.smallestkey) && (f.largestkey <= op._end_str)) {
+                                toDelFiles.push_back(f);
+                            }
+                        } else if (op._start_str.empty() && (f.largestkey <= op._end_str)) {
+                            // [start, max()
+                            toDelFiles.push_back(f);
+                        } else if (op._end_str.empty() && (op._start_str <= f.smallestkey)) {
+                            // min(), end]
+                            toDelFiles.push_back(f);
+                        } else {
+                            // skip
+                        }
+                    }
+                    return toDelFiles;
+                };
+                if (isOplog) {
+                    LOG(1) << "Before DeleteFilesInRange Stats: " << op._cf->GetName();
+                    beforeDelFiles = queryDelFilesInRange();
+                }
+
+                auto s1 = rocksdb::DeleteFilesInRange(_db, op._cf, start, end);
+                if (!s1.ok()) {
+                    // Do not fail the entire procedure, since there is still chance
+                    // to purge the range below, in CompactRange
+                    log() << "Failed to delete files in compacted range: " << s1.ToString();
+                }
+
+                if (isOplog) {
+                    LOG(1) << "After DeleteFilesInRange Stats: " << op._cf->GetName();
+                    afterDelFiles = queryDelFilesInRange();
+                    [&]() {
+                        for (const auto& f : beforeDelFiles) {
+                            invariant(NamespaceString::oplog(f.column_family_name));
+
+                            auto vit = std::find_if(afterDelFiles.begin(), afterDelFiles.end(),
+                                                    [&](const rocksdb::LiveFileMetaData& a) {
+                                                        return a.name == f.name;
+                                                    });
+
+                            // not found
+                            if (vit == afterDelFiles.end()) {
+                                diffFiles.push_back(f);
+                            }
+                        }
+                    }();
+                    auto oplogFilesStats = [&]() {
+                        uint64_t oplogEntries = 0;
+                        uint64_t oplogSizesum = 0;
+
+                        for (const auto& f : diffFiles) {
+                            invariant(NamespaceString::oplog(f.column_family_name));
+
+                            oplogEntries += f.num_entries;
+                            oplogSizesum += f.size;
+                        }
+                        return std::make_pair(oplogEntries, oplogSizesum);
+                    }();
+                    _compactionScheduler->addOplogEntriesDeleted(oplogFilesStats.first);
+                    _compactionScheduler->addOplogSizeDeleted(oplogFilesStats.second);
+                }
             }
+
+            rocksdb::CompactRangeOptions compact_options;
+            compact_options.bottommost_level_compaction =
+                rocksdb::BottommostLevelCompaction::kForce;
+            // if auto-compaction runs parallelly, oplog compact-range may leave a hole.
+            compact_options.exclusive_manual_compaction = isOplog;
+            compact_options.ignore_pin_timestamp = isOplog;
+
+            s = _db->CompactRange(compact_options, op._cf, start, end);
         }
-
-        rocksdb::CompactRangeOptions compact_options;
-        compact_options.bottommost_level_compaction = rocksdb::BottommostLevelCompaction::kForce;
-        // if auto-compaction runs parallelly, oplog compact-range may leave a hole.
-        compact_options.exclusive_manual_compaction = isOplog;
-        compact_options.ignore_pin_timestamp = isOplog;
-
-        auto s = _db->CompactRange(compact_options, op._cf, start, end);
         if (!s.ok()) {
-            log() << "Failed to compact range: " << s.ToString();
+            if (op._trimHistory) {
+                log() << "Failed to RollbackToStable: " << s.ToString();
+            } else {
+                log() << "Failed to compact range: " << s.ToString();
+            }
             if (op._notification != boost::none) {
                 (*op._notification)->set(rocksToMongoStatus(s));
             }
@@ -352,7 +446,8 @@ namespace mongo {
     RocksCompactionScheduler::RocksCompactionScheduler()
         : _db(nullptr), _metaCf(nullptr), _droppedPrefixesCount(0) {}
 
-    void RocksCompactionScheduler::start(rocksdb::DB* db, rocksdb::ColumnFamilyHandle* cf) {
+    void RocksCompactionScheduler::start(rocksdb::TOTransactionDB* db,
+                                         rocksdb::ColumnFamilyHandle* cf) {
         _db = db;
         _metaCf = cf;
         _timer.reset();
@@ -387,7 +482,9 @@ namespace mongo {
     void RocksCompactionScheduler::compactAll() {
         // NOTE(wolfkdy): compactAll only compacts DefaultColumnFamily
         // oplog cf is handled in RocksRecordStore.
-        compact(_db->DefaultColumnFamily(), std::string(), std::string(), false, kOrderFull, boost::none);
+        const bool trimHistory = false;
+        compact(_db->DefaultColumnFamily(), std::string(), std::string(), false, kOrderFull,
+                trimHistory, boost::none);
     }
 
     Status RocksCompactionScheduler::compactOplog(rocksdb::ColumnFamilyHandle* cf,
@@ -402,7 +499,8 @@ namespace mongo {
             _oplogDeleteUntil = std::make_pair(cf->GetID(), std::make_pair(begin, end));
         }
         auto notification = std::make_shared<Notification<Status>>();
-        compact(cf, begin, end, false, kOrderOplog, notification);
+        const bool trimHistory = false;
+        compact(cf, begin, end, false, kOrderOplog, trimHistory, notification);
         auto s = notification->get();
         if (!s.isOK()) {
             LOG(0) << "compactOplog to " << rocksdb::Slice(end).ToString() << " failed " << s;
@@ -410,26 +508,41 @@ namespace mongo {
         return s;
     }
 
+    Status RocksCompactionScheduler::rollbackToStable(rocksdb::ColumnFamilyHandle* cf) {
+        auto notification = std::make_shared<Notification<Status>>();
+        const bool trimHistory = true;
+        compact(cf, std::string(), std::string(), false, kOrderOplog, trimHistory, notification);
+        auto s = notification->get();
+        if (!s.isOK()) {
+            LOG(0) << "rollbackToStable failed: " << s;
+        }
+        return s;
+    }
+
     void RocksCompactionScheduler::compactPrefix(rocksdb::ColumnFamilyHandle* cf, const std::string& prefix) {
-        compact(cf, prefix, rocksGetNextPrefix(prefix), false, kOrderRange, boost::none);
+        bool trimHistory = false;
+        compact(cf, prefix, rocksGetNextPrefix(prefix), false, kOrderRange, trimHistory,
+                boost::none);
     }
 
     void RocksCompactionScheduler::compactDroppedPrefix(rocksdb::ColumnFamilyHandle* cf,
                                                         const std::string& prefix) {
         LOG(0) << "Compacting dropped prefix: " << rocksdb::Slice(prefix).ToString(true)
                << " from cf: " << cf->GetName();
-        compact(cf, prefix, rocksGetNextPrefix(prefix), true, kOrderDroppedRange, boost::none);
+        bool trimHistory = false;
+        compact(cf, prefix, rocksGetNextPrefix(prefix), true, kOrderDroppedRange, trimHistory,
+                boost::none);
     }
 
-    void RocksCompactionScheduler::compact(rocksdb::ColumnFamilyHandle* cf,
-                                           const std::string& begin, const std::string& end,
-                                           bool rangeDropped, uint32_t order,
-                                           boost::optional<std::shared_ptr<Notification<Status>>> notification) {
-        _compactionJob->scheduleCompactOp(cf, begin, end, rangeDropped, order, notification);
+    void RocksCompactionScheduler::compact(
+        rocksdb::ColumnFamilyHandle* cf, const std::string& begin, const std::string& end,
+        bool rangeDropped, uint32_t order, const bool trimHistory,
+        boost::optional<std::shared_ptr<Notification<Status>>> notification) {
+        _compactionJob->scheduleCompactOp(cf, begin, end, rangeDropped, order, trimHistory,
+                                          notification);
     }
 
-    rocksdb::CompactionFilterFactory* RocksCompactionScheduler::createCompactionFilterFactory()
-        const {
+    rocksdb::CompactionFilterFactory* RocksCompactionScheduler::createCompactionFilterFactory() {
         return new PrefixDeletingCompactionFilterFactory(this);
     }
 
@@ -451,8 +564,6 @@ namespace mongo {
             (uint32_t)get_internal_delete_skipped_count();
         int dropped_count = 0;
         uint32_t int_prefix = 0;
-
-        // NOTE(cuixin): only invoke in rocksengine contruct function, no need check conflict
         for (iter->Seek(kDroppedPrefix); iter->Valid() && iter->key().starts_with(kDroppedPrefix);
              iter->Next()) {
             invariantRocksOK(iter->status());
@@ -566,5 +677,31 @@ namespace mongo {
                 compactPrefix(_metaCf, encodePrefix(0));
             }
         }
+    }
+
+    void RocksCompactionScheduler::addOplogEntriesDeleted(const uint64_t entries) {
+        _oplogEntriesDeleted.fetch_add(entries, std::memory_order_relaxed);
+    }
+
+    void RocksCompactionScheduler::addOplogSizeDeleted(const uint64_t size) {
+        _oplogSizeDeleted.fetch_add(size, std::memory_order_relaxed);
+    }
+
+    void RocksCompactionScheduler::addOplogCompactRemoved() {
+        _oplogCompactSkip.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    void RocksCompactionScheduler::addOplogCompactPreserved() {
+        _oplogCompactKeep.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    const OplogDelCompactStats RocksCompactionScheduler::getOplogDelCompactStats() const {
+        OplogDelCompactStats stats;
+        stats.oplogEntriesDeleted = _oplogEntriesDeleted.load(std::memory_order_relaxed);
+        stats.oplogSizeDeleted = _oplogSizeDeleted.load(std::memory_order_relaxed);
+        stats.oplogCompactSkip = _oplogCompactSkip.load(std::memory_order_relaxed);
+        stats.oplogCompactKeep = _oplogCompactKeep.load(std::memory_order_relaxed);
+
+        return stats;
     }
 }  // namespace mongo
