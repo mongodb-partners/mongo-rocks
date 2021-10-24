@@ -744,7 +744,9 @@ namespace mongo {
         } else {
             iterator->SeekToFirst();
             if(iterator->Valid()){
-               cappedTruncateAfter(opCtx, _makeRecordId(iterator->key()), true);
+                const bool inclusive = true;
+                const bool isTruncate = true;
+                cappedTruncateAfter(opCtx, _makeRecordId(iterator->key()), inclusive, isTruncate);
             }
         }
 
@@ -882,6 +884,14 @@ namespace mongo {
 
     void RocksRecordStore::cappedTruncateAfter(OperationContext* opCtx, RecordId end,
                                                bool inclusive) {
+        cappedTruncateAfter(opCtx, end, inclusive, false);
+    }
+    void RocksRecordStore::cappedTruncateAfter(OperationContext* opCtx, RecordId end,
+                                               bool inclusive, bool isTruncate) {
+        if (isTruncate) {
+            invariant(inclusive && _isOplog);
+        }
+
         // Only log messages at a lower level here for testing.
         int logLevel = getTestCommandsEnabled() ? 0 : 2;
 
@@ -901,7 +911,12 @@ namespace mongo {
             std::unique_ptr<SeekableRecordCursor> reverseCursor = getCursor(opCtx, false);
             invariant(reverseCursor->seekExact(end));
             auto prev = reverseCursor->next();
-            lastKeptId = prev ? prev->id : RecordId();
+            if (prev) {
+                lastKeptId = prev->id;
+            } else {
+                invariant(_isOplog && isTruncate);
+                lastKeptId = RecordId();
+            }
             firstRemovedId = end;
             LOG(0) << "lastKeptId: " << Timestamp(lastKeptId.repr());
         } else {
@@ -986,27 +1001,29 @@ namespace mongo {
                 }
 
             }
-            // Immediately rewind visibility to our truncation point, to prevent new
-            // transactions from appearing.
-            LOG(logLevel) << "Rewinding oplog visibility point to " << truncTs
-                          << " after truncation.";
+            if (!isTruncate) {
+                // Immediately rewind visibility to our truncation point, to prevent new
+                // transactions from appearing.
+                LOG(logLevel) << "Rewinding oplog visibility point to " << truncTs
+                              << " after truncation.";
 
-            if (!serverGlobalParams.enableMajorityReadConcern &&
-                _engine->getOldestTimestamp() > truncTs) {
-                // If majority read concern is disabled, we must set the oldest timestamp along with
-                // the commit timestamp. Otherwise, the commit timestamp might be set behind the
-                // oldest timestamp.
-                const bool force = true;
-                _engine->setOldestTimestamp(truncTs, force);
-            } else {
-                const bool force = false;
-                invariantRocksOK(_engine->getDB()->SetTimeStamp(
-                    rocksdb::TimeStampType::kCommitted, rocksdb::RocksTimeStamp(truncTs.asULL()),
-                    force));
+                if (!serverGlobalParams.enableMajorityReadConcern &&
+                    _engine->getOldestTimestamp() > truncTs) {
+                    // If majority read concern is disabled, we must set the oldest timestamp along
+                    // with the commit timestamp. Otherwise, the commit timestamp might be set
+                    // behind the oldest timestamp.
+                    const bool force = true;
+                    _engine->setOldestTimestamp(truncTs, force);
+                } else {
+                    const bool force = false;
+                    invariantRocksOK(_engine->getDB()->SetTimeStamp(
+                        rocksdb::TimeStampType::kCommitted,
+                        rocksdb::RocksTimeStamp(truncTs.asULL()), force));
+                }
+
+                _oplogManager->setOplogReadTimestamp(truncTs);
+                LOG(1) << "truncation new read timestamp: " << truncTs;
             }
-
-            _oplogManager->setOplogReadTimestamp(truncTs);
-            LOG(1) << "truncation new read timestamp: " << truncTs;
         }
     }
 

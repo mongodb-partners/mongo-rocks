@@ -55,7 +55,7 @@ namespace mongo {
                           RocksDurabilityManager* durabilityManager);
         virtual ~RocksOplogManager(){};
 
-        void start(OperationContext* opCtx, RocksRecordStore* oplogRecordStore, const bool updateOldestTimestamp);
+        void start(OperationContext* opCtx, RocksRecordStore* oplogRecordStore);
 
         void halt();
 
@@ -84,7 +84,7 @@ namespace mongo {
         Timestamp fetchAllDurableValue();
 
     private:
-        void _oplogJournalThreadLoop(RocksRecordStore* oplogRecordStore, const bool updateOldestTimestamp) noexcept;
+        void _oplogJournalThreadLoop(RocksRecordStore* oplogRecordStore) noexcept;
 
         void _setOplogReadTimestamp(WithLock, uint64_t newTimestamp);
 

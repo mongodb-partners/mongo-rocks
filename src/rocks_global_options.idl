@@ -106,3 +106,97 @@ configs:
         default: 'info'
         validator:
             callback: 'RocksGlobalOptions::validateRocksdbLogLevel'
+    "storage.rocksdb.maxConflictCheckSizeMB":
+        description: 'This is still experimental. Use this only if you know what you are doing'
+        arg_vartype: Int
+        cpp_varname: 'rocksGlobalOptions.maxConflictCheckSizeMB'
+        short_name: rocksdbMaxConflictCheckSizeMB
+        default: 200
+        validator:
+            gte: 1
+            lte: 10000
+    "storage.rocksdb.maxBackgroundJobs":
+        description: 'rocksdb engine max background jobs'
+        arg_vartype: Int
+        cpp_varname: 'rocksGlobalOptions.maxBackgroundJobs'
+        short_name: rocksdbMaxBackgroundJobs
+        default: 2
+    "storage.rocksdb.maxTotalWalSize":
+        description: 'rocksdb engine max total wal size'
+        arg_vartype: Long
+        cpp_varname: 'rocksGlobalOptions.maxTotalWalSize'
+        short_name: rocksdbMaxTotalWalSize
+        # 100 MB
+        default: 104857600
+    "storage.rocksdb.dbWriteBufferSize":
+        description: 'rocksdb engine db write buffer size'
+        arg_vartype: Long
+        cpp_varname: 'rocksGlobalOptions.dbWriteBufferSize'
+        short_name: rocksdbDbWriteBufferSize
+        # 128 MB
+        default: 134217728
+    "storage.rocksdb.writeBufferSize":
+        description: 'rocksdb engine write buffer size'
+        arg_vartype: Long
+        cpp_varname: 'rocksGlobalOptions.writeBufferSize'
+        short_name: rocksdbWriteBufferSize
+        # 16 MB
+        default: 16777216
+    "storage.rocksdb.delayedWriteRate":
+        description: 'rocksdb engine delay write rate'
+        arg_vartype: Long
+        cpp_varname: 'rocksGlobalOptions.delayedWriteRate'
+        short_name: rocksdbDelayedWriteRate
+        # 512 MB
+        default: 536870912
+    "storage.rocksdb.numLevels":
+        description: 'rocksdb engine num levels'
+        arg_vartype: Int
+        cpp_varname: 'rocksGlobalOptions.numLevels'
+        short_name: rocksdbNumLevels
+        default: 5
+    "storage.rocksdb.maxWriteBufferNumber":
+        description: 'rocksdb engine max write buffer number'
+        arg_vartype: Int
+        cpp_varname: 'rocksGlobalOptions.maxWriteBufferNumber'
+        short_name: rocksdbMaxWriteBufferNumber
+        default: 4
+    "storage.rocksdb.level0FileNumCompactionTrigger":
+        description: 'rocksdb engine level0 file num compaction trigger'
+        arg_vartype: Int
+        cpp_varname: 'rocksGlobalOptions.level0FileNumCompactionTrigger'
+        short_name: rocksdbLevel0FileNumCompactionTrigger
+        default: 4
+    "storage.rocksdb.level0SlowdownWritesTrigger":
+        description: 'rocksdb engine level0 stop writes trigger'
+        arg_vartype: Int
+        cpp_varname: 'rocksGlobalOptions.level0SlowdownWritesTrigger'
+        short_name: rocksdbLevel0SlowdownWritesTrigger
+        default: 128
+    "storage.rocksdb.level0_stop_writes_trigger":
+        description: 'rocksdb engine level0 stop writes trigger'
+        arg_vartype: Int
+        cpp_varname: 'rocksGlobalOptions.level0StopWritesTrigger'
+        short_name: rocksdbLevel0StopWritesTrigger
+        default: 512
+    "storage.rocksdb.maxBytesForLevelBase":
+        description: 'rocksdb engine max bytes for level base'
+        arg_vartype: Long
+        cpp_varname: 'rocksGlobalOptions.maxBytesForLevelBase'
+        short_name: rocksdbMaxBytesForLevelBase
+        # 512 MB
+        default: 536870912
+    "storage.rocksdb.softPendingCompactionMBLimit":
+        description: 'rocksdb engine soft pending compaction MB limit'
+        arg_vartype: Int
+        cpp_varname: 'rocksGlobalOptions.softPendingCompactionMBLimit'
+        short_name: rocksdbSoftPendingCompactionMBLimit
+        # 300 GB
+        default: 307200
+    "storage.rocksdb.hardPendingCompactionMBLimit":
+        description: 'rocksdb engine hard pending compaction MB limit'
+        arg_vartype: Int
+        cpp_varname: 'rocksGlobalOptions.hardPendingCompactionMBLimit'
+        short_name: rocksdbHardPendingCompactionMBLimit
+        # 500 GB
+        default: 512000

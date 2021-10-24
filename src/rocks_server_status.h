@@ -44,6 +44,14 @@ namespace mongo {
         BSONObj generateSection(OperationContext* opCtx,
                                 const BSONElement& configElement) const override;
 
+    protected:
+        virtual void generatePropertiesSection(BSONObjBuilder* bob) const;
+        virtual void generateThreadStatusSection(BSONObjBuilder* bob) const;
+        virtual void generateCountersSection(BSONObjBuilder* bob) const;
+        virtual void generateTxnStatsSection(BSONObjBuilder* bob) const;
+        virtual void generateOplogDelStatsSection(BSONObjBuilder* bob) const;
+        virtual void generateCompactSchedulerSection(BSONObjBuilder* bob) const;
+        virtual void generateDefaultCFEntriesNumSection(BSONObjBuilder* bob) const;
     private:
         RocksEngine* _engine;
     };
