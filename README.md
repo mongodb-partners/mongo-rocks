@@ -4,7 +4,7 @@
 + v3.2
 + v3.4
 + v4.0.3
-+ v4.2.5_rc2
++ v4.2.5
 
 ### How to build
 See BUILD.md
