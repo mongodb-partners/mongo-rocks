@@ -474,8 +474,7 @@ PrepareFilterIterator::PrepareFilterIterator(
       core_(core),
       input_(std::move(input)),
       valid_(false),
-      forward_(true),
-      info_log_(info_log) {}
+      forward_(true) {}
 
 bool PrepareFilterIterator::Valid() const { return valid_; }
 

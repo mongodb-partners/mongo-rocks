@@ -340,12 +340,11 @@ TOTransaction* TOTransactionDBImpl::BeginTransaction(const WriteOptions& write_o
 
     TOTxnOptions totxn_option;
     totxn_option.max_write_batch_size = txn_options.max_write_batch_size;
-    totxn_option.log_ = info_log_;
     newActiveTxnNode = std::shared_ptr<ATN>(new ATN);
     newTransaction = new TOTransactionImpl(this, write_options, totxn_option, newActiveTxnNode);
 
     newActiveTxnNode->txn_id_ = TOTransactionImpl::GenTxnID();
-    newActiveTxnNode->txn_snapshot = dbimpl_->GetSnapshot();
+    newActiveTxnNode->txn_snapshot = GetRootDB()->GetSnapshot();
     newActiveTxnNode->timestamp_round_prepared_ =
         txn_options.timestamp_round_prepared;
     newActiveTxnNode->timestamp_round_read_ = txn_options.timestamp_round_read;
@@ -491,7 +490,7 @@ Iterator* TOTransactionDBImpl::NewIteratorConsiderPrepare(
       std::unique_ptr<PrepareMergingIterator>(new PrepareMergingIterator(
           std::move(base_writebatch), std::move(pmap_iter)));
   return new PrepareFilterIterator(GetRootDB(), column_family, core.get(),
-                                   std::move(merge_iter), info_log_);
+                                   std::move(merge_iter));
 }
 
 void TOTransactionDBImpl::StartBackgroundCleanThread() {
@@ -780,7 +779,7 @@ Status TOTransactionDBImpl::CommitTransaction(
     auto iter = active_txns_.find(core->txn_id_);
     assert(iter != active_txns_.end());
 
-    dbimpl_->ReleaseSnapshot(iter->second->txn_snapshot);
+    GetRootDB()->ReleaseSnapshot(iter->second->txn_snapshot);
     core->commit_txn_id_ = TOTransactionImpl::GenTxnID();
     iter->second->state_.store(TOTransaction::kCommitted);
 
@@ -900,7 +899,7 @@ Status TOTransactionDBImpl::RollbackTransaction(
     auto iter = active_txns_.find(core->txn_id_);
     assert(iter != active_txns_.end());
     iter->second->state_.store(TOTransaction::kRollback);
-    dbimpl_->ReleaseSnapshot(iter->second->txn_snapshot);
+    GetRootDB()->ReleaseSnapshot(iter->second->txn_snapshot);
     iter = active_txns_.erase(iter); 
     
     if (iter == active_txns_.begin()) {
@@ -1015,7 +1014,7 @@ Status TOTransactionDBImpl::SetTimeStamp(const TimeStampType& ts_type,
     {
       char buf[sizeof(RocksTimeStamp)];
       EncodeFixed64(buf, pin_ts);
-      auto s = dbimpl_->IncreaseFullHistoryTsLow(dbimpl_->DefaultColumnFamily(), std::string(buf, sizeof(buf))); 
+      auto s = GetRootDB()->IncreaseFullHistoryTsLow(GetRootDB()->DefaultColumnFamily(), std::string(buf, sizeof(buf))); 
       if (!s.ok()) {
         return s;
       }
@@ -1081,7 +1080,7 @@ Status TOTransactionDBImpl::QueryTimeStamp(const TimeStampType& ts_type,
     ReadLock rl(&ts_meta_mutex_);
     // todo
     std::string ts_holder;
-    auto s = dbimpl_->GetFullHistoryTsLow(dbimpl_->DefaultColumnFamily(), &ts_holder);
+    auto s = GetRootDB()->GetFullHistoryTsLow(GetRootDB()->DefaultColumnFamily(), &ts_holder);
     if (!s.ok()) {
       return s;
     }

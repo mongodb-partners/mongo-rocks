@@ -212,8 +212,6 @@ class PrepareFilterIterator : public Iterator {
   bool forward_;
 
   Status status_;
-
-  Logger* info_log_;
 };
 
 }  //  namespace rocksdb

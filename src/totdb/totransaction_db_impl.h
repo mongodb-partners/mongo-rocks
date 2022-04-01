@@ -12,15 +12,13 @@
 #include <unordered_map>
 #include <vector>
 #include <array>
-
+#include <functional>
 
 #include "rocksdb/db.h"
-#include "db/db_impl/db_impl.h"
 #include "util/mutexlock.h"
 #include "rocksdb/options.h"
-#include "rocksdb/utilities/totransaction_db.h"
-#include "util/murmurhash.h"
-#include "utilities/transactions/totransaction_impl.h"
+#include "totdb/totransaction_db.h"
+#include "totdb/totransaction_impl.h"
 
 namespace rocksdb {
 
@@ -58,7 +56,6 @@ class TOTransactionDBImpl : public TOTransactionDB {
   TOTransactionDBImpl(DB* db, const TOTransactionDBOptions& txn_db_options,
                       bool read_only)
       : TOTransactionDB(db),
-        dbimpl_(reinterpret_cast<DBImpl*>(db)),
         read_only_(read_only),
         txn_db_options_(txn_db_options),
         num_stripes_(DEFAULT_NUM_STRIPES),
@@ -83,10 +80,6 @@ class TOTransactionDBImpl : public TOTransactionDB {
       // we preserve at least 100MB for conflict check
       max_conflict_bytes_ = 100 * 1024 * 1024;
     }
-    info_log_ = dbimpl_->GetDBOptions().info_log.get();
-
-    uncommitted_keys_.SetLogger(info_log_);
-    committed_keys_.SetLogger(info_log_);
     active_txns_.clear();
 
     // Init default num_stripes
@@ -199,13 +192,10 @@ class TOTransactionDBImpl : public TOTransactionDB {
   using KeyModifyHistory =
       std::tuple<TransactionID, RocksTimeStamp, RocksTimeStamp>;
   using TSTXN = std::pair<RocksTimeStamp, TransactionID>;
-  DBImpl* getDbImpl() const { return dbimpl_; }
 
  protected:
-  DBImpl* dbimpl_;
   bool read_only_;
   const TOTransactionDBOptions txn_db_options_;
-  Logger* info_log_ = nullptr;
   size_t num_stripes_;
   TransactionID committed_max_txnid_;
   std::atomic<int64_t> current_conflict_bytes_;
@@ -278,19 +268,15 @@ class TOTransactionDBImpl : public TOTransactionDB {
 
   size_t GetStripe(const TxnKey& key) const {
     assert(num_stripes_ > 0);
-    static murmur_hash hash;
+    static std::hash<std::string> hash;
     size_t stripe = hash(key.second) % num_stripes_;
     return stripe;
   }
   // Uncommitted keys
   struct UnCommittedKeys {
     std::vector<UnCommittedLockMapStripe*> lock_map_stripes_;
-    Logger* info_log_;
    public:
     // Remove key from uncommitted keys
-    void SetLogger(Logger* info_log) {
-      info_log_ = info_log;
-    }
     Status RemoveKeyInLock(const TxnKey& key, const size_t& stripe_num,
                            std::atomic<int64_t>* mem_usage);
     // Check write conflict and add the key to uncommitted keys
@@ -309,11 +295,7 @@ class TOTransactionDBImpl : public TOTransactionDB {
 
   struct CommittedKeys {
     std::vector<CommittedLockMapStripe*> lock_map_stripes_;
-    Logger* info_log_;
    public:
-    void SetLogger(Logger* info_log) {
-      info_log_ = info_log;
-    }
     // Add key to committed keys
     Status AddKeyInLock(const TxnKey& key, const TransactionID& commit_txn_id,
                         const RocksTimeStamp& prepare_ts,
