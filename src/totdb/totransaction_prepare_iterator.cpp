@@ -3,10 +3,13 @@
 //  COPYING file in the root directory) and Apache 2.0 License
 //  (found in the LICENSE.Apache file in the root directory).
 
+#define MONGO_LOG_DEFAULT_COMPONENT ::mongo::logger::LogComponent::kStorage
+
 #include "utilities/transactions/totransaction_prepare_iterator.h"
 #include "util/cast_util.h"
 #include "logging/logging.h"
 #include "utilities/transactions/totransaction_db_impl.h"
+#include "mongo/util/log.h"
 
 #include <iostream>
 

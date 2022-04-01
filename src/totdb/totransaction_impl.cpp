@@ -5,6 +5,8 @@
 
 #ifndef ROCKSDB_LITE
 
+#define MONGO_LOG_DEFAULT_COMPONENT ::mongo::logger::LogComponent::kStorage
+
 #include "db/column_family.h"
 #include "rocksdb/comparator.h"
 #include "rocksdb/db.h"
@@ -15,6 +17,7 @@
 #include "util/cast_util.h"
 #include "utilities/transactions/totransaction_db_impl.h"
 #include "utilities/transactions/totransaction_impl.h"
+#include "mongo/util/log.h"
 #include <iostream>
 
 namespace rocksdb {
@@ -63,9 +66,9 @@ Status TOTransactionImpl::SetReadTimeStamp(const RocksTimeStamp& timestamp) {
     return Status::NotSupported("set read ts is supposed to be set only once");
   }
 
-  ROCKS_LOG_DEBUG(txn_option_.log_,
-                  "TOTDB txn id(%lu) set read ts(%lu) force(%d)", txn_id_,
-                  timestamp, core_->timestamp_round_read_);
+  LOG(1) << "TOTDB txn id: " << txn_id_
+         << "set read ts: " << timestamp
+         << "force: " << core_->timestamp_round_read_;
 
   Status s = txn_db_impl_->AddReadQueue(core_, timestamp);
   if (!s.ok()) {
@@ -129,8 +132,7 @@ Status TOTransactionImpl::SetCommitTimeStamp(const RocksTimeStamp& timestamp) {
   assert(core_->commit_ts_set_ &&
          (core_->first_commit_ts_ <= core_->commit_ts_));
 
-  ROCKS_LOG_DEBUG(txn_option_.log_, "TOTDB txn id(%lu) set commit ts(%lu)",
-                  core_->txn_id_, timestamp);
+  LOG(2) << "TOTDB txn id " << core_->txn_id_ << "set commit ts " << timestamp;
   return Status::OK();
 }
 
@@ -145,8 +147,7 @@ Status TOTransactionImpl::SetDurableTimeStamp(const RocksTimeStamp& timestamp) {
   }
   assert(core_->durable_ts_set_);
 
-  ROCKS_LOG_DEBUG(txn_option_.log_, "TOTDB txn id(%lu) set durable ts(%lu)",
-                  core_->txn_id_, timestamp);
+  LOG(2) << "TOTDB txn id " << core_->txn_id_ << "set durable ts " << timestamp;
   return Status::OK();
 }
 
@@ -353,7 +354,7 @@ Status TOTransactionImpl::Commit(std::function<void()>* hook) {
   // prepareHeap needs writeBatch for sanity check in debug mode.
   GetWriteBatch()->Clear();
 #endif  // NDEBUG
-  ROCKS_LOG_DEBUG(txn_option_.log_, "TOTDB txn id(%lu) committed \n", txn_id_);
+  LOG(2) << "TOTDB txn id " << txn_id_ << " committed";
   return s;
 }
 
@@ -368,7 +369,7 @@ Status TOTransactionImpl::Rollback() {
 
   GetWriteBatch()->Clear();
 
-  ROCKS_LOG_DEBUG(txn_option_.log_, "TOTDB txn id(%lu) rollback \n", txn_id_);
+  LOG(2) << "TOTDB txn id " << txn_id_ << " rollbacked";
   return s;
 }
 
