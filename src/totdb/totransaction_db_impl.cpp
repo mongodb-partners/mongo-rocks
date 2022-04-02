@@ -7,12 +7,10 @@
 
 #define MONGO_LOG_DEFAULT_COMPONENT ::mongo::logger::LogComponent::kStorage
 
-#include "utilities/transactions/totransaction_db_impl.h"
 #include <iostream>
-#include "logging/logging.h"
+#include "totdb/totransaction_db_impl.h"
 #include "util/string_util.h"
-#include "test_util/sync_point.h"
-#include "utilities/transactions/totransaction_prepare_iterator.h"
+#include "totdb/totransaction_prepare_iterator.h"
 #include "mongo/util/log.h"
 
 namespace rocksdb {
@@ -58,7 +56,7 @@ PrepareHeap::PrepareHeap() {
 std::shared_ptr<ATN> PrepareHeap::Find(
     const TOTransactionImpl::ActiveTxnNode* core, const TxnKey& key,
     TOTransaction::TOTransactionState* state) {
-  ReadLock rl(&mutex_);
+  boost::shared_lock<boost::shared_mutex> rl(mutex_);
   for (auto kv : map_) {
     std::cout << kv.first.first << ' ' << kv.first.second << ' ' << kv.first.second.size() << std::endl;
   }
@@ -108,7 +106,7 @@ void PrepareHeap::Insert(const std::shared_ptr<ATN>& core) {
   };
   BatchIterator it(iter_cb);
   {
-    WriteLock wl(&mutex_);
+    boost::unique_lock<boost::shared_mutex> wl(mutex_);
     auto status = core->write_batch_.GetWriteBatch()->Iterate(&it);
     (void)status;
     assert(status.ok() && cnt == core->write_batch_.GetWriteBatch()->Count());
@@ -137,7 +135,7 @@ uint32_t PrepareHeap::Remove(ATN* core) {
   assert(core->state_.load(std::memory_order_relaxed) ==
          TOTransaction::TOTransactionState::kPrepared);
   {
-    WriteLock wl(&mutex_);
+    boost::unique_lock<boost::shared_mutex> wl(muetx_);
     auto status = core->write_batch_.GetWriteBatch()->Iterate(&it);
     (void)status;
     assert(status.ok());
@@ -147,7 +145,7 @@ uint32_t PrepareHeap::Remove(ATN* core) {
 
 void PrepareHeap::Purge(TransactionID oldest_txn_id, RocksTimeStamp oldest_ts) {
   (void)oldest_ts;
-  WriteLock wl(&mutex_);
+  boost::unique_lock<boost::shared_mutex> wl(mutex_);
   auto it = map_.begin();
   while (it->first != sentinal_) {
     auto& lst = it->second;
@@ -396,7 +394,7 @@ void TOTransactionDBImpl::CleanCommittedKeys() {
   RocksTimeStamp ts = 0;
   
   while(clean_job_.IsRunning()) {
-    TEST_SYNC_POINT("TOTransactionDBImpl::CleanCommittedKeys::OnRunning");
+    // TEST_SYNC_POINT("TOTransactionDBImpl::CleanCommittedKeys::OnRunning");
     if (clean_job_.NeedToClean(&txn, &ts)) {
       uint64_t totalNum = 0;
       uint64_t removeKeys = 0;
@@ -501,14 +499,14 @@ void TOTransactionDBImpl::AdvanceTS(RocksTimeStamp* pMaxToCleanTs) {
   RocksTimeStamp max_to_clean_ts = 0;
 
   {
-    ReadLock rl(&ts_meta_mutex_);
+    boost::shared_lock<boost::shared_mutex> rl(ts_meta_mutex_);
     if (oldest_ts_ != nullptr) {
       max_to_clean_ts = *oldest_ts_;
     }
   }
 
   {
-    ReadLock rl(&read_ts_mutex_);
+    boost::shared_lock<boost::shared_mutex> rl(read_ts_mutex_);
     for (auto it = read_q_.begin(); it != read_q_.end();) {
       if (it->second->state_.load() == TOTransaction::kStarted) {
         assert(it->second->read_ts_set_);
@@ -526,7 +524,7 @@ void TOTransactionDBImpl::AdvanceTS(RocksTimeStamp* pMaxToCleanTs) {
 Status TOTransactionDBImpl::AddReadQueue(const std::shared_ptr<ATN>& core,
                                          const RocksTimeStamp& ts) {
   RocksTimeStamp realTs = ts;
-  ReadLock rl(&ts_meta_mutex_);
+  boost::shared_lock<boost::shared_mutex> rl(ts_meta_mutex_);
   if (oldest_ts_ != nullptr) {
     if (realTs < *oldest_ts_) {
       if (!core->timestamp_round_read_) {
@@ -540,7 +538,7 @@ Status TOTransactionDBImpl::AddReadQueue(const std::shared_ptr<ATN>& core,
 
   // take care of the critical area, read_ts_mutex_ is within
   // ts_meta_mutex_
-  WriteLock wl(&read_ts_mutex_);
+  boost::unique_lock<boost::shared_mutex> wl(read_ts_mutex_);
   assert(!core->read_ts_set_);
   assert(core->state_.load() == TOTransaction::kStarted);
   // we have to clean commited/aboarted txns, right?
@@ -586,7 +584,7 @@ Status TOTransactionDBImpl::PublushTimeStamp(const std::shared_ptr<ATN>& core) {
   }
 
   {
-    WriteLock wl(&commit_ts_mutex_);
+    boost::unique_lock<boost::shared_mutex> wl(commit_ts_mutex_);
     assert(core->state_.load() == TOTransaction::kStarted ||
            core->state_.load() == TOTransaction::kPrepared);
     for (auto it = commit_q_.begin(); it != commit_q_.end();) {
@@ -622,7 +620,7 @@ Status TOTransactionDBImpl::SetDurableTimeStamp(
   bool has_oldest = false;
   uint64_t tmp_oldest = 0;
   {
-    ReadLock rl(&ts_meta_mutex_);
+    boost::shared_lock<boost::shared_mutex> rl(ts_meta_mutex_);
     has_oldest = (oldest_ts_ != nullptr);
     tmp_oldest = has_oldest ? *oldest_ts_ : 0;
   }
@@ -648,7 +646,7 @@ Status TOTransactionDBImpl::SetCommitTimeStamp(const std::shared_ptr<ATN>& core,
   bool has_oldest = false;
   uint64_t tmp_oldest = 0;
   {
-    ReadLock rl(&ts_meta_mutex_);
+    boost::shared_lock<boost::shared_mutex> rl(ts_meta_mutex_);
     has_oldest = (oldest_ts_ != nullptr);
     tmp_oldest = has_oldest ? *oldest_ts_ : 0;
   }
@@ -684,7 +682,7 @@ Status TOTransactionDBImpl::TxnAssertAfterReads(
     const std::shared_ptr<ATN>& core, const char* op,
     const RocksTimeStamp& timestamp) {
   uint64_t walk_cnt = 0;
-  ReadLock rl(&read_ts_mutex_);
+  boost::shared_lock<boost::shared_mutex> rl(read_ts_mutex_);
   for (auto it = read_q_.rbegin(); it != read_q_.rend(); it++) {
     walk_cnt++;
     // txns with ignore_prepare_ == true should not be considered
@@ -729,7 +727,7 @@ Status TOTransactionDBImpl::SetPrepareTimeStamp(
 
   RocksTimeStamp tmp_oldest = 0;
   {
-    ReadLock rl(&ts_meta_mutex_);
+    boost::shared_lock<boost::shared_mutex> rl(ts_meta_mutex_);
     if (oldest_ts_ != nullptr) {
       tmp_oldest = *oldest_ts_;
     }
@@ -967,7 +965,7 @@ Status TOTransactionDBImpl::SetTimeStamp(const TimeStampType& ts_type,
       LOG(2) << "kCommittedTs force set from " << (has_commit_ts_.load() ? committed_max_ts_.load() : 0)
              << " to " << ts;
     }
-    ReadLock rl(&ts_meta_mutex_);
+    boost::shared_lock<boost::shared_mutex> rl(ts_meta_mutex_);
     if ((oldest_ts_ != nullptr && *oldest_ts_ > ts) && !force) {
       return Status::InvalidArgument(
           "kCommittedTs should not be less than kOldestTs");
@@ -982,7 +980,7 @@ Status TOTransactionDBImpl::SetTimeStamp(const TimeStampType& ts_type,
     // has to be in the same critical area within the set of kOldest
     uint64_t original = 0;
     {
-      WriteLock wl(&ts_meta_mutex_);
+      boost::unique_lock<boost::shared_mutex> wl(ts_meta_mutex_);
       if ((oldest_ts_ != nullptr && *oldest_ts_ > ts) && !force) {
         LOG(2) << "oldestTs can not travel back, oldest_ts from " << *oldest_ts_
                << " to " << ts
@@ -997,7 +995,7 @@ Status TOTransactionDBImpl::SetTimeStamp(const TimeStampType& ts_type,
     }
     auto pin_ts = ts;
     {
-      ReadLock rl(&read_ts_mutex_);
+      boost::shared_lock<boost::shared_mutex> rl(read_ts_mutex_);
       uint64_t walk_cnt = 0;
       for (auto it = read_q_.begin(); it != read_q_.end();) {
         if (it->second->state_.load() == TOTransaction::kStarted) {
@@ -1054,7 +1052,7 @@ Status TOTransactionDBImpl::QueryTimeStamp(const TimeStampType& ts_type,
       return Status::NotFound("not found");
     }
     auto tmp = committed_max_ts_.load(std::memory_order_relaxed);
-    ReadLock rl(&commit_ts_mutex_);
+    boost::shared_lock<boost::shared_mutex> rl(commit_ts_mutex_);
     uint64_t walk_cnt = 0;
     for (auto it = commit_q_.begin(); it != commit_q_.end(); ++it) {
       const auto state = it->second->state_.load(std::memory_order_relaxed);
@@ -1077,7 +1075,7 @@ Status TOTransactionDBImpl::QueryTimeStamp(const TimeStampType& ts_type,
   if (ts_type == kOldest) {
     // NOTE: query oldest is not a frequent thing, so I just
     // take the rlock
-    ReadLock rl(&ts_meta_mutex_);
+    boost::shared_lock<boost::shared_mutex> rl(ts_meta_mutex_);
     // todo
     std::string ts_holder;
     auto s = GetRootDB()->GetFullHistoryTsLow(GetRootDB()->DefaultColumnFamily(), &ts_holder);
@@ -1127,7 +1125,7 @@ Status TOTransactionDBImpl::Stat(TOTransactionStat* stat) {
     stat->alive_txns_num = active_txns_.size();
   }
   {
-    ReadLock rl(&read_ts_mutex_);
+    boost::shared_lock<boost::shared_mutex> rl(read_ts_mutex_);
     stat->read_q_num = read_q_.size();
     for (auto it = read_q_.begin(); it != read_q_.end(); it++) {
       assert(it->second->read_ts_set_);
@@ -1138,7 +1136,7 @@ Status TOTransactionDBImpl::Stat(TOTransactionStat* stat) {
     }
   }
   {
-    ReadLock rl(&commit_ts_mutex_);
+    boost::shared_lock<boost::shared_mutex> rl(commit_ts_mutex_);
     stat->commit_q_num = commit_q_.size();
     for (auto it = commit_q_.begin(); it != commit_q_.end(); it++) {
       assert(it->second->commit_ts_set_);
@@ -1149,7 +1147,7 @@ Status TOTransactionDBImpl::Stat(TOTransactionStat* stat) {
     }
   }
   {
-    ReadLock rl(&ts_meta_mutex_);
+    boost::shared_lock<boost::shared_mutex> rl(ts_meta_mutex_);
     stat->oldest_ts = oldest_ts_ == nullptr ? 0 : *oldest_ts_;
   }
 

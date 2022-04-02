@@ -13,9 +13,9 @@
 #include <vector>
 #include <array>
 #include <functional>
+#include <boost/thread.hpp>
 
 #include "rocksdb/db.h"
-#include "util/mutexlock.h"
 #include "rocksdb/options.h"
 #include "totdb/totransaction_db.h"
 #include "totdb/totransaction_impl.h"
@@ -41,7 +41,7 @@ class PrepareHeap {
  private:
   friend class PrepareMapIterator;
 
-  port::RWMutex mutex_;
+  boost::shared_mutex mutex_;
 
   using PMAP =
       std::map<TxnKey,
@@ -253,11 +253,11 @@ class TOTransactionDBImpl : public TOTransactionDB {
   std::map<TransactionID, std::shared_ptr<ATN>> active_txns_;
 
   // txns sorted by {commit_ts, txnid}
-  port::RWMutex commit_ts_mutex_;
+  boost::shared_mutex commit_ts_mutex_;
   std::map<TSTXN, std::shared_ptr<ATN>> commit_q_;
 
   // txns sorted by {read_ts, txnid}
-  port::RWMutex read_ts_mutex_;
+  boost::shared_mutex read_ts_mutex_;
   std::map<TSTXN, std::shared_ptr<ATN>> read_q_;
 
   PrepareHeap prepare_heap_;
@@ -336,7 +336,7 @@ class TOTransactionDBImpl : public TOTransactionDB {
   std::atomic<uint64_t> commit_q_walk_len_sum_;
 
   // TODO(xxxxxxxx): use optional<>
-  port::RWMutex ts_meta_mutex_;
+  boost::shared_mutex ts_meta_mutex_;
   // protected by ts_meta_mutex_
   std::unique_ptr<RocksTimeStamp> oldest_ts_;
 };
