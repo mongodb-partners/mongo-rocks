@@ -6,10 +6,8 @@
 #pragma once
 #ifndef ROCKSDB_LITE
 
-#include "logging/logging.h"
-#include "utilities/transactions/totransaction_db_impl.h"
-#include "utilities/transactions/totransaction_impl.h"
-#include "utilities/write_batch_with_index/write_batch_with_index_internal.h"
+#include "totdb/totransaction_db_impl.h"
+#include "totdb/totransaction_impl.h"
 
 namespace rocksdb {
 
@@ -183,9 +181,10 @@ class PrepareFilterIterator : public Iterator {
   Status status() const;
 
  private:
-  WBWIIteratorImpl::Result GetFromBatch(WriteBatchWithIndex* batch,
-                                        const Slice& key,
-                                        std::string* val);
+  // rocksdb internal api, for sanity check
+  // WBWIIteratorImpl::Result GetFromBatch(WriteBatchWithIndex* batch,
+  //                                       const Slice& key,
+  //                                       std::string* val);
 
   void AdvanceInputNoFilter();
 

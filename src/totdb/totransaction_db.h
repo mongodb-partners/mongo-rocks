@@ -8,7 +8,7 @@
 
 #include "rocksdb/comparator.h"
 #include "rocksdb/db.h"
-#include "rocksdb/utilities/totransaction.h"
+#include "totdb/totransaction.h"
 #include "rocksdb/utilities/stackable_db.h"
 
 namespace rocksdb {

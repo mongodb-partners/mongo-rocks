@@ -2,12 +2,11 @@
 #ifndef ROCKSDB_LITE
 
 #include "rocksdb/db.h"
-#include "db/db_impl/db_impl.h"
 #include "rocksdb/slice.h"
 #include "rocksdb/status.h"
 #include "rocksdb/types.h"
-#include "rocksdb/utilities/totransaction.h"
-#include "rocksdb/utilities/totransaction_db.h"
+#include "totdb/totransaction.h"
+#include "totdb/totransaction_db.h"
 #include "rocksdb/utilities/write_batch_with_index.h"
 
 

@@ -7,9 +7,7 @@
 
 #define MONGO_LOG_DEFAULT_COMPONENT ::mongo::logger::LogComponent::kStorage
 
-#include <iostream>
 #include "totdb/totransaction_db_impl.h"
-#include "util/string_util.h"
 #include "totdb/totransaction_prepare_iterator.h"
 #include "mongo/util/log.h"
 
@@ -57,9 +55,6 @@ std::shared_ptr<ATN> PrepareHeap::Find(
     const TOTransactionImpl::ActiveTxnNode* core, const TxnKey& key,
     TOTransaction::TOTransactionState* state) {
   boost::shared_lock<boost::shared_mutex> rl(mutex_);
-  for (auto kv : map_) {
-    std::cout << kv.first.first << ' ' << kv.first.second << ' ' << kv.first.second.size() << std::endl;
-  }
   const auto it = map_.find(key);
   if (it == map_.end()) {
     return nullptr;

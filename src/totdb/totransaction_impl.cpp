@@ -7,18 +7,13 @@
 
 #define MONGO_LOG_DEFAULT_COMPONENT ::mongo::logger::LogComponent::kStorage
 
-#include "db/column_family.h"
 #include "rocksdb/comparator.h"
 #include "rocksdb/db.h"
 #include "rocksdb/status.h"
-#include "rocksdb/utilities/totransaction_db.h"
-#include "util/string_util.h"
-#include "logging/logging.h"
-#include "util/cast_util.h"
-#include "utilities/transactions/totransaction_db_impl.h"
-#include "utilities/transactions/totransaction_impl.h"
+#include "totdb/totransaction_db.h"
+#include "totdb/totransaction_db_impl.h"
+#include "totdb/totransaction_impl.h"
 #include "mongo/util/log.h"
-#include <iostream>
 
 namespace rocksdb {
 

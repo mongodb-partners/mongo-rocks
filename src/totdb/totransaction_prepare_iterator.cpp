@@ -597,14 +597,15 @@ void PrepareFilterIterator::AdvanceInputNoFilter() {
   valid_ = input_->Valid();
 }
 
-WBWIIteratorImpl::Result PrepareFilterIterator::GetFromBatch(
-    WriteBatchWithIndex* batch, const Slice& key, std::string* value) {
-  Status s;
-  WriteBatchWithIndexInternal wbwidx(cf_);
-  WBWIIteratorImpl::Result result = wbwidx.GetFromBatch(batch, key, value, &s);
-  assert(s.ok());
-  return result;
-}
+// rocksdb internal api, for sanity check
+// WBWIIteratorImpl::Result PrepareFilterIterator::GetFromBatch(
+//     WriteBatchWithIndex* batch, const Slice& key, std::string* value) {
+//   Status s;
+//   WriteBatchWithIndexInternal wbwidx(cf_);
+//   WBWIIteratorImpl::Result result = wbwidx.GetFromBatch(batch, key, value, &s);
+//   assert(s.ok());
+//   return result;
+// }
 
 void PrepareFilterIterator::UpdateCurrent() {
   while (true) {
@@ -625,11 +626,11 @@ void PrepareFilterIterator::UpdateCurrent() {
       auto state = sval_.prepare_value_state;
       assert(state != TOTransaction::TOTransactionState::kRollback);
       if (state == TOTransaction::TOTransactionState::kCommitted) {
-#ifndef NDEBUG
-        auto res = GetFromBatch(&pmap_val->write_batch_, key_, &val_);
-#endif  // NDEBUG
-        assert(res == WBWIIteratorImpl::Result::kFound ||
-               res == WBWIIteratorImpl::Result::kDeleted);
+// #ifndef NDEBUG
+//         auto res = GetFromBatch(&pmap_val->write_batch_, key_, &val_);
+// #endif  // NDEBUG
+//         assert(res == WBWIIteratorImpl::Result::kFound ||
+//                res == WBWIIteratorImpl::Result::kDeleted);
         MACRO_REFETCH_RETURN_ON_FOUND_ADVANCE_CONTINUE_ON_NOT_FOUND();
       } else {
         assert(state == TOTransaction::TOTransactionState::kPrepared);
@@ -651,11 +652,11 @@ void PrepareFilterIterator::UpdateCurrent() {
       // a key from my own batch has timestamp == 0 to intend the "read-own-writes" rule
       // TODO(wolfkdy): WriteBatchWithIndexIterator impls timestamp() interface
       // assert(sval_.base_timestamp <= core_->read_ts_ || sval_.base_timestamp == 0);
-#ifndef NDEBUG
-      auto res = GetFromBatch(&pmap_val->write_batch_, key_, &val_);
-#endif  // NDEBUG
-      assert(res == WBWIIteratorImpl::Result::kFound ||
-             res == WBWIIteratorImpl::Result::kDeleted);
+// #ifndef NDEBUG
+//       auto res = GetFromBatch(&pmap_val->write_batch_, key_, &val_);
+// #endif  // NDEBUG
+//       assert(res == WBWIIteratorImpl::Result::kFound ||
+//              res == WBWIIteratorImpl::Result::kDeleted);
       if (state == TOTransaction::TOTransactionState::kCommitted) {
         MACRO_REFETCH_RETURN_ON_FOUND_ADVANCE_CONTINUE_ON_NOT_FOUND();
       } else {
