@@ -53,8 +53,8 @@
 #include <rocksdb/experimental.h>
 #include <rocksdb/slice.h>
 #include <rocksdb/write_batch.h>
-#include <rocksdb/utilities/totransaction.h>
-#include <rocksdb/utilities/totransaction_db.h>
+#include "mongo/db/modules/rocks/src/totdb/totransaction.h"
+#include "mongo/db/modules/rocks/src/totdb/totransaction_db.h"
 
 namespace mongo {
     namespace {
@@ -413,7 +413,6 @@ namespace mongo {
                 rocksdb::BottommostLevelCompaction::kForce;
             // if auto-compaction runs parallelly, oplog compact-range may leave a hole.
             compact_options.exclusive_manual_compaction = isOplog;
-            compact_options.ignore_pin_timestamp = isOplog;
 
             s = _db->CompactRange(compact_options, op._cf, start, end);
         }

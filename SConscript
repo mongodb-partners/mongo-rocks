@@ -9,9 +9,12 @@ conf = Configure(env)
 if conf.CheckLibWithHeader("lz4", ["lz4.h","lz4hc.h"], "C", "LZ4_versionNumber();", autoadd=False ):
     dynamic_syslibdeps.append("lz4")
 
-conf.Finish()
 
 env.InjectMongoIncludePaths()
+
+env.InjectThirdParty(libraries=['s2',]) # for Encoder and Decoder
+
+conf.Finish()
 
 env.Library(
     target= 'storage_rocks_base',
@@ -29,6 +32,10 @@ env.Library(
         'src/rocks_oplog_manager.cpp',
         'src/rocks_begin_transaction_block.cpp',
         'src/rocks_prepare_conflict.cpp',
+# TODO(wolfkdy): move totdb files into a seperate compile-unit
+        'src/totdb/totransaction_impl.cpp',
+        'src/totdb/totransaction_db_impl.cpp',
+        'src/totdb/totransaction_prepare_iterator.cpp',
         env.Idlc('src/rocks_parameters.idl')[0],
         env.Idlc('src/rocks_global_options.idl')[0],
         'src/rocks_parameters.cpp',
@@ -53,6 +60,7 @@ env.Library(
         '$BUILD_DIR/mongo/util/concurrency/ticketholder',
         '$BUILD_DIR/mongo/util/processinfo',
         '$BUILD_DIR/third_party/shim_snappy',
+        '$BUILD_DIR/third_party/s2/util/coding/coding',
     ],
     LIBDEPS_PRIVATE= [
         '$BUILD_DIR/mongo/db/snapshot_window_options',

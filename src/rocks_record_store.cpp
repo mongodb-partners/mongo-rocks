@@ -758,7 +758,9 @@ namespace mongo {
         std::string endString(_makePrefixedKey(_prefix, RecordId::max()));
         rocksdb::Slice beginRange(beginString);
         rocksdb::Slice endRange(endString);
-        return rocksToMongoStatus(_db->CompactRange(&beginRange, &endRange));
+        // TODO(wolfkdy): support it
+        return Status(ErrorCodes::InvalidOptions, "not supported, use rocksdbCompact server paramter instead");
+        // return rocksToMongoStatus(_db->CompactRange(&beginRange, &endRange));
     }
 
     void RocksRecordStore::validate(OperationContext* opCtx, ValidateCmdLevel level,
