@@ -797,8 +797,6 @@ namespace mongo {
         options.hard_pending_compaction_bytes_limit =
             static_cast<unsigned long long>(rocksGlobalOptions.hardPendingCompactionMBLimit) * 1024 * 1024;
         options.target_file_size_base = 64 * 1024 * 1024;  // 64MB
-        options.soft_rate_limit = 2.5;
-        options.hard_rate_limit = 3;
         options.level_compaction_dynamic_level_bytes = true;
         options.max_bytes_for_level_base = rocksGlobalOptions.maxBytesForLevelBase;
         // This means there is no limit on open files. Make sure to always set ulimit so that it can

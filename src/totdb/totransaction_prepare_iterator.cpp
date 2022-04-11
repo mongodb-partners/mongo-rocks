@@ -5,13 +5,12 @@
 
 #define MONGO_LOG_DEFAULT_COMPONENT ::mongo::logger::LogComponent::kStorage
 
-#include "utilities/transactions/totransaction_prepare_iterator.h"
-#include "util/cast_util.h"
-#include "logging/logging.h"
-#include "utilities/transactions/totransaction_db_impl.h"
+#include "mongo/db/modules/rocks/src/totdb/totransaction.h"
+#include "mongo/db/modules/rocks/src/totdb/totransaction_impl.h"
+#include "mongo/db/modules/rocks/src/totdb/totransaction_db.h"
+#include "mongo/db/modules/rocks/src/totdb/totransaction_db_impl.h"
+#include "mongo/db/modules/rocks/src/totdb/totransaction_prepare_iterator.h"
 #include "mongo/util/log.h"
-
-#include <iostream>
 
 namespace rocksdb {
 
@@ -85,7 +84,7 @@ void PrepareMapIterator::TryPosValueToCorrectMvccVersionInLock(
 }
 
 void PrepareMapIterator::Next() {
-  ReadLock rl(&ph_->mutex_);
+  std::shared_lock<std::shared_mutex> rl(ph_->mutex_);
   if (!valid_) {
     return;
   }
@@ -101,7 +100,7 @@ void PrepareMapIterator::Next() {
 }
 
 void PrepareMapIterator::Prev() {
-  ReadLock rl(&ph_->mutex_);
+  std::shared_lock<std::shared_mutex> rl(ph_->mutex_);
   if (!valid_) {
     return;
   }
@@ -123,7 +122,7 @@ void PrepareMapIterator::Prev() {
 void PrepareMapIterator::SeekToFirst() { Seek(""); }
 
 void PrepareMapIterator::SeekToLast() {
-  ReadLock rl(&ph_->mutex_);
+  std::shared_lock<std::shared_mutex> rl(ph_->mutex_);
   auto it = ph_->map_.lower_bound(std::make_pair(cf_->GetID() + 1, ""));
   // because prepare_heap has sentinal at the end, it's impossible to reach the
   // end
@@ -141,7 +140,7 @@ void PrepareMapIterator::SeekToLast() {
 }
 
 void PrepareMapIterator::SeekForPrev(const Slice& target) {
-  ReadLock rl(&ph_->mutex_);
+  std::shared_lock<std::shared_mutex> rl(ph_->mutex_);
   const auto lookup_key =
       std::make_pair(cf_->GetID(), std::string(target.data(), target.size()));
   auto it = ph_->map_.lower_bound(lookup_key);
@@ -165,7 +164,7 @@ void PrepareMapIterator::SeekForPrev(const Slice& target) {
 }
 
 void PrepareMapIterator::Seek(const Slice& target) {
-  ReadLock rl(&ph_->mutex_);
+  std::shared_lock<std::shared_mutex> rl(ph_->mutex_);
   auto it = ph_->map_.lower_bound(
       std::make_pair(cf_->GetID(), std::string(target.data(), target.size())));
   assert(it != ph_->map_.end());

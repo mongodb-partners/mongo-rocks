@@ -6,13 +6,13 @@
 #ifndef ROCKSDB_LITE
 
 #define MONGO_LOG_DEFAULT_COMPONENT ::mongo::logger::LogComponent::kStorage
-
 #include "rocksdb/comparator.h"
 #include "rocksdb/db.h"
 #include "rocksdb/status.h"
-#include "totdb/totransaction_db.h"
-#include "totdb/totransaction_db_impl.h"
-#include "totdb/totransaction_impl.h"
+#include "third_party/s2/util/coding/coder.h"
+#include "mongo/db/modules/rocks/src/totdb/totransaction_db.h"
+#include "mongo/db/modules/rocks/src/totdb/totransaction_db_impl.h"
+#include "mongo/db/modules/rocks/src/totdb/totransaction_impl.h"
 #include "mongo/util/log.h"
 
 namespace rocksdb {
@@ -40,9 +40,8 @@ TOTransactionImpl::TOTransactionImpl(TOTransactionDB* txn_db,
       write_options_(write_options),
       txn_option_(txn_option),
       core_(core) {
-      txn_db_impl_ = static_cast_with_check<TOTransactionDBImpl, TOTransactionDB>(txn_db);
+      txn_db_impl_ = dynamic_cast<TOTransactionDBImpl*>(txn_db);
       assert(txn_db_impl_);
-      db_impl_ = static_cast_with_check<DBImpl, DB>(txn_db->GetRootDB());
 }
 
 TOTransactionImpl::~TOTransactionImpl() {
@@ -71,7 +70,7 @@ Status TOTransactionImpl::SetReadTimeStamp(const RocksTimeStamp& timestamp) {
   }
   assert(core_->read_ts_set_);
   assert(core_->read_ts_ >= timestamp);
-  EncodeFixed64(core_->read_ts_buffer_, core_->read_ts_);
+  Encoder(core_->read_ts_buffer_, sizeof(core_->read_ts_)).put64(core_->read_ts_);
   // If we already have a snapshot, it may be too early to match
   // the timestamp (including the one we just read, if rounding
   // to oldest).  Get a new one.
@@ -179,7 +178,7 @@ TOTransactionImpl::ActiveTxnNode::ActiveTxnNode()
     state_(TOTransaction::kStarted),
     txn_snapshot(nullptr),
     write_batch_(&wbwidx_default_comparator, 0, true /*overwrite_keys*/, 0) {
-  EncodeFixed64(read_ts_buffer_, read_ts_);
+  Encoder(read_ts_buffer_, sizeof(read_ts_)).put64(read_ts_);
 }
 
 const TOTransactionImpl::ActiveTxnNode* TOTransactionImpl::GetCore() const {
@@ -322,7 +321,7 @@ Status TOTransactionImpl::Commit(std::function<void()>* hook) {
     size_t cnt = 0;
     Slice ts_slice(ts_buf, sizeof(RocksTimeStamp));
     const auto ts_sz_func = [&](uint32_t) {
-      EncodeFixed64(ts_buf, asof_commit_timestamps_[cnt++]);
+      Encoder(ts_buf, sizeof(RocksTimeStamp)).put64(asof_commit_timestamps_[cnt++]);
       return sizeof(RocksTimeStamp);
     };
     GetWriteBatch()->GetWriteBatch()->UpdateTimestamps(ts_slice, ts_sz_func);

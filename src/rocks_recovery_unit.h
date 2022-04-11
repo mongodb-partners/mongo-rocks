@@ -37,10 +37,11 @@
 
 #include <rocksdb/iterator.h>
 #include <rocksdb/slice.h>
-#include <rocksdb/utilities/totransaction.h>
-#include <rocksdb/utilities/totransaction_db.h>
 #include <rocksdb/utilities/write_batch_with_index.h>
 #include <rocksdb/write_batch.h>
+
+#include "mongo/db/modules/rocks/src/totdb/totransaction.h"
+#include "mongo/db/modules/rocks/src/totdb/totransaction_db.h"
 
 #include "mongo/base/owned_pointer_vector.h"
 #include "mongo/db/record_id.h"

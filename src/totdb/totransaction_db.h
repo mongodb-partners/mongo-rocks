@@ -6,9 +6,10 @@
 #include <vector>
 #include <iostream>
 
+#include "third_party/s2/util/coding/coder.h"
 #include "rocksdb/comparator.h"
 #include "rocksdb/db.h"
-#include "totdb/totransaction.h"
+#include "mongo/db/modules/rocks/src/totdb/totransaction.h"
 #include "rocksdb/utilities/stackable_db.h"
 
 namespace rocksdb {
@@ -118,9 +119,9 @@ class TOComparator : public Comparator {
     assert(ts1.data() && ts2.data());
     assert(ts1.size() == ts2.size());
     const size_t kSize = ts1.size();
-    assert(kSize == sizeof(uint64_t));
-    uint64_t ts1_data = DecodeFixed64(ts1.data());
-    uint64_t ts2_data = DecodeFixed64(ts2.data());
+    invariant(kSize == sizeof(uint64_t));
+    uint64_t ts1_data = Decoder(ts1.data(), ts1.size()).get64();
+    uint64_t ts2_data = Decoder(ts2.data(), ts2.size()).get64();
     if (ts1_data < ts2_data) {
       return -1;
     } else if (ts1_data > ts2_data) {
@@ -131,6 +132,12 @@ class TOComparator : public Comparator {
   }
 
  private:
+  static const Slice StripTimestampFromUserKey(const Slice& user_key, size_t ts_sz) {
+    Slice ret = user_key;
+    ret.remove_suffix(ts_sz);
+    return ret;
+  }
+
   const Comparator* cmp_without_ts_;
 };
 

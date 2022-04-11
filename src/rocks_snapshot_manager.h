@@ -29,8 +29,8 @@
 #include <forward_list>
 
 #include <rocksdb/db.h>
-#include <rocksdb/utilities/totransaction.h>
-#include <rocksdb/utilities/totransaction_db.h>
+#include "mongo/db/modules/rocks/src/totdb/totransaction.h"
+#include "mongo/db/modules/rocks/src/totdb/totransaction_db.h"
 
 #include "mongo/db/storage/recovery_unit.h"
 #include "mongo/db/storage/snapshot_manager.h"

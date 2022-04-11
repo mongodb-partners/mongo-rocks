@@ -5,8 +5,8 @@
 #include "rocksdb/slice.h"
 #include "rocksdb/status.h"
 #include "rocksdb/types.h"
-#include "totdb/totransaction.h"
-#include "totdb/totransaction_db.h"
+#include "mongo/db/modules/rocks/src/totdb/totransaction.h"
+#include "mongo/db/modules/rocks/src/totdb//totransaction_db.h"
 #include "rocksdb/utilities/write_batch_with_index.h"
 
 
@@ -145,7 +145,6 @@ class TOTransactionImpl : public TOTransaction {
   std::set<TxnKey> written_keys_;
 
   DB* db_;
-  DBImpl* db_impl_;
   TOTransactionDBImpl* txn_db_impl_;
   
   WriteOptions write_options_;

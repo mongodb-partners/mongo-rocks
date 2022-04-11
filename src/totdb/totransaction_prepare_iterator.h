@@ -6,8 +6,8 @@
 #pragma once
 #ifndef ROCKSDB_LITE
 
-#include "totdb/totransaction_db_impl.h"
-#include "totdb/totransaction_impl.h"
+#include "mongo/db/modules/rocks/src/totdb/totransaction_db_impl.h"
+#include "mongo/db/modules/rocks/src/totdb/totransaction_impl.h"
 
 namespace rocksdb {
 
