@@ -132,6 +132,7 @@ namespace mongo {
     namespace {
         TicketHolder openWriteTransaction(128);
         TicketHolder openReadTransaction(128);
+        rocksdb::TOComparator comparator;
     }  // namespace
 
     ROpenWriteTransactionParam::ROpenWriteTransactionParam(StringData name, ServerParameterType spt)
@@ -778,6 +779,7 @@ namespace mongo {
         table_options.filter_policy.reset(rocksdb::NewBloomFilterPolicy(10, false));
         table_options.block_size = 16 * 1024;  // 16KB
         table_options.format_version = 2;
+        options.comparator = &comparator;
         options.table_factory.reset(rocksdb::NewBlockBasedTableFactory(table_options));
 
         options.write_buffer_size = rocksGlobalOptions.writeBufferSize;
