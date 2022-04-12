@@ -65,14 +65,14 @@ void Reopen(Options newOptions) {
 private:
   void Open() {
     Status s = TOTransactionDBImpl::Open(options, txndb_options, dbname, &txn_db);
-    assert(s.ok());
-    assert(txn_db != nullptr);
+    invariant(s.ok());
+    invariant(txn_db != nullptr);
   }
 
   void Open(Options newOptions) {
     Status s = TOTransactionDBImpl::Open(newOptions, txndb_options, dbname, &txn_db);
-    assert(s.ok());
-    assert(txn_db != nullptr);
+    invariant(s.ok());
+    invariant(txn_db != nullptr);
   }
 
   TOComparator comparator_;

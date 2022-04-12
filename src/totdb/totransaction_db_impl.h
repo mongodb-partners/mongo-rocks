@@ -268,7 +268,7 @@ class TOTransactionDBImpl : public TOTransactionDB {
   };
 
   size_t GetStripe(const TxnKey& key) const {
-    assert(num_stripes_ > 0);
+    invariant(num_stripes_ > 0);
     static std::hash<std::string> hash;
     size_t stripe = hash(key.second) % num_stripes_;
     return stripe;
