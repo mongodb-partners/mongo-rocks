@@ -105,10 +105,10 @@ class TOComparator : public Comparator {
   int CompareWithoutTimestamp(const Slice& a, bool a_has_ts, const Slice& b,
                               bool b_has_ts) const override {
     if (a_has_ts) {
-      assert(a.size() >= timestamp_size());
+      invariant(a.size() >= timestamp_size());
     }
     if (b_has_ts) {
-      assert(b.size() >= timestamp_size());
+      invariant(b.size() >= timestamp_size());
     }
     Slice lhs = a_has_ts ? StripTimestampFromUserKey(a, timestamp_size()) : a;
     Slice rhs = b_has_ts ? StripTimestampFromUserKey(b, timestamp_size()) : b;
@@ -116,8 +116,8 @@ class TOComparator : public Comparator {
   }
 
   int CompareTimestamp(const Slice& ts1, const Slice& ts2) const override {
-    assert(ts1.data() && ts2.data());
-    assert(ts1.size() == ts2.size());
+    invariant(ts1.data() && ts2.data());
+    invariant(ts1.size() == ts2.size());
     const size_t kSize = ts1.size();
     invariant(kSize == sizeof(uint64_t));
     uint64_t ts1_data = Decoder(ts1.data(), ts1.size()).get64();

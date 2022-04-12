@@ -36,7 +36,7 @@ using ATN = TOTransactionImpl::ActiveTxnNode;
       read_opt.timestamp = &core_->read_ts_slice_;                            \
       auto getStatus = core_->write_batch_.GetFromBatchAndDB(                 \
           db_, read_opt, cf_, key_, &val_);                                   \
-      assert(getStatus.ok() || getStatus.IsNotFound());                       \
+      invariant(getStatus.ok() || getStatus.IsNotFound());                       \
       if (getStatus.ok()) {                                                   \
         return;                                                               \
       } else {                                                                \
@@ -57,8 +57,8 @@ TOTransaction::TOTransactionState PrepareMapIterator::valueState() const {
 }
 
 TOTransaction::TOTransactionState PrepareMapIterator::UpdatePrepareState() {
-  assert(val_state_ == TOTransaction::TOTransactionState::kPrepared);
-  assert(Valid());
+  invariant(val_state_ == TOTransaction::TOTransactionState::kPrepared);
+  invariant(Valid());
   val_state_ = val_->state_.load(/*seq_cst*/);
   return val_state_;
 }
@@ -66,8 +66,8 @@ TOTransaction::TOTransactionState PrepareMapIterator::UpdatePrepareState() {
 void PrepareMapIterator::TryPosValueToCorrectMvccVersionInLock(
     const std::list<std::shared_ptr<ATN>>& prepare_mvccs) {
   bool found = false;
-  assert(!prepare_mvccs.empty());
-  assert(valid_);
+  invariant(!prepare_mvccs.empty());
+  invariant(valid_);
   for (const auto& c : prepare_mvccs) {
     if (c->prepare_ts_ <= core_->read_ts_) {
       val_ = c;
@@ -89,7 +89,7 @@ void PrepareMapIterator::Next() {
     return;
   }
   auto it = ph_->map_.upper_bound(std::make_pair(cf_->GetID(), pos_));
-  assert(it != ph_->map_.end());
+  invariant(it != ph_->map_.end());
   if (it->first.first != cf_->GetID()) {
     valid_ = false;
   } else {
@@ -106,7 +106,7 @@ void PrepareMapIterator::Prev() {
   }
   const auto lookup_key = std::make_pair(cf_->GetID(), pos_);
   auto it = ph_->map_.lower_bound(lookup_key);
-  assert(it != ph_->map_.end() && it->first >= lookup_key);
+  invariant(it != ph_->map_.end() && it->first >= lookup_key);
   if (it != ph_->map_.begin()) {
     it--;
   }
@@ -126,7 +126,7 @@ void PrepareMapIterator::SeekToLast() {
   auto it = ph_->map_.lower_bound(std::make_pair(cf_->GetID() + 1, ""));
   // because prepare_heap has sentinal at the end, it's impossible to reach the
   // end
-  assert(it != ph_->map_.end());
+  invariant(it != ph_->map_.end());
   if (it != ph_->map_.begin()) {
     it--;
   }
@@ -146,7 +146,7 @@ void PrepareMapIterator::SeekForPrev(const Slice& target) {
   auto it = ph_->map_.lower_bound(lookup_key);
   // because prepare_heap_ has sentinal at the end, it's impossible to reach the
   // end
-  assert(it != ph_->map_.end() && it->first >= lookup_key);
+  invariant(it != ph_->map_.end() && it->first >= lookup_key);
   if (it->first != lookup_key) {
     if (it != ph_->map_.begin()) {
       it--;
@@ -156,7 +156,7 @@ void PrepareMapIterator::SeekForPrev(const Slice& target) {
   if (it->first.first != cf_->GetID()) {
     valid_ = false;
   } else {
-    assert(it->first <= lookup_key);
+    invariant(it->first <= lookup_key);
     valid_ = true;
     pos_ = it->first.second;
     TryPosValueToCorrectMvccVersionInLock(it->second);
@@ -167,7 +167,7 @@ void PrepareMapIterator::Seek(const Slice& target) {
   std::shared_lock<std::shared_mutex> rl(ph_->mutex_);
   auto it = ph_->map_.lower_bound(
       std::make_pair(cf_->GetID(), std::string(target.data(), target.size())));
-  assert(it != ph_->map_.end());
+  invariant(it != ph_->map_.end());
   if (it->first.first != cf_->GetID()) {
     valid_ = false;
   } else {
@@ -274,7 +274,7 @@ void PrepareMergingIterator::Next() {
     forward_ = true;
     equal_keys_ = false;
     if (!BaseValid()) {
-      assert(DeltaValid());
+      invariant(DeltaValid());
       base_iterator_->SeekToFirst();
     } else if (!DeltaValid()) {
       delta_iterator_->SeekToFirst();
@@ -310,7 +310,7 @@ void PrepareMergingIterator::Prev() {
     forward_ = false;
     equal_keys_ = false;
     if (!BaseValid()) {
-      assert(DeltaValid());
+      invariant(DeltaValid());
       base_iterator_->SeekToLast();
     } else if (!DeltaValid()) {
       delta_iterator_->SeekToLast();
@@ -343,20 +343,20 @@ Status PrepareMergingIterator::status() const {
 }
 
 TOTransaction::TOTransactionState PrepareMergingIterator::UpdatePrepareState() {
-  assert(delta_iterator_->Valid());
-  assert(equal_keys_ || !current_at_base_);
+  invariant(delta_iterator_->Valid());
+  invariant(equal_keys_ || !current_at_base_);
   return delta_iterator_->UpdatePrepareState();
 }
 
 void PrepareMergingIterator::AssertInvariants() {
   bool not_ok = false;
   if (!base_iterator_->status().ok()) {
-    assert(!base_iterator_->Valid());
+    invariant(!base_iterator_->Valid());
     not_ok = true;
   }
   if (not_ok) {
-    assert(!Valid());
-    assert(!status().ok());
+    invariant(!Valid());
+    invariant(!status().ok());
     return;
   }
 
@@ -364,11 +364,11 @@ void PrepareMergingIterator::AssertInvariants() {
     return;
   }
   if (!BaseValid()) {
-    assert(!current_at_base_ && delta_iterator_->Valid());
+    invariant(!current_at_base_ && delta_iterator_->Valid());
     return;
   }
   if (!DeltaValid()) {
-    assert(current_at_base_ && base_iterator_->Valid());
+    invariant(current_at_base_ && base_iterator_->Valid());
     return;
   }
   int compare = comparator_->Compare(delta_iterator_->key(),
@@ -376,30 +376,30 @@ void PrepareMergingIterator::AssertInvariants() {
   (void)compare;
   if (forward_) {
     // current_at_base -> compare < 0
-    assert(!current_at_base_ || compare < 0);
+    invariant(!current_at_base_ || compare < 0);
     // !current_at_base -> compare <= 0
-    assert(current_at_base_ && compare >= 0);
+    invariant(current_at_base_ && compare >= 0);
   } else {
     // current_at_base -> compare > 0
-    assert(!current_at_base_ || compare > 0);
+    invariant(!current_at_base_ || compare > 0);
     // !current_at_base -> compare <= 0
-    assert(current_at_base_ && compare <= 0);
+    invariant(current_at_base_ && compare <= 0);
   }
   // equal_keys_ <=> compare == 0
-  assert((equal_keys_ || compare != 0) && (!equal_keys_ || compare == 0));
+  invariant((equal_keys_ || compare != 0) && (!equal_keys_ || compare == 0));
 }
 
 void PrepareMergingIterator::Advance() {
   if (equal_keys_) {
-    assert(BaseValid() && DeltaValid());
+    invariant(BaseValid() && DeltaValid());
     AdvanceBase();
     AdvanceDelta();
   } else {
     if (current_at_base_) {
-      assert(BaseValid());
+      invariant(BaseValid());
       AdvanceBase();
     } else {
-      assert(DeltaValid());
+      invariant(DeltaValid());
       AdvanceDelta();
     }
   }
@@ -478,12 +478,12 @@ PrepareFilterIterator::PrepareFilterIterator(
 bool PrepareFilterIterator::Valid() const { return valid_; }
 
 Slice PrepareFilterIterator::key() const {
-  assert(valid_);
+  invariant(valid_);
   return key_;
 }
 
 Slice PrepareFilterIterator::value() const {
-  assert(valid_);
+  invariant(valid_);
   return val_;
 }
 
@@ -564,9 +564,9 @@ void PrepareFilterIterator::Prev() {
 }
 
 void PrepareFilterIterator::UpdatePrepareState() {
-  assert(sval_.prepare_value_state ==
+  invariant(sval_.prepare_value_state ==
          TOTransaction::TOTransactionState::kPrepared);
-  assert(sval_.has_prepare);
+  invariant(sval_.has_prepare);
   auto new_state = input_->UpdatePrepareState();
   if (new_state == TOTransaction::TOTransactionState::kPrepared) {
     return;
@@ -575,7 +575,7 @@ void PrepareFilterIterator::UpdatePrepareState() {
     UpdateCurrent();
     return;
   }
-  assert(new_state == TOTransaction::TOTransactionState::kRollback);
+  invariant(new_state == TOTransaction::TOTransactionState::kRollback);
   if (forward_) {
     Seek(key_);
   } else {
@@ -602,7 +602,7 @@ void PrepareFilterIterator::AdvanceInputNoFilter() {
 //   Status s;
 //   WriteBatchWithIndexInternal wbwidx(cf_);
 //   WBWIIteratorImpl::Result result = wbwidx.GetFromBatch(batch, key, value, &s);
-//   assert(s.ok());
+//   invariant(s.ok());
 //   return result;
 // }
 
@@ -623,16 +623,16 @@ void PrepareFilterIterator::UpdateCurrent() {
     } else if (!sval_.has_base) {
       const auto pmap_val = sval_.prepare_value;
       auto state = sval_.prepare_value_state;
-      assert(state != TOTransaction::TOTransactionState::kRollback);
+      invariant(state != TOTransaction::TOTransactionState::kRollback);
       if (state == TOTransaction::TOTransactionState::kCommitted) {
 // #ifndef NDEBUG
 //         auto res = GetFromBatch(&pmap_val->write_batch_, key_, &val_);
 // #endif  // NDEBUG
-//         assert(res == WBWIIteratorImpl::Result::kFound ||
+//         invariant(res == WBWIIteratorImpl::Result::kFound ||
 //                res == WBWIIteratorImpl::Result::kDeleted);
         MACRO_REFETCH_RETURN_ON_FOUND_ADVANCE_CONTINUE_ON_NOT_FOUND();
       } else {
-        assert(state == TOTransaction::TOTransactionState::kPrepared);
+        invariant(state == TOTransaction::TOTransactionState::kPrepared);
         if (pmap_val->prepare_ts_ > core_->read_ts_) {
           AdvanceInputNoFilter();
         } else if (core_->ignore_prepare_) {
@@ -644,27 +644,27 @@ void PrepareFilterIterator::UpdateCurrent() {
         }
       }
     } else {
-      assert(sval_.has_prepare && sval_.has_base);
+      invariant(sval_.has_prepare && sval_.has_base);
       const auto pmap_val = sval_.prepare_value;
       auto state = sval_.prepare_value_state;
-      assert(state != TOTransaction::TOTransactionState::kRollback);
+      invariant(state != TOTransaction::TOTransactionState::kRollback);
       // a key from my own batch has timestamp == 0 to intend the "read-own-writes" rule
       // TODO(wolfkdy): WriteBatchWithIndexIterator impls timestamp() interface
-      // assert(sval_.base_timestamp <= core_->read_ts_ || sval_.base_timestamp == 0);
+      // invariant(sval_.base_timestamp <= core_->read_ts_ || sval_.base_timestamp == 0);
 // #ifndef NDEBUG
 //       auto res = GetFromBatch(&pmap_val->write_batch_, key_, &val_);
 // #endif  // NDEBUG
-//       assert(res == WBWIIteratorImpl::Result::kFound ||
+//       invariant(res == WBWIIteratorImpl::Result::kFound ||
 //              res == WBWIIteratorImpl::Result::kDeleted);
       if (state == TOTransaction::TOTransactionState::kCommitted) {
         MACRO_REFETCH_RETURN_ON_FOUND_ADVANCE_CONTINUE_ON_NOT_FOUND();
       } else {
-        assert(state == TOTransaction::TOTransactionState::kPrepared);
+        invariant(state == TOTransaction::TOTransactionState::kPrepared);
         // Txn is committed before changing state from kPrepared to kCommitted,
         // this is not in a critial section. So another interleaved txn may see
         // both its committed data and its kPrepared state.
         // TODO(wolfkdy): WriteBatchWithIndexIterator impls timestamp() interface
-        // assert(sval_.base_timestamp < pmap_val->prepare_ts_ ||
+        // invariant(sval_.base_timestamp < pmap_val->prepare_ts_ ||
         //        (pmap_val->commit_ts_set_ &&
         //         sval_.base_timestamp == pmap_val->commit_ts_ &&
         //         sval_.base_value == val_));
