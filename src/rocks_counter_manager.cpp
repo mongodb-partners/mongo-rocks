@@ -57,12 +57,15 @@ namespace mongo {
             }
         }
         std::string value;
-        auto s = _db->Get(rocksdb::ReadOptions(), _cf, counterKey, &value);
-        if (s.IsNotFound()) {
-            return 0;
+        {
+            auto txn = _makeTxn();
+            auto readopts = rocksdb::ReadOptions();
+            auto s = txn->Get(readopts, _cf, counterKey, &value);
+            if (s.IsNotFound()) {
+                return 0;
+            }
+            invariantRocksOK(s);
         }
-        invariantRocksOK(s);
-
         int64_t ret;
         invariant(sizeof(ret) == value.size());
         memcpy(&ret, value.data(), sizeof(ret));
