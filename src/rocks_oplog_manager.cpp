@@ -56,6 +56,11 @@ namespace mongo {
                                          RocksDurabilityManager* durabilityManager)
         : _db(db), _kvEngine(kvEngine), _durabilityManager(durabilityManager) {}
 
+    void RocksOplogManager::init(rocksdb::TOTransactionDB* db, RocksDurabilityManager* durabilityManager) {
+        _db = db;
+        _durabilityManager = durabilityManager;
+    }
+
     void RocksOplogManager::start(OperationContext* opCtx, RocksRecordStore* oplogRecordStore) {
         invariant(!_isRunning);
         auto reverseOplogCursor =

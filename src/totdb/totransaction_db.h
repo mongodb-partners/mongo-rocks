@@ -147,13 +147,18 @@ class TOTransactionDB : public StackableDB {
   public:
   static Status Open(const Options& options,
                      const TOTransactionDBOptions& txn_db_options,
-                     const std::string& dbname, TOTransactionDB** dbptr);
+                     const std::string& dbname, 
+                     const std::string stableTsKey,
+                     TOTransactionDB** dbptr);
 
   static Status Open(const DBOptions& db_options,
                      const TOTransactionDBOptions& txn_db_options,
                      const std::string& dbname,
-                     const std::vector<ColumnFamilyDescriptor>& column_families,
+                     const std::vector<ColumnFamilyDescriptor>& open_cfds,
                      std::vector<ColumnFamilyHandle*>* handles,
+                     const std::vector<ColumnFamilyDescriptor>& trim_cfds,
+                     const bool trimHistory,
+                     const std::string stableTsKey,
                      TOTransactionDB** dbptr);
   virtual void SetMaxConflictBytes(uint64_t bytes) = 0;
 
@@ -166,8 +171,6 @@ class TOTransactionDB : public StackableDB {
                               const RocksTimeStamp& ts, bool force = false) = 0;
 
   virtual Status QueryTimeStamp(const TimeStampType& ts_type, RocksTimeStamp* timestamp) = 0;
-
-  virtual Status RollbackToStable(ColumnFamilyHandle* column_family) = 0;
 
   virtual Status Stat(TOTransactionStat* stat) = 0;
   //virtual Status Close();
