@@ -78,7 +78,6 @@ namespace mongo {
         // schedule compact range operation for execution in _compactionThread
         void compactAll();
         Status compactOplog(rocksdb::ColumnFamilyHandle* cf, const std::string& begin, const std::string& end);
-        Status rollbackToStable(rocksdb::ColumnFamilyHandle* cf);
 
         rocksdb::CompactionFilterFactory* createCompactionFilterFactory();
         std::unordered_map<uint32_t, BSONObj> getDroppedPrefixes() const;
@@ -111,7 +110,6 @@ namespace mongo {
         void compactDroppedPrefix(rocksdb::ColumnFamilyHandle* cf, const std::string& prefix);
         void compact(rocksdb::ColumnFamilyHandle* cf, const std::string& begin,
                      const std::string& end, bool rangeDropped, uint32_t order,
-                     const bool trimHistory,
                      boost::optional<std::shared_ptr<Notification<Status>>>);
         void droppedPrefixCompacted(const std::string& prefix, bool opSucceeded);
 

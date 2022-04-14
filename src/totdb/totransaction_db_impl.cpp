@@ -11,6 +11,7 @@
 #include "mongo/db/modules/rocks/src/totdb/totransaction_db_impl.h"
 #include "mongo/db/modules/rocks/src/totdb/totransaction_prepare_iterator.h"
 #include "mongo/util/log.h"
+#include "mongo/bson/timestamp.h"
 
 namespace rocksdb {
 
@@ -174,14 +175,16 @@ void PrepareHeap::Purge(TransactionID oldest_txn_id, RocksTimeStamp oldest_ts) {
 
 Status TOTransactionDB::Open(const Options& options,
                      const TOTransactionDBOptions& txn_db_options,
-                     const std::string& dbname, TOTransactionDB** dbptr) {
+                     const std::string& dbname, const std::string stable_ts_key, TOTransactionDB** dbptr) {
   DBOptions db_options(options);
   ColumnFamilyOptions cf_options(options);
   std::vector<ColumnFamilyDescriptor> column_families;
   column_families.push_back(
       ColumnFamilyDescriptor(kDefaultColumnFamilyName, cf_options));
   std::vector<ColumnFamilyHandle*> handles;
-  Status s = Open(db_options, txn_db_options, dbname, column_families, &handles, dbptr);
+  std::vector<ColumnFamilyDescriptor> trim_cfds;
+  const bool trimHistory = false;
+  Status s = Open(db_options, txn_db_options, dbname, column_families, &handles, trim_cfds, trimHistory, stable_ts_key, dbptr);
   if (s.ok()) {
     invariant(handles.size() == 1);
     // I can delete the handle since DBImpl is always holding a reference to
@@ -195,20 +198,80 @@ Status TOTransactionDB::Open(const Options& options,
 Status TOTransactionDB::Open(const DBOptions& db_options,
                      const TOTransactionDBOptions& txn_db_options,
                      const std::string& dbname,
-                     const std::vector<ColumnFamilyDescriptor>& column_families,
+                     const std::vector<ColumnFamilyDescriptor>& open_cfds,
                      std::vector<ColumnFamilyHandle*>* handles,
+                     const std::vector<ColumnFamilyDescriptor>& trim_cfds,
+                     const bool trimHistory,
+                     const std::string stable_ts_key,
                      TOTransactionDB** dbptr) {
   Status s;
-  DB* db = nullptr;
-  for (const auto& cf : column_families) {
-    if (cf.options.comparator == nullptr || cf.options.comparator->timestamp_size() == 0) {
+  for (const auto& cfd : open_cfds) {
+    if (cfd.options.comparator == nullptr || cfd.options.comparator->timestamp_size() == 0) {
       return Status::InvalidArgument("invalid comparator");
     }
   }
+
+  if (trimHistory) {
+    invariant(trim_cfds.size() > 0);
+    for (const auto& cfd : trim_cfds) {
+      if (cfd.options.comparator == nullptr || cfd.options.comparator->timestamp_size() == 0) {
+        return Status::InvalidArgument("invalid comparator");
+      }
+    }
+    
+    std::string trim_ts;
+    // step1: get stableTs
+    // step2: close db
+    {
+      std::vector<ColumnFamilyHandle*> tmp_cfhs;
+      DB* tmp_db = nullptr;
+      s = DB::Open(db_options, dbname, open_cfds, &tmp_cfhs, &tmp_db);
+      if (!s.ok()) {
+        return s;
+      }
+
+      char read_ts_buffer_[sizeof(RocksTimeStamp)];
+      Encoder(read_ts_buffer_, sizeof(RocksTimeStamp)).put64(mongo::Timestamp::max().asULL());
+      auto read_opt = rocksdb::ReadOptions();
+      Slice readTs = rocksdb::Slice(read_ts_buffer_, sizeof(read_ts_buffer_));
+      read_opt.timestamp = &readTs;
+
+      s = tmp_db->Get(read_opt, stable_ts_key, &trim_ts);
+      for (auto handle : tmp_cfhs) {
+        auto tmp_s = tmp_db->DestroyColumnFamilyHandle(handle);
+        assert(tmp_s.ok());
+      }
+      tmp_cfhs.clear();
+      delete tmp_db;
+      if (!s.ok() && !s.IsNotFound()) {
+        return s;
+      }
+    }
+
+    // step3: invoke rocksdb::OpenAndTrimHistory
+    // step4: close db
+    if(s.ok()) {
+      LOG(0) << "##### TOTDB recover to stableTs " << rocksdb::Slice(trim_ts).ToString(true);
+      std::vector<ColumnFamilyHandle*> tmp_cfhs;
+      DB* tmp_db = nullptr;
+      s = DB::OpenAndTrimHistory(db_options, dbname, trim_cfds, &tmp_cfhs, &tmp_db, trim_ts);
+      if (!s.ok()) {
+        return s;
+      }
+      for (auto handle : tmp_cfhs) {
+        auto tmp_s = tmp_db->DestroyColumnFamilyHandle(handle);
+        assert(tmp_s.ok());
+      }
+      tmp_cfhs.clear();
+      delete tmp_db;
+    }
+  }
+
   LOG(0) << "##### TOTDB open on normal mode #####";
-  s = DB::Open(db_options, dbname, column_families, handles, &db);
+  DB* db = nullptr;
+  s = DB::Open(db_options, dbname, open_cfds, handles, &db);
   if (s.ok()) {
-    auto v = new TOTransactionDBImpl(db, txn_db_options, false);
+    auto v = new TOTransactionDBImpl(db, txn_db_options, false, stable_ts_key);
     v->StartBackgroundCleanThread();
     *dbptr = v;
   }
@@ -1019,22 +1082,14 @@ Status TOTransactionDBImpl::SetTimeStamp(const TimeStampType& ts_type,
   }
 
   if (ts_type == kStable) {
-    return Status::NotSupported();
-    // ReadLock rl(&ts_meta_mutex_);
-    // if (oldest_ts_ != nullptr && *oldest_ts_ > ts && !force) {
-    //   return Status::InvalidArgument(
-    //       "kStable ts should not be less than kOldestTs");
-    // }
-    // if (dbimpl_->GetStableTimeStamp() > ts && !force) {
-    //   ROCKS_LOG_WARN(info_log_,
-    //                  "kStable ts can not travel back. kStable ts from %lu to "
-    //                  "%lu, keep kStable ts %lu",
-    //                  dbimpl_->GetStableTimeStamp(), ts,
-    //                  dbimpl_->GetStableTimeStamp());
-    //   return Status::OK();
-    // }
-    // dbimpl_->SetStableTimeStamp(ts);
-    // ROCKS_LOG_DEBUG(info_log_, "TOTDB set stable ts type(%d) value(%lu)\n", ts_type, ts);
+    char buf[sizeof(RocksTimeStamp)];
+    Encoder(buf, sizeof(ts)).put64(ts);
+    auto s = Put(rocksdb::WriteOptions(), stable_ts_key_, rocksdb::Slice(buf, sizeof(buf)));
+    if (!s.ok()) {
+      return s;
+    }
+    LOG(2) << "TOTDB set stable ts type " << static_cast<int>(ts_type)
+        << " value " << ts;
     return Status::OK();
   }
 
@@ -1085,19 +1140,24 @@ Status TOTransactionDBImpl::QueryTimeStamp(const TimeStampType& ts_type,
     return Status::OK();
   }
   if (ts_type == kStable) {
-    return Status::NotSupported();
-    // ReadLock rl(&ts_meta_mutex_);
-    // *timestamp = dbimpl_->GetStableTimeStamp();
-    // ROCKS_LOG_DEBUG(info_log_, "TOTDB query TS type(%d) value(%lu) \n", ts_type, *timestamp);
-    // return Status::OK();
+    std::string ts_holder;
+
+    char read_ts_buffer_[sizeof(RocksTimeStamp)];
+    Encoder(read_ts_buffer_, sizeof(RocksTimeStamp)).put64(mongo::Timestamp::max().asULL());
+    auto read_opt = rocksdb::ReadOptions();
+    Slice readTs = rocksdb::Slice(read_ts_buffer_, sizeof(read_ts_buffer_));
+    read_opt.timestamp = &readTs;
+
+    auto s = Get(read_opt, stable_ts_key_, &ts_holder);
+    if (!s.ok()) {
+      return s;
+    }
+    invariant(ts_holder.size() == sizeof(RocksTimeStamp));
+    *timestamp = Decoder(ts_holder.data(), ts_holder.size()).get64();
+    LOG(2) << "TOTDB query stable TS type " << static_cast<int>(ts_type) << " value " << *timestamp;
+    return Status::OK();
   }
   return Status::InvalidArgument("invalid ts_type");
-}
-
-Status TOTransactionDBImpl::RollbackToStable(ColumnFamilyHandle* column_family) {
-  (void)column_family;
-  return Status::NotSupported();
-  // return dbimpl_->TrimHistoryToStableTs(column_family);
 }
 
 Status TOTransactionDBImpl::Stat(TOTransactionStat* stat) {

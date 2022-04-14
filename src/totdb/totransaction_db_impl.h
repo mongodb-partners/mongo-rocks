@@ -55,7 +55,8 @@ class PrepareHeap {
 class TOTransactionDBImpl : public TOTransactionDB {
  public:
   TOTransactionDBImpl(DB* db, const TOTransactionDBOptions& txn_db_options,
-                      bool read_only)
+                      bool read_only,
+                      const std::string stable_ts_key)
       : TOTransactionDB(db),
         read_only_(read_only),
         txn_db_options_(txn_db_options),
@@ -76,7 +77,8 @@ class TOTransactionDBImpl : public TOTransactionDB {
         read_q_walk_len_sum_(0),
         commit_q_walk_times_(0),
         commit_q_walk_len_sum_(0),
-        oldest_ts_(nullptr) {
+        oldest_ts_(nullptr),
+        stable_ts_key_(stable_ts_key) {
     if (max_conflict_bytes_ == 0) {
       // we preserve at least 100MB for conflict check
       max_conflict_bytes_ = 100 * 1024 * 1024;
@@ -152,8 +154,6 @@ class TOTransactionDBImpl : public TOTransactionDB {
 
   Status QueryTimeStamp(const TimeStampType& ts_type, RocksTimeStamp* timestamp) override;
   
-  Status RollbackToStable(ColumnFamilyHandle* column_family) override;
-
   Status Stat(TOTransactionStat* stat) override;
 
   Status CheckWriteConflict(const TxnKey& key, const TransactionID& txn_id,
@@ -340,6 +340,8 @@ class TOTransactionDBImpl : public TOTransactionDB {
   std::shared_mutex ts_meta_mutex_;
   // protected by ts_meta_mutex_
   std::unique_ptr<RocksTimeStamp> oldest_ts_;
+
+  std::string stable_ts_key_;
 };
 
 }  //  namespace rocksdb
