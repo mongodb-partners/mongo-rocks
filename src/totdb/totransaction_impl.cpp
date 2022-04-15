@@ -41,7 +41,7 @@ TOTransactionImpl::TOTransactionImpl(TOTransactionDB* txn_db,
       txn_option_(txn_option),
       core_(core) {
       txn_db_impl_ = dynamic_cast<TOTransactionDBImpl*>(txn_db);
-      assert(txn_db_impl_);
+      invariant(txn_db_impl_);
 }
 
 TOTransactionImpl::~TOTransactionImpl() {
@@ -68,13 +68,13 @@ Status TOTransactionImpl::SetReadTimeStamp(const RocksTimeStamp& timestamp) {
   if (!s.ok()) {
     return s;
   }
-  assert(core_->read_ts_set_);
-  assert(core_->read_ts_ >= timestamp);
+  invariant(core_->read_ts_set_);
+  invariant(core_->read_ts_ >= timestamp);
   Encoder(core_->read_ts_buffer_, sizeof(core_->read_ts_)).put64(core_->read_ts_);
   // If we already have a snapshot, it may be too early to match
   // the timestamp (including the one we just read, if rounding
   // to oldest).  Get a new one.
-  assert(core_->txn_snapshot != nullptr);
+  invariant(core_->txn_snapshot != nullptr);
   txn_db_impl_->ReleaseSnapshot(core_->txn_snapshot);
   core_->txn_snapshot = txn_db_impl_->GetSnapshot();
   return s;
@@ -123,7 +123,7 @@ Status TOTransactionImpl::SetCommitTimeStamp(const RocksTimeStamp& timestamp) {
   if (!s.ok()) {
     return s;
   }
-  assert(core_->commit_ts_set_ &&
+  invariant(core_->commit_ts_set_ &&
          (core_->first_commit_ts_ <= core_->commit_ts_));
 
   LOG(2) << "TOTDB txn id " << core_->txn_id_ << "set commit ts " << timestamp;
@@ -139,7 +139,7 @@ Status TOTransactionImpl::SetDurableTimeStamp(const RocksTimeStamp& timestamp) {
   if (!s.ok()) {
     return s;
   }
-  assert(core_->durable_ts_set_);
+  invariant(core_->durable_ts_set_);
 
   LOG(2) << "TOTDB txn id " << core_->txn_id_ << "set durable ts " << timestamp;
   return Status::OK();
@@ -224,7 +224,7 @@ Status TOTransactionImpl::Get(ReadOptions& options,
   } 
   // Check the options, if read ts is set use read ts
   options.timestamp = &core_->read_ts_slice_;
-  assert(core_->txn_snapshot);
+  invariant(core_->txn_snapshot);
   options.snapshot = core_->txn_snapshot;
 
   const TxnKey txn_key(column_family->GetID(), key.ToString());
@@ -284,7 +284,7 @@ Iterator* TOTransactionImpl::GetIterator(ReadOptions& read_options,
 
   read_options.timestamp = &core_->read_ts_slice_;
 
-  assert(core_->txn_snapshot);
+  invariant(core_->txn_snapshot);
   read_options.snapshot = core_->txn_snapshot;
   Iterator* db_iter = db_->NewIterator(read_options, column_family);
   if (db_iter == nullptr) {
@@ -304,7 +304,7 @@ Status TOTransactionImpl::Commit(std::function<void()>* hook) {
     return Status::InvalidArgument("txn already committed or rollback.");
   }
   
-  assert(asof_commit_timestamps_.size()
+  invariant(asof_commit_timestamps_.size()
     == static_cast<size_t>(GetWriteBatch()->GetWriteBatch()->Count()));
   if (core_->commit_ts_set_) {
     for (size_t i = 0; i < asof_commit_timestamps_.size(); ++i) {
@@ -316,7 +316,7 @@ Status TOTransactionImpl::Commit(std::function<void()>* hook) {
 
   Status s;
   if (GetWriteBatch()->GetWriteBatch()->Count() != 0) {
-    assert(!txn_db_impl_->IsReadOnly());
+    invariant(!txn_db_impl_->IsReadOnly());
     char ts_buf[sizeof(RocksTimeStamp)];
     size_t cnt = 0;
     Slice ts_slice(ts_buf, sizeof(RocksTimeStamp));
@@ -325,7 +325,7 @@ Status TOTransactionImpl::Commit(std::function<void()>* hook) {
       return sizeof(RocksTimeStamp);
     };
     GetWriteBatch()->GetWriteBatch()->UpdateTimestamps(ts_slice, ts_sz_func);
-    assert(cnt == asof_commit_timestamps_.size());
+    invariant(cnt == asof_commit_timestamps_.size());
     // NOTE(xxxxxxxx): It's a simple modification for readonly transaction.
     // PutLogData will not increase Count. So, If in the future
     // PutLogData is added into TOTransactionDB, this shortcut should be redesigned.
@@ -373,12 +373,12 @@ Status TOTransactionImpl::SetName(const TransactionName& name) {
 }
 
 TransactionID TOTransactionImpl::GetID() const {
-  assert(core_);
+  invariant(core_);
   return core_->txn_id_;
 }
 
 TOTransaction::TOTransactionState TOTransactionImpl::GetState() const {
-  assert(core_);
+  invariant(core_);
   return core_->state_;
 }
 }
