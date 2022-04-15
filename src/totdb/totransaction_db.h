@@ -84,6 +84,8 @@ class TOComparator : public Comparator {
   TOComparator()
       : Comparator(sizeof(RocksTimeStamp)), cmp_without_ts_(BytewiseComparator()) {
   }
+
+  static size_t TimestampSize() { return sizeof(RocksTimeStamp); }
   const char* Name() const override { return "TOComparator"; }
 
   void FindShortSuccessor(std::string*) const override {}
@@ -131,13 +133,13 @@ class TOComparator : public Comparator {
     }
   }
 
- private:
   static const Slice StripTimestampFromUserKey(const Slice& user_key, size_t ts_sz) {
     Slice ret = user_key;
     ret.remove_suffix(ts_sz);
     return ret;
   }
 
+  private:
   const Comparator* cmp_without_ts_;
 };
 
