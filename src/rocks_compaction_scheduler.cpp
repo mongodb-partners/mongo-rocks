@@ -79,8 +79,12 @@ namespace mongo {
             virtual bool Filter(int level, const rocksdb::Slice& key,
                                 const rocksdb::Slice& existing_value, std::string* new_value,
                                 bool* value_changed) const {
-                bool filter = (key.compare(rocksdb::Slice(_until)) <= 0 &&
-                               key.compare(rocksdb::Slice(_from)) >= 0);
+                const rocksdb::Slice stripUserKey =
+                    rocksdb::TOComparator::StripTimestampFromUserKey(
+                        key, rocksdb::TOComparator::TimestampSize());
+
+                bool filter = (stripUserKey.compare(rocksdb::Slice(_until)) <= 0 &&
+                               stripUserKey.compare(rocksdb::Slice(_from)) >= 0);
                 if (filter) {
                     _compactionScheduler->addOplogCompactRemoved();
                 } else {
