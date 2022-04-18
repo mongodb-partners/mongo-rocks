@@ -492,8 +492,10 @@ namespace mongo {
             // we also need to write out the new prefix to the database. this is just an
             // optimization
             std::string encodedPrefix(encodePrefix(oplogTrackerPrefix));
-            s = rocksToMongoStatus(
-                _db->Put(rocksdb::WriteOptions(), _defaultCf.get(), encodedPrefix, rocksdb::Slice()));
+            auto txn = _db->makeTxn();
+            rocksdb::Status s;
+            ROCKS_ERR(txn->Put(encodedPrefix, rocksdb::Slice()));
+            ROCKS_ERR(txn->Commit());
         }
         return s;
     }
@@ -753,15 +755,16 @@ namespace mongo {
 
         BSONObjBuilder builder;
 
-        auto s = _db->Put(rocksdb::WriteOptions(), _defaultCf.get(), kMetadataPrefix + ident.toString(),
-                          rocksdb::Slice(config.objdata(), config.objsize()));
-
-        if (s.ok()) {
-            // As an optimization, add a key <prefix> to the DB
-            std::string encodedPrefix(encodePrefix(prefix));
-            s = _db->Put(rocksdb::WriteOptions(), _defaultCf.get(), encodedPrefix, rocksdb::Slice());
-        }
-
+        auto txn = _db->makeTxn();
+        rocksdb::Status s;
+        ROCKS_ERR(txn->Put(kMetadataPrefix + ident.toString(),
+                           rocksdb::Slice(config.objdata(), config.objsize())));
+        ROCKS_ERR(txn->Commit());
+        // As an optimization, add a key <prefix> to the DB
+        std::string encodedPrefix(encodePrefix(prefix));
+        auto txn1 = _db->makeTxn();
+        ROCKS_ERR(txn1->Put(encodedPrefix, rocksdb::Slice()));
+        ROCKS_ERR(txn1->Commit());
         return rocksToMongoStatus(s);
     }
 

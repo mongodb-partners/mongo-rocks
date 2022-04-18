@@ -363,11 +363,25 @@ namespace mongo {
                 beforeDelFiles = queryDelFilesInRange();
             }
 
-            auto s1 = rocksdb::DeleteFilesInRange(_db, op._cf, start, end);
-            if (!s1.ok()) {
-                // Do not fail the entire procedure, since there is still chance
-                // to purge the range below, in CompactRange
-                log() << "Failed to delete files in compacted range: " << s1.ToString();
+            {
+                char start_ts_buf[sizeof(uint64_t)];
+                char end_ts_buf[sizeof(uint64_t)];
+                Encoder(start_ts_buf, sizeof(uint64_t)).put64(0);
+                Encoder(end_ts_buf, sizeof(uint64_t)).put64(mongo::Timestamp::max().asULL());
+                std::string start_str(op._start_str);
+                std::string end_str(op._end_str);
+                start_str.append(start_ts_buf, sizeof(uint64_t));
+                end_str.append(end_ts_buf, sizeof(uint64_t));
+                rocksdb::Slice start_slice(start_str);
+                rocksdb::Slice end_slice(end_str);
+                rocksdb::Slice* start = !op._start_str.empty() ? &start_slice : nullptr;
+                rocksdb::Slice* end = !op._end_str.empty() ? &end_slice : nullptr;
+                auto s1 = rocksdb::DeleteFilesInRange(_db, op._cf, start, end);
+                if (!s1.ok()) {
+                    // Do not fail the entire procedure, since there is still chance
+                    // to purge the range below, in CompactRange
+                    log() << "Failed to delete files in compacted range: " << s1.ToString();
+                }
             }
 
             if (isOplog) {

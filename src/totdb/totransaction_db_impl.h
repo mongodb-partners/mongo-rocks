@@ -188,6 +188,8 @@ class TOTransactionDBImpl : public TOTransactionDB {
                                        ColumnFamilyHandle* column_family,
                                        Iterator* db_iter);
 
+  std::unique_ptr<rocksdb::TOTransaction> makeTxn() override;
+
   // Committed key, first commit txnid, second prepare ts, third commit ts
   // TODO: remove prepare ts from KeyModifyHistory
   using KeyModifyHistory =
