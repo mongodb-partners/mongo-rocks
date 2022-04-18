@@ -61,8 +61,6 @@ namespace mongo {
     private:
         static rocksdb::Slice _encodeCounter(long long counter, int64_t* storage);
 
-        std::unique_ptr<rocksdb::TOTransaction> _makeTxn();
-
         rocksdb::TOTransactionDB* _db;  // not owned
 
         rocksdb::ColumnFamilyHandle* _cf;  // not owned

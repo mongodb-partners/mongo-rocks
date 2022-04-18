@@ -1084,7 +1084,8 @@ Status TOTransactionDBImpl::SetTimeStamp(const TimeStampType& ts_type,
   if (ts_type == kStable) {
     char buf[sizeof(RocksTimeStamp)];
     Encoder(buf, sizeof(ts)).put64(ts);
-    auto s = Put(rocksdb::WriteOptions(), stable_ts_key_, rocksdb::Slice(buf, sizeof(buf)));
+    auto s = Put(rocksdb::WriteOptions(), DefaultColumnFamily(), stable_ts_key_, 0,
+                 rocksdb::Slice(buf, sizeof(buf)));
     if (!s.ok()) {
       return s;
     }
@@ -1259,6 +1260,12 @@ void TOTransactionDBImpl::BackgroundCleanJob::FinishClean(const TransactionID& t
 void TOTransactionDBImpl::BackgroundCleanJob::StopThread() {
   std::lock_guard<std::mutex> lock(thread_mutex_);
   thread_state_ = kStopped;
+}
+
+std::unique_ptr<rocksdb::TOTransaction> TOTransactionDBImpl::makeTxn() {
+    rocksdb::WriteOptions options;
+    rocksdb::TOTransactionOptions txnOptions;
+    return std::unique_ptr<rocksdb::TOTransaction>(BeginTransaction(options, txnOptions));
 }
 
 }  //  namespace rocksdb

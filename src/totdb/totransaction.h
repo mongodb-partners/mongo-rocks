@@ -9,6 +9,14 @@
 #include "rocksdb/db.h"
 #include "rocksdb/status.h"
 
+#define ROCKS_ERR(a)                      \
+    do {                                  \
+        s = (a);                          \
+        if (!s.ok()) {                    \
+            return rocksToMongoStatus(s); \
+        }                                 \
+    } while (0)
+
 namespace rocksdb {
 
 class Iterator;
