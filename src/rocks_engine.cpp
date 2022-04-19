@@ -177,6 +177,7 @@ namespace mongo {
 
     // first four bytes are the default prefix 0
     const std::string RocksEngine::kMetadataPrefix("\0\0\0\0metadata-", 13);
+    const std::string RocksEngine::kStablePrefix("\0\0\0\0stableTs-", 13);
 
     const int RocksEngine::kDefaultJournalDelayMillis = 100;
 
@@ -325,6 +326,7 @@ namespace mongo {
             invariantRocksOK(rocksdb::TOTransactionDB::Open(
                 _options(false /* isOplog */),
                 rocksdb::TOTransactionDBOptions(rocksGlobalOptions.maxConflictCheckSizeMB), _path,
+                kStablePrefix,
                 &db));
             invariantRocksOK(db->Close());
         }
@@ -344,6 +346,7 @@ namespace mongo {
             invariantRocksOK(rocksdb::TOTransactionDB::Open(
                 _options(false /* isOplog */),
                 rocksdb::TOTransactionDBOptions(rocksGlobalOptions.maxConflictCheckSizeMB), _path,
+                kStablePrefix,
                 &db));
             invariantRocksOK(db->CreateColumnFamily(_options(true /* isOplog */),
                                                     NamespaceString::kRsOplogNamespace.toString(),
@@ -354,12 +357,28 @@ namespace mongo {
         }
 
         std::vector<rocksdb::ColumnFamilyHandle*> cfs;
+
+        std::vector<rocksdb::ColumnFamilyDescriptor> open_cfds = {
+            {rocksdb::kDefaultColumnFamilyName, _options(false /* isOplog */)},
+            {NamespaceString::kRsOplogNamespace.toString(), _options(true /* isOplog */)}};
+
+        std::vector<rocksdb::ColumnFamilyDescriptor> trim_cfds = {
+            {rocksdb::kDefaultColumnFamilyName, _options(false /* isOplog */)}};
+
+        const std::string trimTs = "";
+
+        const bool trimHistory = true;
         s = rocksdb::TOTransactionDB::Open(
             _options(false /* isOplog */),
-            rocksdb::TOTransactionDBOptions(rocksGlobalOptions.maxConflictCheckSizeMB), _path,
-            {{rocksdb::kDefaultColumnFamilyName, _options(false /* isOplog */)},
-             {NamespaceString::kRsOplogNamespace.toString(), _options(true /* isOplog */)}},
-            &cfs, &db);
+            rocksdb::TOTransactionDBOptions(rocksGlobalOptions.maxConflictCheckSizeMB), 
+            _path,
+            open_cfds,
+            &cfs, 
+            trim_cfds,
+            trimHistory,
+            kStablePrefix,
+            &db);
+
         invariantRocksOK(s);
         invariant(cfs.size() == 2);
         invariant(cfs[0]->GetName() == rocksdb::kDefaultColumnFamilyName);
@@ -367,12 +386,6 @@ namespace mongo {
         _db.reset(db);
         _defaultCf.reset(cfs[0]);
         _oplogCf.reset(cfs[1]);
-
-        rocksdb::RocksTimeStamp ts(0);
-        auto status = _db->QueryTimeStamp(rocksdb::TimeStampType::kStable, &ts);
-        if (!status.IsNotFound() && Timestamp(ts).asULL() >= 1) {
-            invariantRocksOK(_db->RollbackToStable(_defaultCf.get()));
-        }
     }
 
     void RocksEngine::appendGlobalStats(BSONObjBuilder& b) {
@@ -479,8 +492,10 @@ namespace mongo {
             // we also need to write out the new prefix to the database. this is just an
             // optimization
             std::string encodedPrefix(encodePrefix(oplogTrackerPrefix));
-            s = rocksToMongoStatus(
-                _db->Put(rocksdb::WriteOptions(), _defaultCf.get(), encodedPrefix, rocksdb::Slice()));
+            auto txn = _db->makeTxn();
+            rocksdb::Status s;
+            ROCKS_ERR(txn->Put(encodedPrefix, rocksdb::Slice()));
+            ROCKS_ERR(txn->Commit());
         }
         return s;
     }
@@ -740,15 +755,16 @@ namespace mongo {
 
         BSONObjBuilder builder;
 
-        auto s = _db->Put(rocksdb::WriteOptions(), _defaultCf.get(), kMetadataPrefix + ident.toString(),
-                          rocksdb::Slice(config.objdata(), config.objsize()));
-
-        if (s.ok()) {
-            // As an optimization, add a key <prefix> to the DB
-            std::string encodedPrefix(encodePrefix(prefix));
-            s = _db->Put(rocksdb::WriteOptions(), _defaultCf.get(), encodedPrefix, rocksdb::Slice());
-        }
-
+        auto txn = _db->makeTxn();
+        rocksdb::Status s;
+        ROCKS_ERR(txn->Put(kMetadataPrefix + ident.toString(),
+                           rocksdb::Slice(config.objdata(), config.objsize())));
+        ROCKS_ERR(txn->Commit());
+        // As an optimization, add a key <prefix> to the DB
+        std::string encodedPrefix(encodePrefix(prefix));
+        auto txn1 = _db->makeTxn();
+        ROCKS_ERR(txn1->Put(encodedPrefix, rocksdb::Slice()));
+        ROCKS_ERR(txn1->Commit());
         return rocksToMongoStatus(s);
     }
 
@@ -1001,25 +1017,52 @@ namespace mongo {
                           << initialDataTS.toString() << ", Stable timestamp: " << stableTS.toString());
         }
 
+
+        invariant(!_oplogManager->isRunning());
+        LOG_FOR_ROLLBACK(0) << "RocksEngine::RecoverToStableTimestamp oplogManager is halt.";
+
+        _oplogManager->init(nullptr /* rocksdb::TOTransactionDB* */, nullptr /* RocksDurabilityManager* */);
+
         LOG_FOR_ROLLBACK(0) << "RocksEngine::RecoverToStableTimestamp syncing size storer to disk.";
         _counterManager->sync();
+        _counterManager.reset();
+        LOG_FOR_ROLLBACK(0) << "RocksEngine::RecoverToStableTimestamp shutting down counterManager";
 
         if (_journalFlusher) {
             _journalFlusher->shutdown();
             _journalFlusher.reset();
         }
         LOG_FOR_ROLLBACK(0) << "RocksEngine::RecoverToStableTimestamp shutting down journal";
+
+        _durabilityManager.reset();
+        LOG_FOR_ROLLBACK(0) << "RocksEngine::RecoverToStableTimestamp shutting down durabilityManager";
+
+        _compactionScheduler.reset();
+        LOG_FOR_ROLLBACK(0) << "RocksEngine::RecoverToStableTimestamp shutting down _compactionScheduler";
+
+        // close db
+        _defaultCf.reset();
+        _oplogCf.reset();
+        _db.reset();
+        LOG_FOR_ROLLBACK(0) << "RocksEngine::RecoverToStableTimestamp shutting down rocksdb";
+
+        _initDatabase();
+        LOG_FOR_ROLLBACK(0) << "RocksEngine::RecoverToStableTimestamp open rocksdb";
+
+        _compactionScheduler.reset(new RocksCompactionScheduler());
+        _compactionScheduler->start(_db.get(), _defaultCf.get());
+
+        _durabilityManager.reset(
+            new RocksDurabilityManager(_db.get(), _durable, _defaultCf.get(), _oplogCf.get()));
+
+        _oplogManager->init(_db.get(), _durabilityManager.get());
+
         const auto stableTimestamp = getStableTimestamp();
         const auto initialDataTimestamp = getInitialDataTimestamp();
 
         LOG_FOR_ROLLBACK(0) << "Rolling back to the stable timestamp. StableTimestamp: "
             << stableTimestamp
             << " Initial Data Timestamp: " << initialDataTimestamp;
-        auto s = _compactionScheduler->rollbackToStable(_defaultCf.get());
-        if (!s.isOK()) {
-            return {ErrorCodes::UnrecoverableRollbackError,
-                    str::stream() << "Error rolling back to stable. Err: " << s};
-        }
 
         setInitialDataTimestamp(initialDataTimestamp);
         setStableTimestamp(stableTimestamp, false);
@@ -1030,6 +1073,9 @@ namespace mongo {
         }
         _counterManager.reset(new RocksCounterManager(_db.get(), _defaultCf.get(),
                                                       rocksGlobalOptions.crashSafeCounters));
+
+        // oplogManager will be oppend by oplog record store is open, no need open here
+
         return {stableTimestamp};
     }
 

@@ -34,9 +34,10 @@ using ATN = TOTransactionImpl::ActiveTxnNode;
     } else {                                                                  \
       ReadOptions read_opt;                                                   \
       read_opt.timestamp = &core_->read_ts_slice_;                            \
+      invariant(read_opt.timestamp->size() == sizeof(RocksTimeStamp));        \
       auto getStatus = core_->write_batch_.GetFromBatchAndDB(                 \
           db_, read_opt, cf_, key_, &val_);                                   \
-      invariant(getStatus.ok() || getStatus.IsNotFound());                       \
+      invariant(getStatus.ok() || getStatus.IsNotFound());                    \
       if (getStatus.ok()) {                                                   \
         return;                                                               \
       } else {                                                                \
@@ -465,7 +466,7 @@ void PrepareMergingIterator::UpdateCurrent() {
 }
 
 PrepareFilterIterator::PrepareFilterIterator(
-    DB* db, ColumnFamilyHandle* cf, TOTransactionImpl::ActiveTxnNode* core,
+    DB* db, ColumnFamilyHandle* cf, const std::shared_ptr<TOTransactionImpl::ActiveTxnNode>& core,
     std::unique_ptr<PrepareMergingIterator> input, Logger* info_log)
     : Iterator(),
       db_(db),

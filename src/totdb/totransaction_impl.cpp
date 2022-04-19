@@ -6,14 +6,15 @@
 #ifndef ROCKSDB_LITE
 
 #define MONGO_LOG_DEFAULT_COMPONENT ::mongo::logger::LogComponent::kStorage
+#include "mongo/db/modules/rocks/src/totdb/totransaction_impl.h"
+#include "mongo/db/modules/rocks/src/totdb/totransaction_db.h"
+#include "mongo/db/modules/rocks/src/totdb/totransaction_db_impl.h"
+#include "mongo/util/log.h"
+#include "mongo/util/stacktrace.h"
 #include "rocksdb/comparator.h"
 #include "rocksdb/db.h"
 #include "rocksdb/status.h"
 #include "third_party/s2/util/coding/coder.h"
-#include "mongo/db/modules/rocks/src/totdb/totransaction_db.h"
-#include "mongo/db/modules/rocks/src/totdb/totransaction_db_impl.h"
-#include "mongo/db/modules/rocks/src/totdb/totransaction_impl.h"
-#include "mongo/util/log.h"
 
 namespace rocksdb {
 
@@ -227,6 +228,7 @@ Status TOTransactionImpl::Get(ReadOptions& options,
   invariant(core_->txn_snapshot);
   options.snapshot = core_->txn_snapshot;
 
+  invariant(options.timestamp->size() == sizeof(RocksTimeStamp));
   const TxnKey txn_key(column_family->GetID(), key.ToString());
   if (written_keys_.find(txn_key) != written_keys_.end()) {
     return GetWriteBatch()->GetFromBatchAndDB(db_, options, column_family, key,
@@ -285,6 +287,7 @@ Iterator* TOTransactionImpl::GetIterator(ReadOptions& read_options,
   read_options.timestamp = &core_->read_ts_slice_;
 
   invariant(core_->txn_snapshot);
+  invariant(read_options.timestamp->size() == sizeof(RocksTimeStamp));
   read_options.snapshot = core_->txn_snapshot;
   Iterator* db_iter = db_->NewIterator(read_options, column_family);
   if (db_iter == nullptr) {

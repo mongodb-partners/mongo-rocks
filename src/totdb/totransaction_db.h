@@ -6,11 +6,12 @@
 #include <vector>
 #include <iostream>
 
-#include "third_party/s2/util/coding/coder.h"
+#include "mongo/db/modules/rocks/src/totdb/totransaction.h"
+#include "mongo/util/str.h"
 #include "rocksdb/comparator.h"
 #include "rocksdb/db.h"
-#include "mongo/db/modules/rocks/src/totdb/totransaction.h"
 #include "rocksdb/utilities/stackable_db.h"
+#include "third_party/s2/util/coding/coder.h"
 
 namespace rocksdb {
 
@@ -119,9 +120,8 @@ class TOComparator : public Comparator {
 
   int CompareTimestamp(const Slice& ts1, const Slice& ts2) const override {
     invariant(ts1.data() && ts2.data());
-    invariant(ts1.size() == ts2.size());
-    const size_t kSize = ts1.size();
-    invariant(kSize == sizeof(uint64_t));
+    invariant(ts1.size() == sizeof(RocksTimeStamp));
+    invariant(ts2.size() == sizeof(RocksTimeStamp));
     uint64_t ts1_data = Decoder(ts1.data(), ts1.size()).get64();
     uint64_t ts2_data = Decoder(ts2.data(), ts2.size()).get64();
     if (ts1_data < ts2_data) {
@@ -147,13 +147,18 @@ class TOTransactionDB : public StackableDB {
   public:
   static Status Open(const Options& options,
                      const TOTransactionDBOptions& txn_db_options,
-                     const std::string& dbname, TOTransactionDB** dbptr);
+                     const std::string& dbname, 
+                     const std::string stableTsKey,
+                     TOTransactionDB** dbptr);
 
   static Status Open(const DBOptions& db_options,
                      const TOTransactionDBOptions& txn_db_options,
                      const std::string& dbname,
-                     const std::vector<ColumnFamilyDescriptor>& column_families,
+                     const std::vector<ColumnFamilyDescriptor>& open_cfds,
                      std::vector<ColumnFamilyHandle*>* handles,
+                     const std::vector<ColumnFamilyDescriptor>& trim_cfds,
+                     const bool trimHistory,
+                     const std::string stableTsKey,
                      TOTransactionDB** dbptr);
   virtual void SetMaxConflictBytes(uint64_t bytes) = 0;
 
@@ -167,11 +172,11 @@ class TOTransactionDB : public StackableDB {
 
   virtual Status QueryTimeStamp(const TimeStampType& ts_type, RocksTimeStamp* timestamp) = 0;
 
-  virtual Status RollbackToStable(ColumnFamilyHandle* column_family) = 0;
-
   virtual Status Stat(TOTransactionStat* stat) = 0;
   //virtual Status Close();
-  
+
+  virtual std::unique_ptr<rocksdb::TOTransaction> makeTxn() = 0;
+
   protected:
 	//std::shared_ptr<Logger> info_log_ = nullptr;	
   // To Create an ToTransactionDB, call Open()

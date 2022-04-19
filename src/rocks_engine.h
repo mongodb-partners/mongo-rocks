@@ -363,6 +363,7 @@ namespace mongo {
         std::unique_ptr<RocksOplogManager> _oplogManager;
 
         static const std::string kMetadataPrefix;
+        static const std::string kStablePrefix;
 
         std::unique_ptr<RocksDurabilityManager> _durabilityManager;
         class RocksJournalFlusher;
