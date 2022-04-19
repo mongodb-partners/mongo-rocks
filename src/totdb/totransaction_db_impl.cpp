@@ -546,8 +546,7 @@ Iterator* TOTransactionDBImpl::NewIteratorConsiderPrepare(
   auto merge_iter =
       std::unique_ptr<PrepareMergingIterator>(new PrepareMergingIterator(
           std::move(base_writebatch), std::move(pmap_iter)));
-  return new PrepareFilterIterator(GetRootDB(), column_family, core.get(),
-                                   std::move(merge_iter));
+  return new PrepareFilterIterator(GetRootDB(), column_family, core, std::move(merge_iter));
 }
 
 void TOTransactionDBImpl::StartBackgroundCleanThread() {

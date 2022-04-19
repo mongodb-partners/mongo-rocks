@@ -156,7 +156,7 @@ class PrepareMergingIterator {
 class PrepareFilterIterator : public Iterator {
  public:
   PrepareFilterIterator(DB* db, ColumnFamilyHandle* cf,
-                        TOTransactionImpl::ActiveTxnNode* core,
+                        const std::shared_ptr<TOTransactionImpl::ActiveTxnNode>& core,
                         std::unique_ptr<PrepareMergingIterator> input,
                         Logger* info_log = nullptr);
 
@@ -196,7 +196,7 @@ class PrepareFilterIterator : public Iterator {
 
   ColumnFamilyHandle* cf_;
 
-  TOTransactionImpl::ActiveTxnNode* core_;
+  std::shared_ptr<TOTransactionImpl::ActiveTxnNode> core_;
 
   std::unique_ptr<PrepareMergingIterator> input_;
 

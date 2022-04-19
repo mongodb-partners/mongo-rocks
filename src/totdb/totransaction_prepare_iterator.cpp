@@ -466,7 +466,7 @@ void PrepareMergingIterator::UpdateCurrent() {
 }
 
 PrepareFilterIterator::PrepareFilterIterator(
-    DB* db, ColumnFamilyHandle* cf, TOTransactionImpl::ActiveTxnNode* core,
+    DB* db, ColumnFamilyHandle* cf, const std::shared_ptr<TOTransactionImpl::ActiveTxnNode>& core,
     std::unique_ptr<PrepareMergingIterator> input, Logger* info_log)
     : Iterator(),
       db_(db),
