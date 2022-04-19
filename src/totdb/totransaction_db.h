@@ -120,8 +120,8 @@ class TOComparator : public Comparator {
 
   int CompareTimestamp(const Slice& ts1, const Slice& ts2) const override {
     invariant(ts1.data() && ts2.data());
-    invariant(ts1.size() == sizeof(uint64_t));
-    invariant(ts2.size() == sizeof(uint64_t));
+    invariant(ts1.size() == sizeof(RocksTimeStamp));
+    invariant(ts2.size() == sizeof(RocksTimeStamp));
     uint64_t ts1_data = Decoder(ts1.data(), ts1.size()).get64();
     uint64_t ts2_data = Decoder(ts2.data(), ts2.size()).get64();
     if (ts1_data < ts2_data) {

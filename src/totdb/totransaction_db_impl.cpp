@@ -1081,10 +1081,14 @@ Status TOTransactionDBImpl::SetTimeStamp(const TimeStampType& ts_type,
   }
 
   if (ts_type == kStable) {
-    char buf[sizeof(RocksTimeStamp)];
-    Encoder(buf, sizeof(ts)).put64(ts);
-    auto s = Put(rocksdb::WriteOptions(), DefaultColumnFamily(), stable_ts_key_, 0,
-                 rocksdb::Slice(buf, sizeof(buf)));
+    char val_buf[sizeof(RocksTimeStamp)];
+    char ts_buf[sizeof(RocksTimeStamp)];
+    Encoder(val_buf, sizeof(ts)).put64(ts);
+    Encoder(ts_buf, sizeof(ts)).put64(0);
+    auto write_ops = rocksdb::WriteOptions();
+    write_ops.sync = true;
+    auto s = Put(write_ops, DefaultColumnFamily(), stable_ts_key_, rocksdb::Slice(ts_buf, sizeof(ts_buf)),
+                 rocksdb::Slice(val_buf, sizeof(val_buf)));
     if (!s.ok()) {
       return s;
     }
