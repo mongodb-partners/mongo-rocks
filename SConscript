@@ -140,3 +140,13 @@ env.CppUnitTest(
         '$BUILD_DIR/mongo/db/repl/replmocks',
     ],
 )
+
+env.CppUnitTest(
+    target='totdb_test',
+    source=[
+        'src/totdb/totransaction_test.cpp',
+    ],
+    LIBDEPS=[
+        'storage_rocks_mock',
+    ],
+)

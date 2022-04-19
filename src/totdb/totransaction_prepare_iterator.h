@@ -196,6 +196,11 @@ class PrepareFilterIterator : public Iterator {
 
   ColumnFamilyHandle* cf_;
 
+  // Iterator's lifetime should be shorter than the Transaction who created it.
+  // So here core_ should be a raw pointer rather than shared_ptr. However,
+  // MultiIndexBlock::insertAllDocumentsInCollection breaks this. The cursor
+  // in exec has longer lifetime than WriteUnitOfWork, so we have to workaround
+  // with shared_ptr.
   std::shared_ptr<TOTransactionImpl::ActiveTxnNode> core_;
 
   std::unique_ptr<PrepareMergingIterator> input_;

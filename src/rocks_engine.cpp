@@ -88,6 +88,14 @@
 #define LOG_FOR_ROLLBACK(level) \
     MONGO_LOG_COMPONENT(level, ::mongo::logger::LogComponent::kReplicationRollback)
 
+#define ROCKS_ERR(a)                      \
+    do {                                  \
+        s = (a);                          \
+        if (!s.ok()) {                    \
+            return rocksToMongoStatus(s); \
+        }                                 \
+    } while (0)
+
 namespace mongo {
 
     class RocksEngine::RocksJournalFlusher : public BackgroundJob {
