@@ -565,7 +565,7 @@ namespace mongo {
             invariant(!_cappedOldestKey.empty());
             _counterManager->updateCounter(_cappedOldestKey, _cappedOldestKeyHint.repr());
             _counterManager->sync();
-            LOG(0) << "cuixin: save _cappedOldestKeyHint: " << _cappedOldestKeyHint;
+            LOG(0) << "save _cappedOldestKeyHint: " << _cappedOldestKeyHint;
             {
                 // for test
                 _loadCountFromCountManager(opCtx);
