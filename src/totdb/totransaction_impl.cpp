@@ -228,7 +228,7 @@ Status TOTransactionImpl::Get(ReadOptions& options,
   invariant(core_->txn_snapshot);
   options.snapshot = core_->txn_snapshot;
 
-  invariant(options.timestamp->size() == sizeof(uint64_t));
+  invariant(options.timestamp->size() == sizeof(RocksTimeStamp));
   const TxnKey txn_key(column_family->GetID(), key.ToString());
   if (written_keys_.find(txn_key) != written_keys_.end()) {
     return GetWriteBatch()->GetFromBatchAndDB(db_, options, column_family, key,
@@ -287,7 +287,7 @@ Iterator* TOTransactionImpl::GetIterator(ReadOptions& read_options,
   read_options.timestamp = &core_->read_ts_slice_;
 
   invariant(core_->txn_snapshot);
-  invariant(read_options.timestamp->size() == sizeof(uint64_t));
+  invariant(read_options.timestamp->size() == sizeof(RocksTimeStamp));
   read_options.snapshot = core_->txn_snapshot;
   Iterator* db_iter = db_->NewIterator(read_options, column_family);
   if (db_iter == nullptr) {

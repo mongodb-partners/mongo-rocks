@@ -34,7 +34,7 @@ using ATN = TOTransactionImpl::ActiveTxnNode;
     } else {                                                                  \
       ReadOptions read_opt;                                                   \
       read_opt.timestamp = &core_->read_ts_slice_;                            \
-      invariant(read_opt.timestamp->size() == sizeof(uint64_t));               \
+      invariant(read_opt.timestamp->size() == sizeof(RocksTimeStamp));        \
       auto getStatus = core_->write_batch_.GetFromBatchAndDB(                 \
           db_, read_opt, cf_, key_, &val_);                                   \
       invariant(getStatus.ok() || getStatus.IsNotFound());                    \
