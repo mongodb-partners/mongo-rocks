@@ -88,6 +88,7 @@ class TOComparator : public Comparator {
   TOComparator()
       : Comparator(sizeof(RocksTimeStamp)), cmp_without_ts_(BytewiseComparator()) {
   }
+  TOComparator(size_t ts_size) : Comparator(ts_size), cmp_without_ts_(BytewiseComparator()) {}
 
   static size_t TimestampSize() { return sizeof(RocksTimeStamp); }
   const char* Name() const override { return "TOComparator"; }
@@ -97,9 +98,9 @@ class TOComparator : public Comparator {
   void FindShortestSeparator(std::string*, const Slice&) const override {}
 
   int Compare(const Slice& a, const Slice& b) const override {
-    int r = cmp_without_ts_->Compare(
-      StripTimestampFromUserKey(a, timestamp_size()),
-      StripTimestampFromUserKey(b, timestamp_size()));
+    invariant(timestamp_size() > 0);
+    int r = cmp_without_ts_->Compare(StripTimestampFromUserKey(a, timestamp_size()),
+                                     StripTimestampFromUserKey(b, timestamp_size()));
     if (r != 0) {
       return r;
     }
@@ -110,6 +111,7 @@ class TOComparator : public Comparator {
 
   int CompareWithoutTimestamp(const Slice& a, bool a_has_ts, const Slice& b,
                               bool b_has_ts) const override {
+    invariant(timestamp_size() > 0);
     if (a_has_ts) {
       invariant(a.size() >= timestamp_size());
     }
@@ -122,6 +124,7 @@ class TOComparator : public Comparator {
   }
 
   int CompareTimestamp(const Slice& ts1, const Slice& ts2) const override {
+    invariant(timestamp_size() > 0);
     invariant(ts1.data() && ts2.data());
     invariant(ts1.size() == sizeof(RocksTimeStamp));
     invariant(ts2.size() == sizeof(RocksTimeStamp));
@@ -163,6 +166,7 @@ class TOTransactionDB : public StackableDB {
                      const bool trimHistory,
                      const std::string stableTsKey,
                      TOTransactionDB** dbptr);
+
   virtual void SetMaxConflictBytes(uint64_t bytes) = 0;
 
   // The lifecycle of returned pointer should be managed by the application level

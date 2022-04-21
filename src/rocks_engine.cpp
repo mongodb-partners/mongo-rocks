@@ -141,6 +141,7 @@ namespace mongo {
         TicketHolder openWriteTransaction(128);
         TicketHolder openReadTransaction(128);
         rocksdb::TOComparator comparator;
+        rocksdb::TOComparator comparatorFake(0);
     }  // namespace
 
     ROpenWriteTransactionParam::ROpenWriteTransactionParam(StringData name, ServerParameterType spt)
@@ -323,7 +324,6 @@ namespace mongo {
         // open DB
         rocksdb::TOTransactionDB* db = nullptr;
         rocksdb::Status s;
-        std::vector<std::string> columnFamilies;
 
         const bool newDB = [&]() {
             const auto path = boost::filesystem::path(_path) / "CURRENT";
@@ -332,15 +332,16 @@ namespace mongo {
         if (newDB) {
             // init manifest so list column families will not fail when db is empty.
             invariantRocksOK(rocksdb::TOTransactionDB::Open(
-                _options(false /* isOplog */),
+                _options(false /* isOplog */, false /* trimHistory */),
                 rocksdb::TOTransactionDBOptions(rocksGlobalOptions.maxConflictCheckSizeMB), _path,
-                kStablePrefix,
-                &db));
+                kStablePrefix, &db));
             invariantRocksOK(db->Close());
         }
 
         const bool hasOplog = [&]() {
-            s = rocksdb::DB::ListColumnFamilies(_options(false /* isOplog */), _path, &columnFamilies);
+            std::vector<std::string> columnFamilies;
+            s = rocksdb::DB::ListColumnFamilies(
+                _options(false /* isOplog */, false /* trimHIstory */), _path, &columnFamilies);
             invariantRocksOK(s);
 
             auto it = std::find(columnFamilies.begin(), columnFamilies.end(),
@@ -352,13 +353,12 @@ namespace mongo {
         if (!hasOplog) {
             rocksdb::ColumnFamilyHandle* cf = nullptr;
             invariantRocksOK(rocksdb::TOTransactionDB::Open(
-                _options(false /* isOplog */),
+                _options(false /* isOplog */, false /* trimHistory */),
                 rocksdb::TOTransactionDBOptions(rocksGlobalOptions.maxConflictCheckSizeMB), _path,
-                kStablePrefix,
-                &db));
-            invariantRocksOK(db->CreateColumnFamily(_options(true /* isOplog */),
-                                                    NamespaceString::kRsOplogNamespace.toString(),
-                                                    &cf));
+                kStablePrefix, &db));
+            invariantRocksOK(
+                db->CreateColumnFamily(_options(true /* isOplog */, false /* trimHistory */),
+                                       NamespaceString::kRsOplogNamespace.toString(), &cf));
             invariantRocksOK(db->DestroyColumnFamilyHandle(cf));
             invariantRocksOK(db->Close());
             log() << "init oplog cf success";
@@ -367,25 +367,23 @@ namespace mongo {
         std::vector<rocksdb::ColumnFamilyHandle*> cfs;
 
         std::vector<rocksdb::ColumnFamilyDescriptor> open_cfds = {
-            {rocksdb::kDefaultColumnFamilyName, _options(false /* isOplog */)},
-            {NamespaceString::kRsOplogNamespace.toString(), _options(true /* isOplog */)}};
+            {rocksdb::kDefaultColumnFamilyName,
+             _options(false /* isOplog */, false /* trimHistory */)},
+            {NamespaceString::kRsOplogNamespace.toString(),
+             _options(true /* isOplog */, false /* trimHistory */)}};
 
+        const bool trimHistory = true;
         std::vector<rocksdb::ColumnFamilyDescriptor> trim_cfds = {
-            {rocksdb::kDefaultColumnFamilyName, _options(false /* isOplog */)}};
+            {rocksdb::kDefaultColumnFamilyName, _options(false /* isOplog */, trimHistory)},
+            {NamespaceString::kRsOplogNamespace.toString(),
+             _options(true /* isOplog */, trimHistory)}};
 
         const std::string trimTs = "";
 
-        const bool trimHistory = true;
         s = rocksdb::TOTransactionDB::Open(
-            _options(false /* isOplog */),
-            rocksdb::TOTransactionDBOptions(rocksGlobalOptions.maxConflictCheckSizeMB), 
-            _path,
-            open_cfds,
-            &cfs, 
-            trim_cfds,
-            trimHistory,
-            kStablePrefix,
-            &db);
+            _options(false /* isOplog */, false /* trimHistory */),
+            rocksdb::TOTransactionDBOptions(rocksGlobalOptions.maxConflictCheckSizeMB), _path,
+            open_cfds, &cfs, trim_cfds, trimHistory, kStablePrefix, &db);
 
         invariantRocksOK(s);
         invariant(cfs.size() == 2);
@@ -794,7 +792,7 @@ namespace mongo {
         return encodePrefix(config.getField("prefix").numberInt());
     }
 
-    rocksdb::Options RocksEngine::_options(bool isOplog) const {
+    rocksdb::Options RocksEngine::_options(bool isOplog, bool trimHistory) const {
         // default options
         rocksdb::Options options;
         options.rate_limiter = _rateLimiter;
@@ -803,7 +801,13 @@ namespace mongo {
         table_options.filter_policy.reset(rocksdb::NewBloomFilterPolicy(10, false));
         table_options.block_size = 16 * 1024;  // 16KB
         table_options.format_version = 2;
-        options.comparator = &comparator;
+
+        if (isOplog && trimHistory) {
+            options.comparator = &comparatorFake;
+            options.disable_auto_compactions = true;
+        } else {
+            options.comparator = &comparator;
+        }
         options.table_factory.reset(rocksdb::NewBlockBasedTableFactory(table_options));
 
         options.write_buffer_size = rocksGlobalOptions.writeBufferSize;
