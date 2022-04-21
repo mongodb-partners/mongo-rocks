@@ -277,6 +277,7 @@ namespace mongo {
         static rocksdb::Slice _makeKey(const RecordId& loc, int64_t* storage);
         static std::string _makePrefixedKey(const std::string& prefix, const RecordId& loc);
         Timestamp _prefixedKeyToTimestamp(const std::string& key) const;
+        Timestamp _prefixedKeyToTimestamp(const rocksdb::Slice& key) const;
 
         void _changeNumRecords(OperationContext* opCtx, int64_t amount);
         void _increaseDataSize(OperationContext* opCtx, int64_t amount);

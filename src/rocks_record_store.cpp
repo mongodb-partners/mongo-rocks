@@ -504,7 +504,9 @@ namespace mongo {
             if (!NamespaceString::oplog(f.column_family_name)) {
                 continue;
             }
-            auto largestTs = _prefixedKeyToTimestamp(f.largestkey);
+            auto largestKey = rocksdb::Slice(f.largestkey);
+            largestKey.remove_suffix(sizeof(rocksdb::RocksTimeStamp));
+            auto largestTs = _prefixedKeyToTimestamp(largestKey);
             if (largestTs > persistedTimestamp) {
                 continue;
             }
@@ -519,7 +521,11 @@ namespace mongo {
             if (oplogTotalBytes - pendingDelSize > _cappedMaxSize + static_cast<ssize_t>(f.size)) {
                 pendingDelSize += f.size;
                 pendingDelFiles.push_back(f);
-                maxDelKey = std::max(maxDelKey, f.largestkey);
+                auto largestKey = rocksdb::Slice(f.largestkey);
+                largestKey.remove_suffix(sizeof(rocksdb::RocksTimeStamp));
+                if (largestKey.compare(rocksdb::Slice(maxDelKey)) > 0) {
+                    maxDelKey = largestKey.ToString();
+                }
             }
         }
         if (pendingDelFiles.size() < static_cast<uint32_t>(minSSTFileCountReserved.load())) {
@@ -1047,10 +1053,14 @@ namespace mongo {
         return key;
     }
 
-    Timestamp RocksRecordStore::_prefixedKeyToTimestamp(const std::string& key) const {
+    Timestamp RocksRecordStore::_prefixedKeyToTimestamp(const rocksdb::Slice& key) const {
         rocksdb::Slice slice(key);
         slice.remove_prefix(_prefix.size());
         return Timestamp(_makeRecordId(slice).repr());
+    }
+
+    Timestamp RocksRecordStore::_prefixedKeyToTimestamp(const std::string& key) const {
+        return _prefixedKeyToTimestamp(rocksdb::Slice(key));
     }
 
     RecordId RocksRecordStore::_makeRecordId(const rocksdb::Slice& slice) {
