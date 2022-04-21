@@ -527,7 +527,7 @@ Status TOTransactionDBImpl::GetConsiderPrepare(
       return core->write_batch_.GetFromBatchAndDB(GetRootDB(), options,
                                                   column_family, key, value);
     }
-    return Status::PrepareConflict("prepare conflict");
+    return PrepareConflict();
   }
 
   invariant(state == TOTransaction::TOTransactionState::kCommitted);

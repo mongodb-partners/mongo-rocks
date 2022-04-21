@@ -24,6 +24,17 @@ TOComparator wbwidx_default_comparator;
 
 }  // namespace
 
+Status PrepareConflict() {
+  return Status(Status::Code::kInvalidArgument, Status::SubCode::kNone,
+                Status::Severity::kSoftError, "prepare conflict");
+}
+
+bool IsPrepareConflict(const Status& s) {
+  return s.code() == Status::Code::kInvalidArgument && s.subcode() == Status::SubCode::kNone &&
+         s.severity() == Status::Severity::kSoftError &&
+         std::string(s.getState()) == "prepare conflict";
+}
+
 struct WriteOptions;
 
 std::atomic<TransactionID> TOTransactionImpl::txn_id_counter_(1);

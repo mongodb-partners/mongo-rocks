@@ -61,6 +61,9 @@ enum TimeStampType {
   kTimeStampMax,
 };
 
+Status PrepareConflict();
+bool IsPrepareConflict(const Status& s);
+
 //TimeStamp Ordering Transaction Options
 struct TOTransactionOptions {
   size_t max_write_batch_size = 1000;
