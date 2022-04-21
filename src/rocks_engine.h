@@ -301,7 +301,7 @@ namespace mongo {
         StorageEngine::OldestActiveTransactionTimestampCallback
             _oldestActiveTransactionTimestampCallback;
 
-        rocksdb::Options _options(bool isOplog) const;
+        rocksdb::Options _options(bool isOplog, bool trimHisotry) const;
 
         void _initDatabase();
 

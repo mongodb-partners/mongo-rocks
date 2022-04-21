@@ -60,6 +60,7 @@
 #include "mongo/util/log.h"
 #include "mongo/util/str.h"
 
+#include "mongo/db/modules/rocks/src/totdb/totransaction.h"
 #include "rocks_compaction_scheduler.h"
 #include "rocks_counter_manager.h"
 #include "rocks_durability_manager.h"
