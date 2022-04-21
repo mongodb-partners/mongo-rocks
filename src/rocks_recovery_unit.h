@@ -86,11 +86,7 @@ namespace mongo {
         RocksRecoveryUnit& operator=(const RocksRecoveryUnit&) = delete;
 
     public:
-        RocksRecoveryUnit(rocksdb::TOTransactionDB* db, RocksOplogManager* oplogManager,
-                          RocksSnapshotManager* snapshotManager,
-                          RocksCompactionScheduler* compactionScheduler,
-                          RocksDurabilityManager* durabilityManager,
-                          bool durable, RocksEngine* engine);
+        RocksRecoveryUnit(bool durable, RocksEngine* engine);
         virtual ~RocksRecoveryUnit();
 
         void beginUnitOfWork(OperationContext* opCtx) override;
@@ -174,8 +170,7 @@ namespace mongo {
         void resetDeltaCounters();
 
         RocksRecoveryUnit* newRocksRecoveryUnit() {
-            return new RocksRecoveryUnit(_db, _oplogManager, _snapshotManager, 
-                                         _compactionScheduler, _durabilityManager, _durable, _engine);
+            return new RocksRecoveryUnit(_durable, _engine);
         }
 
         struct Counter {
@@ -192,15 +187,11 @@ namespace mongo {
 
         static int getTotalLiveRecoveryUnits() { return _totalLiveRecoveryUnits.load(); }
 
-        rocksdb::DB* getDB() const { return _db; }
-
         rocksdb::TOTransaction* getTransaction();
 
         bool inActiveTxn() const { return _isActive(); }
 
         void assertInActiveTxn() const;
-
-        RocksDurabilityManager* getDurabilityManager() const { return _durabilityManager; }
 
         boost::optional<int64_t> getOplogVisibilityTs();
 
@@ -251,6 +242,12 @@ namespace mongo {
         };
         State getState_forTest() const;
 
+        rocksdb::TOTransactionDB* getDB();
+        RocksOplogManager* getOplogManager();
+        RocksSnapshotManager* getSnapshotManager();
+        RocksCompactionScheduler* getCompactionScheduler();
+        RocksDurabilityManager* getDurabilityManager();
+
     private:
         void _abort();
         void _commit();
@@ -295,12 +292,6 @@ namespace mongo {
          * Returns true if currently running commit or rollback handlers
          */
         bool _isCommittingOrAborting() const;
-
-        rocksdb::TOTransactionDB* _db;                   // not owned
-        RocksOplogManager* _oplogManager;                // not owned
-        RocksSnapshotManager* _snapshotManager;          // not owned
-        RocksCompactionScheduler* _compactionScheduler;  // not owned
-        RocksDurabilityManager* _durabilityManager;      // not owned
 
         std::unique_ptr<rocksdb::TOTransaction> _transaction;
 

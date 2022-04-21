@@ -70,6 +70,7 @@ namespace mongo {
         ~RocksCompactionScheduler();
 
         void start(rocksdb::TOTransactionDB* db, rocksdb::ColumnFamilyHandle* cf);
+        void stop();
 
         static int getSkippedDeletionsThreshold() { return kSkippedDeletionsThreshold; }
 
