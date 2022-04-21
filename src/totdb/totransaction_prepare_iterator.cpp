@@ -519,7 +519,7 @@ void PrepareFilterIterator::Next() {
     status_ = Status::NotSupported("Next() on invalid iterator");
     return;
   }
-  if (forward_ && status_.IsPrepareConflict()) {
+  if (forward_ && IsPrepareConflict(status_)) {
     UpdatePrepareState();
     return;
   }
@@ -537,7 +537,7 @@ void PrepareFilterIterator::Next() {
   // The previous cursor state points at base, and after a next call, we get a
   // prepare state. This is the only situation we read a staled prepare state.
   bool read_staled_prepared =
-      next_may_read_staled_prepared && Valid() && status_.IsPrepareConflict();
+      next_may_read_staled_prepared && Valid() && IsPrepareConflict(status_);
   if (read_staled_prepared) {
     UpdatePrepareState();
   }
@@ -548,7 +548,7 @@ void PrepareFilterIterator::Prev() {
     status_ = Status::NotSupported("Prev() on invalid iterator");
     return;
   }
-  if (!forward_ && status_.IsPrepareConflict()) {
+  if (!forward_ && IsPrepareConflict(status_)) {
     UpdatePrepareState();
     return;
   }
@@ -558,7 +558,7 @@ void PrepareFilterIterator::Prev() {
   AdvanceInputNoFilter();
   UpdateCurrent();
   bool read_staled_prepared =
-      next_may_read_staled_prepared && Valid() && status_.IsPrepareConflict();
+      next_may_read_staled_prepared && Valid() && IsPrepareConflict(status_);
   if (read_staled_prepared) {
     UpdatePrepareState();
   }
@@ -639,8 +639,7 @@ void PrepareFilterIterator::UpdateCurrent() {
         } else if (core_->ignore_prepare_) {
           AdvanceInputNoFilter();
         } else {
-          status_ = Status::PrepareConflict(
-              "conflict with an uncommitted prepare-txn");
+          status_ = PrepareConflict();
           return;
         }
       }
@@ -676,7 +675,7 @@ void PrepareFilterIterator::UpdateCurrent() {
           val_ = std::string(sval_.base_value.data(), sval_.base_value.size());
           return;
         } else {
-          status_ = Status::PrepareConflict("");
+          status_ = PrepareConflict();
           return;
         }
       }

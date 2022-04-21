@@ -43,6 +43,7 @@
 
 #include "mongo/base/checked_cast.h"
 #include "mongo/db/concurrency/write_conflict_exception.h"
+#include "mongo/db/modules/rocks/src/totdb/totransaction_db.h"
 #include "mongo/db/operation_context.h"
 #include "mongo/db/server_options.h"
 #include "mongo/db/storage/journal_listener.h"
@@ -178,7 +179,7 @@ namespace mongo {
             }
             virtual rocksdb::Slice value() const { return _baseIterator->value(); }
             virtual rocksdb::Status status() const {
-                if (_baseIterator->status().IsPrepareConflict() && !Valid() &&
+                if (IsPrepareConflict(_baseIterator->status()) && !Valid() &&
                     _baseIterator->Valid()) {
                     // in this situation, we have seeked to neighbouring prefix
                     invariant(!_baseIterator->key().starts_with(_prefixSlice));

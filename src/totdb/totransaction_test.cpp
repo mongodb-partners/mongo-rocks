@@ -1358,8 +1358,8 @@ TEST_F(TOTransactionTest, PrepareCommitPointRead) {
   ASSERT_ROCKS_OK(txn3->SetReadTimeStamp(103));
   ASSERT_TRUE(txn1->Get(read_options, "abc", &value).IsNotFound());
   std::cout << txn2->Get(read_options, "abc", &value).ToString() <<std::endl;
-  ASSERT_TRUE(txn2->Get(read_options, "abc", &value).IsPrepareConflict());
-  ASSERT_TRUE(txn3->Get(read_options, "abc", &value).IsPrepareConflict());
+  ASSERT_TRUE(IsPrepareConflict(txn2->Get(read_options, "abc", &value)));
+  ASSERT_TRUE(IsPrepareConflict(txn3->Get(read_options, "abc", &value)));
   ASSERT_ROCKS_NOK(txnW->SetCommitTimeStamp(99));
   ASSERT_ROCKS_OK(txnW->SetCommitTimeStamp(102));
   ASSERT_ROCKS_OK(txnW->Commit());
@@ -1508,10 +1508,10 @@ TEST_F(TOTransactionTest, HangBetweenCommitAndChangePrepareState) {
   auto txn1 = std::unique_ptr<TOTransaction>(
       db_imp->BeginTransaction(write_options, txn_options));
   ASSERT_ROCKS_OK(txn1->SetReadTimeStamp(101));
-  ASSERT_TRUE(txn1->Get(read_options, "abc", &value).IsPrepareConflict());
+  ASSERT_TRUE(IsPrepareConflict(txn1->Get(read_options, "abc", &value)));
   auto iter = std::unique_ptr<Iterator>(txn1->GetIterator(read_options));
   iter->Seek("");
-  ASSERT_TRUE(iter->status().IsPrepareConflict());
+  ASSERT_TRUE(IsPrepareConflict(iter->status()));
   pause.store(false);
   thd.join();
   ASSERT_ROCKS_OK(txn1->Get(read_options, "abc", &value));
@@ -1592,8 +1592,8 @@ TEST_F(TOTransactionTest, PrepareRollbackPointRead) {
   ASSERT_ROCKS_OK(txn1->SetReadTimeStamp(99));
   ASSERT_ROCKS_OK(txn2->SetReadTimeStamp(101));
   ASSERT_TRUE(txn1->Get(read_options, "abc", &value).IsNotFound());
-  ASSERT_TRUE(txn2->Get(read_options, "abc", &value).IsPrepareConflict());
-  ASSERT_TRUE(txn3->Get(read_options, "abc", &value).IsPrepareConflict());
+  ASSERT_TRUE(IsPrepareConflict(txn2->Get(read_options, "abc", &value)));
+  ASSERT_TRUE(IsPrepareConflict(txn3->Get(read_options, "abc", &value)));
   ASSERT_ROCKS_NOK(txnW->SetCommitTimeStamp(99));
   ASSERT_ROCKS_OK(txnW->SetCommitTimeStamp(102));
   ASSERT_ROCKS_OK(txnW->Rollback());
@@ -1625,7 +1625,7 @@ TEST_F(TOTransactionTest, PrepareIteratorSameKey) {
   auto iter = std::unique_ptr<Iterator>(txnR->GetIterator(read_options));
   ASSERT_TRUE(iter != nullptr);
   iter->Seek("");
-  ASSERT_TRUE(iter->status().IsPrepareConflict());
+  ASSERT_TRUE(IsPrepareConflict(iter->status()));
 
   auto txnR1 = std::unique_ptr<TOTransaction>(
       db_imp->BeginTransaction(write_options, txn_options));
@@ -1633,7 +1633,7 @@ TEST_F(TOTransactionTest, PrepareIteratorSameKey) {
   auto iter1 = std::unique_ptr<Iterator>(txnR1->GetIterator(read_options));
   ASSERT_TRUE(iter1 != nullptr);
   iter1->Seek("");
-  ASSERT_TRUE(iter1->status().IsPrepareConflict());
+  ASSERT_TRUE(IsPrepareConflict(iter1->status()));
 
   ASSERT_ROCKS_OK(txnW1->SetCommitTimeStamp(102));
   txnW1->Commit();
@@ -1803,7 +1803,7 @@ TEST_F(TOTransactionTest, PORT_WT_TEST_PREPARE_CURSOR_01) {
   ASSERT_ROCKS_OK(iter_before_ts->status());
 
   iter_between_ts->Next();
-  ASSERT_TRUE(iter_between_ts->status().IsPrepareConflict());
+  ASSERT_TRUE(IsPrepareConflict(iter_between_ts->status()));
   ASSERT_TRUE(iter_between_ts->Valid());
 
   iter_between_ts->Prev();
@@ -1812,7 +1812,7 @@ TEST_F(TOTransactionTest, PORT_WT_TEST_PREPARE_CURSOR_01) {
   ASSERT_EQ(iter_between_ts->key().ToString(), "50");
 
   iter_after_ts->Next();
-  ASSERT_TRUE(iter_after_ts->status().IsPrepareConflict());
+  ASSERT_TRUE(IsPrepareConflict(iter_after_ts->status()));
   ASSERT_TRUE(iter_after_ts->Valid());
 
   ASSERT_ROCKS_OK(txn_prepare->SetCommitTimeStamp(200));
@@ -1869,7 +1869,7 @@ TEST_F(TOTransactionTest, PORT_WT_TEST_PREPARE_CURSOR_01) {
 
   // As read is between, prev will point to prepared update.
   iter_between_ts->Prev();
-  ASSERT_TRUE(iter_between_ts->status().IsPrepareConflict());
+  ASSERT_TRUE(IsPrepareConflict(iter_between_ts->status()));
   ASSERT_TRUE(iter_between_ts->Valid());
 
   // Check to see next works when a prev returns prepare conflict.
@@ -1880,7 +1880,7 @@ TEST_F(TOTransactionTest, PORT_WT_TEST_PREPARE_CURSOR_01) {
 
   // As read is after, prev will point to prepared update.
   iter_after_ts->Prev();
-  ASSERT_TRUE(iter_after_ts->status().IsPrepareConflict());
+  ASSERT_TRUE(IsPrepareConflict(iter_after_ts->status()));
   ASSERT_TRUE(iter_after_ts->Valid());
 
   // Commit the prepared transaction.
@@ -1950,12 +1950,12 @@ TEST_F(TOTransactionTest, PORT_WT_TEST_PREPARE_CURSOR_01) {
 
   // As read is between, next will point to prepared update.
   iter_between_ts->Next();
-  ASSERT_TRUE(iter_between_ts->status().IsPrepareConflict());
+  ASSERT_TRUE(IsPrepareConflict(iter_between_ts->status()));
   ASSERT_TRUE(iter_between_ts->Valid());
 
   // As read is after, next will point to prepared update.
   iter_after_ts->Next();
-  ASSERT_TRUE(iter_after_ts->status().IsPrepareConflict());
+  ASSERT_TRUE(IsPrepareConflict(iter_after_ts->status()));
   ASSERT_TRUE(iter_after_ts->Valid());
 
   // Commit the prepared transaction.
@@ -2032,12 +2032,12 @@ TEST_F(TOTransactionTest, PORT_WT_TEST_PREPARE_CURSOR_01) {
 
   // As read is between, prev will point to prepared update.
   iter_between_ts->Prev();
-  ASSERT_TRUE(iter_between_ts->status().IsPrepareConflict());
+  ASSERT_TRUE(IsPrepareConflict(iter_between_ts->status()));
   ASSERT_TRUE(iter_between_ts->Valid());
 
   // As read is after, prev will point to prepared update.
   iter_after_ts->Prev();
-  ASSERT_TRUE(iter_after_ts->status().IsPrepareConflict());
+  ASSERT_TRUE(IsPrepareConflict(iter_after_ts->status()));
   ASSERT_TRUE(iter_after_ts->Valid());
 
   // Commit the prepared transaction.
@@ -2124,12 +2124,12 @@ TEST_F(TOTransactionTest, PORT_WT_TEST_PREPARE_CURSOR_01) {
 
   // As read is between, next will point to prepared update.
   iter_between_ts->Next();
-  ASSERT_TRUE(iter_between_ts->status().IsPrepareConflict());
+  ASSERT_TRUE(IsPrepareConflict(iter_between_ts->status()));
   ASSERT_TRUE(iter_between_ts->Valid());
 
   // As read is after, next will point to prepared update.
   iter_after_ts->Next();
-  ASSERT_TRUE(iter_after_ts->status().IsPrepareConflict());
+  ASSERT_TRUE(IsPrepareConflict(iter_after_ts->status()));
   ASSERT_TRUE(iter_after_ts->Valid());
 
   // Commit the prepared transaction.
@@ -2204,12 +2204,12 @@ TEST_F(TOTransactionTest, PORT_WT_TEST_PREPARE_CURSOR_01) {
 
   // As read is between, prev will point to prepared update.
   iter_between_ts->Prev();
-  ASSERT_TRUE(iter_between_ts->status().IsPrepareConflict());
+  ASSERT_TRUE(IsPrepareConflict(iter_between_ts->status()));
   ASSERT_TRUE(iter_between_ts->Valid());
 
   // As read is after, prev will point to prepared update.
   iter_after_ts->Prev();
-  ASSERT_TRUE(iter_after_ts->status().IsPrepareConflict());
+  ASSERT_TRUE(IsPrepareConflict(iter_after_ts->status()));
   ASSERT_TRUE(iter_after_ts->Valid());
 
   // Commit the prepared transaction.
@@ -2291,12 +2291,12 @@ TEST_F(TOTransactionTest, PORT_WT_TEST_PREPARE_CURSOR_01) {
 
   // As read is between, next will point to prepared update.
   iter_between_ts->Next();
-  ASSERT_TRUE(iter_between_ts->status().IsPrepareConflict());
+  ASSERT_TRUE(IsPrepareConflict(iter_between_ts->status()));
   ASSERT_TRUE(iter_between_ts->Valid());
 
   // As read is after, next will point to prepared update.
   iter_after_ts->Next();
-  ASSERT_TRUE(iter_after_ts->status().IsPrepareConflict());
+  ASSERT_TRUE(IsPrepareConflict(iter_after_ts->status()));
   ASSERT_TRUE(iter_after_ts->Valid());
 
   // Commit the prepared transaction.
@@ -2369,12 +2369,12 @@ TEST_F(TOTransactionTest, PORT_WT_TEST_PREPARE_CURSOR_01) {
 
   // As read is between, prev will point to prepared update.
   iter_between_ts->Prev();
-  ASSERT_TRUE(iter_between_ts->status().IsPrepareConflict());
+  ASSERT_TRUE(IsPrepareConflict(iter_between_ts->status()));
   ASSERT_TRUE(iter_between_ts->Valid());
 
   // As read is after, prev will point to prepared update.
   iter_after_ts->Prev();
-  ASSERT_TRUE(iter_after_ts->status().IsPrepareConflict());
+  ASSERT_TRUE(IsPrepareConflict(iter_after_ts->status()));
   ASSERT_TRUE(iter_after_ts->Valid());
 
   // Commit the prepared transaction.

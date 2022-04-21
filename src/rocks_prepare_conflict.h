@@ -32,6 +32,7 @@
 #include <rocksdb/status.h>
 
 #include "mongo/db/curop.h"
+#include "mongo/db/modules/rocks/src/totdb/totransaction_db.h"
 #include "mongo/db/prepare_conflict_tracker.h"
 #include "mongo/util/fail_point_service.h"
 #include "rocks_recovery_unit.h"
@@ -76,9 +77,9 @@ namespace mongo {
         ON_BLOCK_EXIT([opCtx] { PrepareConflictTracker::get(opCtx).endPrepareConflict(); });
         // If the failpoint is enabled, don't call the function, just simulate a conflict.
         rocksdb::Status s = MONGO_FAIL_POINT(RocksPrepareConflictForReads)
-                                ? rocksdb::Status::PrepareConflict("failpoint simulate")
+                                ? rocksdb::PrepareConflict()
                                 : ROCKS_READ_CHECK(f());
-        if (!s.IsPrepareConflict()) return s;
+        if (!IsPrepareConflict(s)) return s;
 
         PrepareConflictTracker::get(opCtx).beginPrepareConflict();
 
@@ -136,10 +137,10 @@ namespace mongo {
             auto lastCount = recoveryUnit->getDurabilityManager()->getPrepareCommitOrAbortCount();
             // If the failpoint is enabled, don't call the function, just simulate a conflict.
             rocksdb::Status s = MONGO_FAIL_POINT(RocksPrepareConflictForReads)
-                                    ? rocksdb::Status::PrepareConflict("failpoint simulate")
+                                    ? rocksdb::PrepareConflict()
                                     : ROCKS_READ_CHECK(f());
 
-            if (!s.IsPrepareConflict()) return s;
+            if (!IsPrepareConflict(s)) return s;
 
             CurOp::get(opCtx)->debug().additiveMetrics.incrementPrepareReadConflicts(1);
             rocksPrepareConflictLog(attempts);
