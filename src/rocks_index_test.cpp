@@ -69,13 +69,12 @@ namespace mongo {
                                                IndexDescriptor::IndexVersion::kV2);
                 if (unique) {
                     return stdx::make_unique<RocksUniqueIndex>(
-                        _engine.getDB(), _engine.getDefaultCf_ForTest(),
-                        "prefix", "ident", _order, configBuilder.obj(),
-                        "test.rocks", "testIndex", BSONObj(), partial);
+                        _engine.getDB(), _engine.getDefaultCf_ForTest(), "prefix", "ident", _order,
+                        configBuilder.obj(), "test.rocks", "testIndex", BSONObj(), partial);
                 } else {
-                    return stdx::make_unique<RocksStandardIndex>(_engine.getDB(), _engine.getDefaultCf_ForTest(),
-                                                                 "prefix", "ident",
-                                                                 _order, configBuilder.obj());
+                    return stdx::make_unique<RocksStandardIndex>(
+                        _engine.getDB(), _engine.getDefaultCf_ForTest(), "prefix", "ident", _order,
+                        configBuilder.obj());
                 }
             }
 

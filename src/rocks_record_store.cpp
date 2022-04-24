@@ -109,7 +109,7 @@ namespace mongo {
     }
 
     RocksRecordStore::RocksRecordStore(RocksEngine* engine, rocksdb::ColumnFamilyHandle* cf,
-          OperationContext* opCtx, Params params)
+                                       OperationContext* opCtx, Params params)
         : RecordStore(params.ns),
           _engine(engine),
           _db(engine->getDB()),
@@ -128,11 +128,11 @@ namespace mongo {
           _ident(params.ident),
           _dataSizeKey(std::string("\0\0\0\0", 4) + "datasize-" + params.ident),
           _numRecordsKey(std::string("\0\0\0\0", 4) + "numrecords-" + params.ident),
-          _cappedOldestKey(NamespaceString::oplog(params.ns) ? 
-                           std::string("\0\0\0\0", 4) + "cappedOldestKey-" + params.ident : ""),
+          _cappedOldestKey(NamespaceString::oplog(params.ns)
+                               ? std::string("\0\0\0\0", 4) + "cappedOldestKey-" + params.ident
+                               : ""),
           _shuttingDown(false),
           _tracksSizeAdjustments(params.tracksSizeAdjustments) {
-
         LOG(1) << "opening collection " << params.ns << " with prefix "
                << rocksdb::Slice(_prefix).ToString(true);
 
@@ -627,8 +627,8 @@ namespace mongo {
             auto s = opCtx->recoveryUnit()->setTimestamp(ts);
             invariant(s.isOK(), s.reason());
         }
-        invariantRocksOK(
-            ROCKS_OP_CHECK(txn->Put(_cf, _makePrefixedKey(_prefix, loc), rocksdb::Slice(data, len))));
+        invariantRocksOK(ROCKS_OP_CHECK(
+            txn->Put(_cf, _makePrefixedKey(_prefix, loc), rocksdb::Slice(data, len))));
 
         _changeNumRecords(opCtx, 1);
         _increaseDataSize(opCtx, len);
