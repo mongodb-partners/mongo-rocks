@@ -73,14 +73,15 @@
 #include "mongo/util/log.h"
 #include "mongo/util/processinfo.h"
 
+#include "mongo/db/dbhelpers.h"
 #include "mongo/db/modules/rocks/src/rocks_parameters_gen.h"
+#include "mongo_rate_limiter_checker.h"
 #include "rocks_counter_manager.h"
 #include "rocks_global_options.h"
 #include "rocks_index.h"
 #include "rocks_record_store.h"
 #include "rocks_recovery_unit.h"
 #include "rocks_util.h"
-#include "mongo_rate_limiter_checker.h"
 
 #define ROCKS_TRACE log()
 #define LOG_FOR_RECOVERY(level) \
@@ -142,6 +143,15 @@ namespace mongo {
         TicketHolder openReadTransaction(128);
         rocksdb::TOComparator comparator;
         rocksdb::TOComparator comparatorFake(0);
+        bool isNsEnableTimestamp(const StringData& ns) {
+            if (ns == "local.replset.minvalid" || ns == "local.oplog.rs") {
+                return true;
+            }
+            if (ns.startsWith("local.")) {
+                return false;
+            }
+            return true;
+        }
     }  // namespace
 
     ROpenWriteTransactionParam::ROpenWriteTransactionParam(StringData name, ServerParameterType spt)
@@ -527,6 +537,9 @@ namespace mongo {
             params.isCapped ? (options.cappedMaxDocs ? options.cappedMaxDocs : -1) : -1;
         params.cappedCallback = nullptr;
         params.tracksSizeAdjustments = true;
+        if (isNsEnableTimestamp(params.ns)) {
+            rocksdb::TOTransaction::enableTimestamp(params.prefix);
+        }
         std::unique_ptr<RocksRecordStore> recordStore =
             stdx::make_unique<RocksRecordStore>(this, cf, opCtx, params);
 
@@ -555,6 +568,10 @@ namespace mongo {
 
         // oplog have no indexes
         invariant(!desc->parentNS().isOplog());
+
+        if (isNsEnableTimestamp(prefix)) {
+            rocksdb::TOTransaction::enableTimestamp(prefix);
+        }
 
         RocksIndexBase* index;
         if (desc->unique()) {
