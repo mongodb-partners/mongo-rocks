@@ -43,6 +43,10 @@ class BatchIterator : public WriteBatch::Handler {
   BatchIteratorCB cb_;
 };
 
+thread_local bool skip_compare_oldest_ts = false;
+thread_local RocksTimeStamp last_oldest_ts = 0;
+thread_local RocksTimeStamp new_oldest_ts = 0;
+
 }  // namespace
 
 const TxnKey PrepareHeap::sentinal_ =
@@ -1261,9 +1265,57 @@ void TOTransactionDBImpl::BackgroundCleanJob::StopThread() {
 }
 
 std::unique_ptr<rocksdb::TOTransaction> TOTransactionDBImpl::makeTxn() {
-    rocksdb::WriteOptions options;
-    rocksdb::TOTransactionOptions txnOptions;
-    return std::unique_ptr<rocksdb::TOTransaction>(BeginTransaction(options, txnOptions));
+  rocksdb::WriteOptions options;
+  rocksdb::TOTransactionOptions txnOptions;
+  return std::unique_ptr<rocksdb::TOTransaction>(BeginTransaction(options, txnOptions));
+}
+
+int TOComparator::CompareTimestamp(const Slice& ts1, const Slice& ts2) const {
+  invariant(timestamp_size() > 0);
+  invariant(ts1.data() && ts2.data());
+  invariant(ts1.size() == sizeof(RocksTimeStamp));
+  invariant(ts2.size() == sizeof(RocksTimeStamp));
+  uint64_t ts1_data = Decoder(ts1.data(), ts1.size()).get64();
+  uint64_t ts2_data = Decoder(ts2.data(), ts2.size()).get64();
+
+  int ret = 0;
+  if (ts1_data < ts2_data) {
+    ret = -1;
+  } else if (ts1_data > ts2_data) {
+    ret = 1;
+  } else {
+    ret = 0;
+  }
+
+  if (skip_compare_oldest_ts) {
+    invariant(new_oldest_ts == ts1_data || new_oldest_ts == ts2_data);
+    if (last_oldest_ts == 0) {
+      last_oldest_ts = (new_oldest_ts == ts1_data?ts2_data:ts1_data);
+    } else {
+      invariant(last_oldest_ts == ts1_data || last_oldest_ts == ts2_data);
+    }
+    if(ret != 0) {
+      return new_oldest_ts == ts1_data?1:-1;
+    }
+  }
+  return ret;
+}
+
+
+void TOComparator::forceSetOldestTs(RocksTimeStamp ts){
+    invariant(skip_compare_oldest_ts == false);
+    invariant(new_oldest_ts == 0);
+    invariant(ts != 0);
+    skip_compare_oldest_ts = true;
+    new_oldest_ts = ts;
+}
+
+void TOComparator::clearSetOldestTs() {
+    invariant(skip_compare_oldest_ts);
+    invariant(new_oldest_ts != 0);
+    skip_compare_oldest_ts=false;
+    last_oldest_ts = 0;
+    new_oldest_ts = 0;
 }
 
 }  //  namespace rocksdb

@@ -958,7 +958,10 @@ namespace mongo {
         rocksdb::RocksTimeStamp ts(oldestTimestamp.asULL());
 
         if (force) {
-            invariantRocksOK(_db->SetTimeStamp(rocksdb::TimeStampType::kOldest, ts, force));
+            {
+                rocksdb::ShouldNotCheckOldestTsBlock shouldNotCheckOldestTsblock(&comparator, ts);
+                invariantRocksOK(_db->SetTimeStamp(rocksdb::TimeStampType::kOldest, ts, force));
+            }
             invariantRocksOK(_db->SetTimeStamp(rocksdb::TimeStampType::kCommitted, ts, force));
             _oldestTimestamp.store(oldestTimestamp.asULL());
             LOG(2) << "oldest_timestamp and commit_timestamp force set to " << oldestTimestamp;
