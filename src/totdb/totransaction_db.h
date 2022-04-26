@@ -85,9 +85,7 @@ struct TOTransactionOptions {
 
 class TOComparator : public Comparator {
  public:
-  TOComparator()
-      : Comparator(sizeof(RocksTimeStamp)), cmp_without_ts_(BytewiseComparator()) {
-  }
+  TOComparator() : Comparator(sizeof(RocksTimeStamp)), cmp_without_ts_(BytewiseComparator()) {}
   TOComparator(size_t ts_size) : Comparator(ts_size), cmp_without_ts_(BytewiseComparator()) {}
 
   static size_t TimestampSize() { return sizeof(RocksTimeStamp); }
@@ -123,27 +121,16 @@ class TOComparator : public Comparator {
     return cmp_without_ts_->Compare(lhs, rhs);
   }
 
-  int CompareTimestamp(const Slice& ts1, const Slice& ts2) const override {
-    invariant(timestamp_size() > 0);
-    invariant(ts1.data() && ts2.data());
-    invariant(ts1.size() == sizeof(RocksTimeStamp));
-    invariant(ts2.size() == sizeof(RocksTimeStamp));
-    uint64_t ts1_data = Decoder(ts1.data(), ts1.size()).get64();
-    uint64_t ts2_data = Decoder(ts2.data(), ts2.size()).get64();
-    if (ts1_data < ts2_data) {
-      return -1;
-    } else if (ts1_data > ts2_data) {
-      return 1;
-    } else {
-      return 0;
-    }
-  }
+  int CompareTimestamp(const Slice& ts1, const Slice& ts2) const override;
 
   static const Slice StripTimestampFromUserKey(const Slice& user_key, size_t ts_sz) {
     Slice ret = user_key;
     ret.remove_suffix(ts_sz);
     return ret;
   }
+
+  void forceSetOldestTs(RocksTimeStamp ts);
+  void clearSetOldestTs();
 
   private:
   const Comparator* cmp_without_ts_;
