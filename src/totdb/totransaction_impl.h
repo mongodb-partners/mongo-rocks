@@ -116,6 +116,10 @@ class TOTransactionImpl : public TOTransaction {
 
   virtual Status Delete(const Slice& key) override;
 
+  virtual Status GetForUpdate(ColumnFamilyHandle* column_family, const Slice& key) override;
+
+  virtual Status GetForUpdate(const Slice& key) override;
+
   virtual Status SetName(const TransactionName& name) override;
 
   virtual TransactionID GetID() const override;
@@ -143,6 +147,8 @@ class TOTransactionImpl : public TOTransaction {
   // TODO(deyukong): writtenKeys_ is duplicated with core_->Write_batch_, remove
   // this
   std::set<TxnKey> written_keys_;
+
+  std::set<TxnKey> get_for_updates_;
 
   DB* db_;
   TOTransactionDBImpl* txn_db_impl_;

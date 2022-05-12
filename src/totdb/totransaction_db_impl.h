@@ -144,10 +144,12 @@ class TOTransactionDBImpl : public TOTransactionDB {
 
   using ATN = TOTransactionImpl::ActiveTxnNode;
   Status CommitTransaction(const std::shared_ptr<ATN>& core,
-                           const std::set<TxnKey>& written_keys);
+                           const std::set<TxnKey>& written_keys,
+                           const std::set<TxnKey>& get_for_updates);
 
   Status RollbackTransaction(const std::shared_ptr<ATN>& core,
-                             const std::set<TxnKey>& written_keys);
+                             const std::set<TxnKey>& written_keys,
+                             const std::set<TxnKey>& get_for_updates);
 
   Status SetTimeStamp(const TimeStampType& ts_type, const RocksTimeStamp& ts,
                       bool force) override;

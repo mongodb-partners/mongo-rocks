@@ -302,6 +302,34 @@ Status TOTransactionImpl::Delete(const Slice& key) {
   return Delete(db_->DefaultColumnFamily(), key);
 }
 
+Status TOTransactionImpl::GetForUpdate(ColumnFamilyHandle* column_family, const Slice& key) {
+  if (txn_db_impl_->IsReadOnly()) {
+    return Status::NotSupported("readonly db cannot accept del");
+  }
+  if (core_->state_ >= kPrepared) {
+    return Status::NotSupported("txn is already prepared, committed rollback");
+  }
+  if (core_->read_only_) {
+    if (core_->ignore_prepare_) {
+      return Status::NotSupported(
+          "Transactions with ignore_prepare=true cannot perform updates");
+    }
+    return Status::NotSupported("Attempt to update in a read-only transaction");
+  }
+
+  const TxnKey txn_key(column_family->GetID(), key.ToString());
+  Status s = CheckWriteConflict(txn_key);
+
+  if (s.ok()) {
+    get_for_updates_.emplace(std::move(txn_key));
+  }
+  return s;
+}
+
+Status TOTransactionImpl::GetForUpdate(const Slice& key) {
+  return GetForUpdate(db_->DefaultColumnFamily(), key);
+}
+
 Iterator* TOTransactionImpl::GetIterator(ReadOptions& read_options) {
   return GetIterator(read_options, db_->DefaultColumnFamily());
 }
@@ -370,7 +398,7 @@ Status TOTransactionImpl::Commit(std::function<void()>* hook) {
     // Move uncommitted keys to committed keys,
     // Clean data when the committed txn is activeTxnSet's header
     // TODO(xxxxxxxx): in fact, here we must not fail
-    s = txn_db_impl_->CommitTransaction(core_, written_keys_);
+    s = txn_db_impl_->CommitTransaction(core_, written_keys_, get_for_updates_);
   } else {
     s = Status::InvalidArgument("Transaction is fail for commit.");
   }
@@ -390,7 +418,7 @@ Status TOTransactionImpl::Rollback() {
 
   // Change active txn set,
   // Clean uncommitted keys
-  Status s = txn_db_impl_->RollbackTransaction(core_, written_keys_);
+  Status s = txn_db_impl_->RollbackTransaction(core_, written_keys_, get_for_updates_);
 
   GetWriteBatch()->Clear();
 

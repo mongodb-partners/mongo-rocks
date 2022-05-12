@@ -815,7 +815,8 @@ Status TOTransactionDBImpl::SetPrepareTimeStamp(
 }
 
 Status TOTransactionDBImpl::CommitTransaction(
-    const std::shared_ptr<ATN>& core, const std::set<TxnKey>& written_keys) {
+    const std::shared_ptr<ATN>& core, const std::set<TxnKey>& written_keys,
+    const std::set<TxnKey>& get_for_updates) {
   TransactionID max_to_clean_txn_id = 0;
   RocksTimeStamp max_to_clean_ts = 0;
   RocksTimeStamp candidate_durable_timestamp = 0;
@@ -883,20 +884,27 @@ Status TOTransactionDBImpl::CommitTransaction(
 
   AdvanceTS(&max_to_clean_ts);
 
-  // Move Uncommited keys for this txn to committed keys
-  std::map<size_t, std::set<TxnKey>> stripe_keys_map;
+  // Move uncommited keys for this txn to committed keys
+  std::map<size_t, std::set<TxnKey>> stripe_commit_keys_map;
   auto keys_iter = written_keys.begin();
   while (keys_iter != written_keys.end()) {
     auto stripe_num = GetStripe(*keys_iter); 
-    if (stripe_keys_map.find(stripe_num) == stripe_keys_map.end()) {
-      stripe_keys_map[stripe_num] = {};
+    if (stripe_commit_keys_map.find(stripe_num) == stripe_commit_keys_map.end()) {
+      stripe_commit_keys_map[stripe_num] = {};
     }
-    stripe_keys_map[stripe_num].insert(std::move(*keys_iter));
+    stripe_commit_keys_map[stripe_num].insert(std::move(*keys_iter));
     keys_iter++;
   }
 
-  auto stripe_keys_iter = stripe_keys_map.begin();
-  while (stripe_keys_iter != stripe_keys_map.end()) {
+  // remove get_for_update keys
+  std::map<size_t, std::set<TxnKey>> stripe_get_for_update_keys_map; 
+  for (const auto& k : get_for_updates) {
+    auto stripe_num = GetStripe(k); 
+    stripe_get_for_update_keys_map[stripe_num].insert(k);
+  }
+
+  auto stripe_keys_iter = stripe_commit_keys_map.begin();
+  while (stripe_keys_iter != stripe_commit_keys_map.end()) {
     std::lock_guard<std::mutex> lock(*keys_mutex_[stripe_keys_iter->first]);
     // the key in one txn insert to the CK with the max commit ts
     for (auto& key : stripe_keys_iter->second) {
@@ -907,6 +915,13 @@ Status TOTransactionDBImpl::CommitTransaction(
     }
 
     stripe_keys_iter++;
+  }
+
+  for (const auto& stripe : stripe_get_for_update_keys_map) {
+    std::lock_guard<std::mutex> lock(*keys_mutex_[stripe.first]);
+    for (const auto& key : stripe.second) {
+      uncommitted_keys_.RemoveKeyInLock(key, stripe.first, &current_conflict_bytes_);
+    }
   }
 
   LOG(2) << "TOTDB end commit txn id " << core->txn_id_
@@ -933,7 +948,8 @@ Status TOTransactionDBImpl::CommitTransaction(
 }
 
 Status TOTransactionDBImpl::RollbackTransaction(
-    const std::shared_ptr<ATN>& core, const std::set<TxnKey>& written_keys) {
+    const std::shared_ptr<ATN>& core, const std::set<TxnKey>& written_keys,
+    const std::set<TxnKey>& get_for_updates) {
   LOG(2) << "TOTDB start to rollback txn id " << core->txn_id_;
   auto state = core->state_.load(std::memory_order_relaxed);
   invariant(state == TOTransaction::kStarted || state == TOTransaction::kPrepared);
@@ -971,15 +987,13 @@ Status TOTransactionDBImpl::RollbackTransaction(
 
   // Remove written keys from uncommitted keys
   std::map<size_t, std::set<TxnKey>> stripe_keys_map;
-  auto keys_iter = written_keys.begin();
-  while (keys_iter != written_keys.end()) {
-    auto stripe_num = GetStripe(*keys_iter); 
-    if (stripe_keys_map.find(stripe_num) == stripe_keys_map.end()) {
-      stripe_keys_map[stripe_num] = {};
-    } 
-    stripe_keys_map[stripe_num].insert(std::move(*keys_iter));
-
-    keys_iter++;
+  for (const auto& key : written_keys) {
+    auto stripe_num = GetStripe(key); 
+    stripe_keys_map[stripe_num].insert(key);
+  }
+  for (const auto& key : get_for_updates) {
+    auto stripe_num = GetStripe(key); 
+    stripe_keys_map[stripe_num].insert(key);
   }
 
   auto stripe_keys_iter = stripe_keys_map.begin();
