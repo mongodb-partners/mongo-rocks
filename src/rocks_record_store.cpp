@@ -319,6 +319,10 @@ namespace mongo {
             return 0;
         }
 
+        if (!sizeRecoveryState(getGlobalServiceContext()).collectionNeedsSizeAdjustment(_ident)) {
+            return 0;
+        }
+
         if (!_isCapped) {
             return 0;
         }
@@ -806,6 +810,8 @@ namespace mongo {
 
     void RocksRecordStore::updateStatsAfterRepair(OperationContext* opCtx, long long numRecords,
                                                   long long dataSize) {
+        sizeRecoveryState(getGlobalServiceContext())
+            .markCollectionAsAlwaysNeedsSizeAdjustment(_ident);
         RocksRecoveryUnit* ru = RocksRecoveryUnit::getRocksRecoveryUnit(opCtx);
         ru->resetDeltaCounters();
         if (!_isOplog) {
@@ -1090,12 +1096,20 @@ namespace mongo {
         if (!_tracksSizeAdjustments) {
             return;
         }
+
+        if (!sizeRecoveryState(getGlobalServiceContext()).collectionNeedsSizeAdjustment(_ident)) {
+            return;
+        }
+
         RocksRecoveryUnit* ru = RocksRecoveryUnit::getRocksRecoveryUnit(opCtx);
         ru->incrementCounter(_numRecordsKey, &_numRecords, amount);
     }
 
     void RocksRecordStore::_increaseDataSize(OperationContext* opCtx, int64_t amount) {
         if (!_tracksSizeAdjustments) {
+            return;
+        }
+        if (!sizeRecoveryState(getGlobalServiceContext()).collectionNeedsSizeAdjustment(_ident)) {
             return;
         }
         RocksRecoveryUnit* ru = RocksRecoveryUnit::getRocksRecoveryUnit(opCtx);
