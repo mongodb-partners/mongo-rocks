@@ -213,11 +213,6 @@ Status TOTransactionDB::Open(const DBOptions& db_options,
 
   if (trimHistory) {
     invariant(trim_cfds.size() > 0);
-    for (const auto& cfd : trim_cfds) {
-      if (cfd.options.comparator == nullptr || cfd.options.comparator->timestamp_size() == 0) {
-        return Status::InvalidArgument("invalid comparator");
-      }
-    }
     
     std::string trim_ts;
     // step1: get stableTs
