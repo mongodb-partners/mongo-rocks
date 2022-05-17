@@ -80,11 +80,7 @@ namespace mongo {
             }
 
             std::unique_ptr<RecoveryUnit> newRecoveryUnit() final {
-                return stdx::make_unique<RocksRecoveryUnit>(
-                    _engine.getDB(), _engine.getOplogManager(),
-                    checked_cast<RocksSnapshotManager*>(_engine.getSnapshotManager()),
-                    _engine.getCompactionScheduler(),
-                    _engine.getDurabilityManager(), true /* durale */, &_engine);
+                return stdx::make_unique<RocksRecoveryUnit>(true /* durale */, &_engine);
             }
 
         private:

@@ -477,11 +477,7 @@ namespace mongo {
         _oldestActiveTransactionTimestampCallback = std::move(callback);
     };
 
-    RecoveryUnit* RocksEngine::newRecoveryUnit() {
-        return new RocksRecoveryUnit(_db.get(), _oplogManager.get(), &_snapshotManager,
-                                     _compactionScheduler.get(),
-                                     _durabilityManager.get(), _durable, this);
-    }
+    RecoveryUnit* RocksEngine::newRecoveryUnit() { return new RocksRecoveryUnit(_durable, this); }
 
     Status RocksEngine::createRecordStore(OperationContext* opCtx, StringData ns, StringData ident,
                                           const CollectionOptions& options) {
@@ -1029,7 +1025,6 @@ namespace mongo {
                           << initialDataTS.toString() << ", Stable timestamp: " << stableTS.toString());
         }
 
-
         invariant(!_oplogManager->isRunning());
         LOG_FOR_ROLLBACK(0) << "RocksEngine::RecoverToStableTimestamp oplogManager is halt.";
 
@@ -1049,8 +1044,8 @@ namespace mongo {
         _durabilityManager.reset();
         LOG_FOR_ROLLBACK(0) << "RocksEngine::RecoverToStableTimestamp shutting down durabilityManager";
 
-        _compactionScheduler.reset();
-        LOG_FOR_ROLLBACK(0) << "RocksEngine::RecoverToStableTimestamp shutting down _compactionScheduler";
+        _compactionScheduler->stop();
+        LOG_FOR_ROLLBACK(0) << "RocksEngine::RecoverToStableTimestamp stop _compactionScheduler";
 
         // close db
         _defaultCf.reset();
@@ -1058,10 +1053,15 @@ namespace mongo {
         _db.reset();
         LOG_FOR_ROLLBACK(0) << "RocksEngine::RecoverToStableTimestamp shutting down rocksdb";
 
+        // compactionScheduler should be create before initDatabase, because
+        // options.compactionFactor need compactionScheduler
+        _compactionScheduler.reset(new RocksCompactionScheduler());
+        LOG_FOR_ROLLBACK(0)
+            << "RocksEngine::RecoverToStableTimestamp shutting down _compactionScheduler";
+
         _initDatabase();
         LOG_FOR_ROLLBACK(0) << "RocksEngine::RecoverToStableTimestamp open rocksdb";
 
-        _compactionScheduler.reset(new RocksCompactionScheduler());
         _compactionScheduler->start(_db.get(), _defaultCf.get());
 
         _durabilityManager.reset(
@@ -1085,6 +1085,8 @@ namespace mongo {
         }
         _counterManager.reset(new RocksCounterManager(_db.get(), _defaultCf.get(),
                                                       rocksGlobalOptions.crashSafeCounters));
+        opCtx->setRecoveryUnit(std::unique_ptr<RecoveryUnit>(newRecoveryUnit()),
+                               WriteUnitOfWork::RecoveryUnitState::kNotInUnitOfWork);
 
         // oplogManager will be oppend by oplog record store is open, no need open here
 

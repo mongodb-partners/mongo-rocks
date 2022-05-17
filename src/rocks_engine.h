@@ -135,6 +135,8 @@ namespace mongo {
             return (SnapshotManager*)&_snapshotManager;
         }
 
+        RocksSnapshotManager* getRocksSnapshotManager() { return &_snapshotManager; }
+
         void setJournalListener(JournalListener* jl);
 
         void setStableTimestamp(Timestamp stableTimestamp, bool force) override;

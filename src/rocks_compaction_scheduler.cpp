@@ -460,6 +460,8 @@ namespace mongo {
         _compactionJob.reset(new CompactionBackgroundJob(db, this));
     }
 
+    void RocksCompactionScheduler::stop() { _compactionJob.reset(); }
+
     void RocksCompactionScheduler::reportSkippedDeletionsAboveThreshold(rocksdb::ColumnFamilyHandle* cf,
                                                                         const std::string& prefix) {
         bool schedule = false;
