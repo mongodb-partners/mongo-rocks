@@ -607,9 +607,9 @@ namespace mongo {
     }  // namespace
 
     /// RocksIndexBase
-    RocksIndexBase::RocksIndexBase(rocksdb::DB* db, rocksdb::ColumnFamilyHandle* cf, std::string prefix,
-                                   std::string ident,
-                                   Ordering order, const BSONObj& config)
+    RocksIndexBase::RocksIndexBase(rocksdb::DB* db, rocksdb::ColumnFamilyHandle* cf,
+                                   std::string prefix, std::string ident, Ordering order,
+                                   const BSONObj& config)
         : _db(db), _cf(cf), _prefix(prefix), _ident(std::move(ident)), _order(order) {
         uint64_t storageSize;
         std::string nextPrefix = rocksGetNextPrefix(_prefix);
@@ -666,10 +666,11 @@ namespace mongo {
 
     /// RocksUniqueIndex
 
-    RocksUniqueIndex::RocksUniqueIndex(rocksdb::DB* db, rocksdb::ColumnFamilyHandle* cf, std::string prefix,
-                                       std::string ident, Ordering order, const BSONObj& config,
-                                       std::string collectionNamespace, std::string indexName,
-                                       const BSONObj& keyPattern, bool partial)
+    RocksUniqueIndex::RocksUniqueIndex(rocksdb::DB* db, rocksdb::ColumnFamilyHandle* cf,
+                                       std::string prefix, std::string ident, Ordering order,
+                                       const BSONObj& config, std::string collectionNamespace,
+                                       std::string indexName, const BSONObj& keyPattern,
+                                       bool partial)
         : RocksIndexBase(db, cf, prefix, ident, order, config),
           _collectionNamespace(std::move(collectionNamespace)),
           _indexName(std::move(indexName)),
@@ -717,7 +718,8 @@ namespace mongo {
                 value.appendTypeBits(encodedKey.getTypeBits());
             }
             rocksdb::Slice valueSlice(value.getBuffer(), value.getSize());
-            invariantRocksOK(ROCKS_OP_CHECK(ru->getTransaction()->Put(_cf, prefixedKey, valueSlice)));
+            invariantRocksOK(
+                ROCKS_OP_CHECK(ru->getTransaction()->Put(_cf, prefixedKey, valueSlice)));
             return StatusWith<SpecialFormatInserted>(
                 SpecialFormatInserted::NoSpecialFormatInserted);
         }
@@ -913,8 +915,8 @@ namespace mongo {
 
     /// RocksStandardIndex
     RocksStandardIndex::RocksStandardIndex(rocksdb::DB* db, rocksdb::ColumnFamilyHandle* cf,
-                                           std::string prefix, std::string ident,
-                                           Ordering order, const BSONObj& config)
+                                           std::string prefix, std::string ident, Ordering order,
+                                           const BSONObj& config)
         : RocksIndexBase(db, cf, prefix, ident, order, config), useSingleDelete(false) {}
 
     StatusWith<SpecialFormatInserted> RocksStandardIndex::insert(OperationContext* opCtx,

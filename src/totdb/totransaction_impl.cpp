@@ -21,8 +21,23 @@ namespace rocksdb {
 namespace {
 
 TOComparator wbwidx_default_comparator;
+const RocksTimeStamp none_ts = 1;
 
 }  // namespace
+
+std::set<std::string> TOTransaction::timestampPrefixes;
+std::mutex TOTransaction::prefixes_mutex;
+
+void TOTransaction::enableTimestamp(const std::string& prefix) {
+  std::unique_lock<std::mutex> lk(prefixes_mutex);
+  timestampPrefixes.insert(prefix);
+}
+
+bool TOTransaction::isEnableTimestamp(const Slice& key) {
+  std::unique_lock<std::mutex> lk(prefixes_mutex);
+  Slice prefix(key.data(), sizeof(uint32_t));
+  return timestampPrefixes.count(prefix.ToString()) > 0;
+}
 
 Status PrepareConflict() {
   return Status(Status::Code::kInvalidArgument, Status::SubCode::kNone,
@@ -219,7 +234,8 @@ Status TOTransactionImpl::Put(ColumnFamilyHandle* column_family, const Slice& ke
   if (s.ok()) {
     written_keys_.emplace(std::move(txn_key));
     GetWriteBatch()->Put(column_family, key, value);
-    asof_commit_timestamps_.emplace_back(core_->commit_ts_);
+    auto commit_ts = TOTransaction::isEnableTimestamp(key) ? core_->commit_ts_ : none_ts;
+    asof_commit_timestamps_.emplace_back(commit_ts);
   }
   return s;
 }
@@ -276,7 +292,8 @@ Status TOTransactionImpl::Delete(ColumnFamilyHandle* column_family, const Slice&
   if (s.ok()) {
     written_keys_.emplace(std::move(txn_key));
     GetWriteBatch()->Delete(column_family, key);
-    asof_commit_timestamps_.emplace_back(core_->commit_ts_);
+    auto commit_ts = TOTransaction::isEnableTimestamp(key) ? core_->commit_ts_ : none_ts;
+    asof_commit_timestamps_.emplace_back(commit_ts);
   }
   return s;
 }

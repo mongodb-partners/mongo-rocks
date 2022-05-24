@@ -103,9 +103,9 @@ namespace mongo {
     class RocksUniqueIndex : public RocksIndexBase {
     public:
         RocksUniqueIndex(rocksdb::DB* db, rocksdb::ColumnFamilyHandle* cf, std::string prefix,
-                         std::string ident, Ordering order,
-                         const BSONObj& config, std::string collectionNamespace,
-                         std::string indexName, const BSONObj& keyPattern, bool partial = false);
+                         std::string ident, Ordering order, const BSONObj& config,
+                         std::string collectionNamespace, std::string indexName,
+                         const BSONObj& keyPattern, bool partial = false);
 
         virtual StatusWith<SpecialFormatInserted> insert(OperationContext* opCtx,
                                                          const BSONObj& key, const RecordId& loc,

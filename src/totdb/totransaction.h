@@ -2,6 +2,8 @@
 #ifndef ROCKSDB_LITE
 
 #include <functional>
+#include <set>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -81,6 +83,11 @@ class TOTransaction {
   };
 
   virtual TOTransactionState GetState() const = 0;
+
+  static void enableTimestamp(const std::string& prefix);
+  static bool isEnableTimestamp(const Slice& key);
+  static std::set<std::string> timestampPrefixes;
+  static std::mutex prefixes_mutex;
 
  protected:
   explicit TOTransaction(const DB* /*db*/) {}
