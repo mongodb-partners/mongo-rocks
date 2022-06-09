@@ -103,9 +103,9 @@ namespace mongo {
     class RocksUniqueIndex : public RocksIndexBase {
     public:
         RocksUniqueIndex(rocksdb::DB* db, rocksdb::ColumnFamilyHandle* cf, std::string prefix,
-                         std::string ident, Ordering order,
-                         const BSONObj& config, std::string collectionNamespace,
-                         std::string indexName, const BSONObj& keyPattern, bool partial = false);
+                         std::string ident, Ordering order, const BSONObj& config,
+                         std::string collectionNamespace, std::string indexName,
+                         const BSONObj& keyPattern, bool partial = false, bool isIdIdx = false);
 
         virtual StatusWith<SpecialFormatInserted> insert(OperationContext* opCtx,
                                                          const BSONObj& key, const RecordId& loc,
@@ -121,10 +121,29 @@ namespace mongo {
                                                            bool dupsAllowed) override;
 
     private:
+        StatusWith<SpecialFormatInserted> _insertTimestampSafe(OperationContext* opCtx,
+                                                               const BSONObj& key,
+                                                               const RecordId& loc,
+                                                               bool dupsAllowed);
+
+        StatusWith<SpecialFormatInserted> _insertTimestampUnsafe(OperationContext* opCtx,
+                                                                 const BSONObj& key,
+                                                                 const RecordId& loc,
+                                                                 bool dupsAllowed);
+
+        void _unindexTimestampUnsafe(OperationContext* opCtx, const BSONObj& key,
+                                     const RecordId& loc, bool dupsAllowed);
+
+        void _unindexTimestampSafe(OperationContext* opCtx, const BSONObj& key, const RecordId& loc,
+                                   bool dupsAllowed);
+
+        bool _keyExistsTimestampSafe(OperationContext* opCtx, const KeyString& prefixedKey);
+
         std::string _collectionNamespace;
         std::string _indexName;
         const BSONObj _keyPattern;
         const bool _partial;
+        const bool _isIdIndex;
     };
 
     class RocksStandardIndex : public RocksIndexBase {

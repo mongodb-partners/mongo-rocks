@@ -55,6 +55,8 @@ namespace mongo {
                           RocksDurabilityManager* durabilityManager);
         virtual ~RocksOplogManager(){};
 
+        void init(rocksdb::TOTransactionDB* db, RocksDurabilityManager* durabilityManager);
+
         void start(OperationContext* opCtx, RocksRecordStore* oplogRecordStore);
 
         void halt();

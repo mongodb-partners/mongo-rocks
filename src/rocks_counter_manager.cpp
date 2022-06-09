@@ -57,12 +57,15 @@ namespace mongo {
             }
         }
         std::string value;
-        auto s = _db->Get(rocksdb::ReadOptions(), _cf, counterKey, &value);
-        if (s.IsNotFound()) {
-            return 0;
+        {
+            auto txn = _db->makeTxn();
+            auto readopts = rocksdb::ReadOptions();
+            auto s = txn->Get(readopts, _cf, counterKey, &value);
+            if (s.IsNotFound()) {
+                return 0;
+            }
+            invariantRocksOK(s);
         }
-        invariantRocksOK(s);
-
         int64_t ret;
         invariant(sizeof(ret) == value.size());
         memcpy(&ret, value.data(), sizeof(ret));
@@ -73,7 +76,7 @@ namespace mongo {
     void RocksCounterManager::updateCounter(const std::string& counterKey, long long count) {
         if (_crashSafe) {
             int64_t storage;
-            auto txn = _makeTxn();
+            auto txn = _db->makeTxn();
             invariantRocksOK(txn->Put(_cf, counterKey, _encodeCounter(count, &storage)));
             invariantRocksOK(txn->Commit());
         } else {
@@ -83,7 +86,7 @@ namespace mongo {
             if (_syncCounter >= kSyncEvery) {
                 // let's sync this now. piggyback on writeBatch
                 int64_t storage;
-                auto txn = _makeTxn();
+                auto txn = _db->makeTxn();
                 for (const auto& counter : _counters) {
                     invariantRocksOK(
                         txn->Put(_cf, counter.first, _encodeCounter(counter.second, &storage)));
@@ -100,7 +103,7 @@ namespace mongo {
         if (_counters.size() == 0) {
             return;
         }
-        auto txn = _makeTxn();
+        auto txn = _db->makeTxn();
         int64_t storage;
         for (const auto& counter : _counters) {
             invariantRocksOK(txn->Put(_cf, counter.first, _encodeCounter(counter.second, &storage)));
@@ -115,9 +118,4 @@ namespace mongo {
         return rocksdb::Slice(reinterpret_cast<const char*>(storage), sizeof(*storage));
     }
 
-    std::unique_ptr<rocksdb::TOTransaction> RocksCounterManager::_makeTxn() {
-        rocksdb::WriteOptions options;
-        rocksdb::TOTransactionOptions txnOptions;
-        return std::unique_ptr<rocksdb::TOTransaction>(_db->BeginTransaction(options, txnOptions));
-    }
 }  // namespace mongo

@@ -29,8 +29,8 @@
 
 #pragma once
 
-#include <rocksdb/utilities/totransaction.h>
-#include <rocksdb/utilities/totransaction_db.h>
+#include "mongo/db/modules/rocks/src/totdb/totransaction.h"
+#include "mongo/db/modules/rocks/src/totdb/totransaction_db.h"
 #include "mongo/base/status.h"
 #include "mongo/bson/timestamp.h"
 #include "mongo/db/storage/recovery_unit.h"

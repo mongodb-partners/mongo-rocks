@@ -43,6 +43,7 @@
 
 #include "mongo/base/checked_cast.h"
 #include "mongo/db/concurrency/write_conflict_exception.h"
+#include "mongo/db/modules/rocks/src/totdb/totransaction_db.h"
 #include "mongo/db/operation_context.h"
 #include "mongo/db/server_options.h"
 #include "mongo/db/storage/journal_listener.h"
@@ -178,7 +179,7 @@ namespace mongo {
             }
             virtual rocksdb::Slice value() const { return _baseIterator->value(); }
             virtual rocksdb::Status status() const {
-                if (_baseIterator->status().IsPrepareConflict() && !Valid() &&
+                if (IsPrepareConflict(_baseIterator->status()) && !Valid() &&
                     _baseIterator->Valid()) {
                     // in this situation, we have seeked to neighbouring prefix
                     invariant(!_baseIterator->key().starts_with(_prefixSlice));
@@ -255,18 +256,8 @@ namespace mongo {
 
     std::atomic<int> RocksRecoveryUnit::_totalLiveRecoveryUnits(0);
 
-    RocksRecoveryUnit::RocksRecoveryUnit(rocksdb::TOTransactionDB* db,
-                                         RocksOplogManager* oplogManager,
-                                         RocksSnapshotManager* snapshotManager,
-                                         RocksCompactionScheduler* compactionScheduler,
-                                         RocksDurabilityManager* durabilityManager,
-                                         bool durable, RocksEngine* engine)
-        : _db(db),
-          _oplogManager(oplogManager),
-          _snapshotManager(snapshotManager),
-          _compactionScheduler(compactionScheduler),
-          _durabilityManager(durabilityManager),
-          _durable(durable),
+    RocksRecoveryUnit::RocksRecoveryUnit(bool durable, RocksEngine* engine)
+        : _durable(durable),
           _areWriteUnitOfWorksBanned(false),
           _isTimestamped(false),
           _timestampReadSource(ReadSource::kUnset),
@@ -301,7 +292,7 @@ namespace mongo {
         }
 
         if (notifyDone) {
-            _durabilityManager->notifyPreparedUnitOfWorkHasCommittedOrAborted();
+            getDurabilityManager()->notifyPreparedUnitOfWorkHasCommittedOrAborted();
         }
 
         try {
@@ -338,7 +329,7 @@ namespace mongo {
         }
 
         if (notifyDone) {
-            _durabilityManager->notifyPreparedUnitOfWorkHasCommittedOrAborted();
+            getDurabilityManager()->notifyPreparedUnitOfWorkHasCommittedOrAborted();
         }
         try {
             for (Changes::const_reverse_iterator it = _changes.rbegin(), end = _changes.rend();
@@ -392,7 +383,7 @@ namespace mongo {
 
     bool RocksRecoveryUnit::waitUntilDurable() {
         invariant(!_inUnitOfWork(), toString(_state));
-        _durabilityManager->waitUntilDurable(false);
+        getDurabilityManager()->waitUntilDurable(false);
         return true;
     }
 
@@ -486,7 +477,7 @@ namespace mongo {
 
         if (_isTimestamped) {
             if (!_orderedCommit) {
-                _oplogManager->triggerJournalFlush();
+                getOplogManager()->triggerJournalFlush();
             }
             _isTimestamped = false;
         }
@@ -519,7 +510,7 @@ namespace mongo {
 
     Status RocksRecoveryUnit::obtainMajorityCommittedSnapshot() {
         invariant(_timestampReadSource == ReadSource::kMajorityCommitted);
-        auto snapshotName = _snapshotManager->getMinSnapshotForNextCommittedRead();
+        auto snapshotName = getSnapshotManager()->getMinSnapshotForNextCommittedRead();
         if (!snapshotName) {
             return {ErrorCodes::ReadConcernMajorityNotAvailableYet,
                     "Read concern majority reads are currently not possible."};
@@ -603,9 +594,9 @@ namespace mongo {
             case ReadSource::kNoTimestamp: {
                 if (_isOplogReader) {
                     _oplogVisibleTs =
-                        static_cast<std::int64_t>(_oplogManager->getOplogReadTimestamp());
+                        static_cast<std::int64_t>(getOplogManager()->getOplogReadTimestamp());
                 }
-                RocksBeginTxnBlock(_db, &_transaction, _prepareConflictBehavior,
+                RocksBeginTxnBlock(getDB(), &_transaction, _prepareConflictBehavior,
                                    _roundUpPreparedTimestamps)
                     .done();
                 break;
@@ -613,16 +604,19 @@ namespace mongo {
             case ReadSource::kMajorityCommitted: {
                 // We reset _majorityCommittedSnapshot to the actual read timestamp used when the
                 // transaction was started.
-                _majorityCommittedSnapshot = _snapshotManager->beginTransactionOnCommittedSnapshot(
-                    _db, &_transaction, _prepareConflictBehavior, _roundUpPreparedTimestamps);
+                _majorityCommittedSnapshot =
+                    getSnapshotManager()->beginTransactionOnCommittedSnapshot(
+                        getDB(), &_transaction, _prepareConflictBehavior,
+                        _roundUpPreparedTimestamps);
                 break;
             }
             case ReadSource::kLastApplied: {
-                if (_snapshotManager->getLocalSnapshot()) {
-                    _readAtTimestamp = _snapshotManager->beginTransactionOnLocalSnapshot(
-                        _db, &_transaction, _prepareConflictBehavior, _roundUpPreparedTimestamps);
+                if (getSnapshotManager()->getLocalSnapshot()) {
+                    _readAtTimestamp = getSnapshotManager()->beginTransactionOnLocalSnapshot(
+                        getDB(), &_transaction, _prepareConflictBehavior,
+                        _roundUpPreparedTimestamps);
                 } else {
-                    RocksBeginTxnBlock(_db, &_transaction, _prepareConflictBehavior,
+                    RocksBeginTxnBlock(getDB(), &_transaction, _prepareConflictBehavior,
                                        _roundUpPreparedTimestamps)
                         .done();
                 }
@@ -640,7 +634,7 @@ namespace mongo {
                 // Intentionally continue to the next case to read at the _readAtTimestamp.
             }
             case ReadSource::kProvided: {
-                RocksBeginTxnBlock txnOpen(_db, &_transaction, _prepareConflictBehavior,
+                RocksBeginTxnBlock txnOpen(getDB(), &_transaction, _prepareConflictBehavior,
                                            _roundUpPreparedTimestamps);
                 auto status = txnOpen.setReadSnapshot(_readAtTimestamp);
 
@@ -660,9 +654,9 @@ namespace mongo {
     }
 
     Timestamp RocksRecoveryUnit::_beginTransactionAtAllDurableTimestamp() {
-        RocksBeginTxnBlock txnOpen(_db, &_transaction, _prepareConflictBehavior,
+        RocksBeginTxnBlock txnOpen(getDB(), &_transaction, _prepareConflictBehavior,
                                    _roundUpPreparedTimestamps, RoundUpReadTimestamp::kRound);
-        Timestamp txnTimestamp = _oplogManager->fetchAllDurableValue();
+        Timestamp txnTimestamp = getOplogManager()->fetchAllDurableValue();
         auto status = txnOpen.setReadSnapshot(txnTimestamp);
         invariant(status.isOK(), status.reason());
         auto readTimestamp = txnOpen.getTimestamp();
@@ -672,8 +666,8 @@ namespace mongo {
 
     Timestamp RocksRecoveryUnit::_beginTransactionAtNoOverlapTimestamp(
         std::unique_ptr<rocksdb::TOTransaction>* txn) {
-        auto lastApplied = _snapshotManager->getLocalSnapshot();
-        Timestamp allDurable = Timestamp(_oplogManager->fetchAllDurableValue());
+        auto lastApplied = getSnapshotManager()->getLocalSnapshot();
+        Timestamp allDurable = Timestamp(getOplogManager()->fetchAllDurableValue());
 
         // When using timestamps for reads and writes, it's important that readers and writers don't
         // overlap with the timestamps they use. In other words, at any point in the system there
@@ -706,8 +700,8 @@ namespace mongo {
         // should read afterward.
         Timestamp readTimestamp = (lastApplied) ? std::min(*lastApplied, allDurable) : allDurable;
 
-        RocksBeginTxnBlock txnOpen(_db, txn, _prepareConflictBehavior, _roundUpPreparedTimestamps,
-                                   RoundUpReadTimestamp::kRound);
+        RocksBeginTxnBlock txnOpen(getDB(), txn, _prepareConflictBehavior,
+                                   _roundUpPreparedTimestamps, RoundUpReadTimestamp::kRound);
         auto status = txnOpen.setReadSnapshot(readTimestamp);
         fassert(51090, status);
 
@@ -913,7 +907,7 @@ namespace mongo {
         invariant(getTransaction());
         auto it = _transaction->GetIterator(options, cf);
         return new PrefixStrippingIterator(cf, std::move(prefix), _transaction.get(), it,
-                                           isOplog ? nullptr : _compactionScheduler,
+                                           isOplog ? nullptr : getCompactionScheduler(),
                                            std::move(upperBound));
     }
 
@@ -957,5 +951,26 @@ namespace mongo {
 
     RocksRecoveryUnit* RocksRecoveryUnit::getRocksRecoveryUnit(OperationContext* opCtx) {
         return checked_cast<RocksRecoveryUnit*>(opCtx->recoveryUnit());
+    }
+
+    rocksdb::TOTransactionDB* RocksRecoveryUnit::getDB() {
+        invariant(_engine);
+        return _engine->getDB();
+    }
+    RocksOplogManager* RocksRecoveryUnit::getOplogManager() {
+        invariant(_engine);
+        return _engine->getOplogManager();
+    }
+    RocksSnapshotManager* RocksRecoveryUnit::getSnapshotManager() {
+        invariant(_engine);
+        return _engine->getRocksSnapshotManager();
+    }
+    RocksCompactionScheduler* RocksRecoveryUnit::getCompactionScheduler() {
+        invariant(_engine);
+        return _engine->getCompactionScheduler();
+    }
+    RocksDurabilityManager* RocksRecoveryUnit::getDurabilityManager() {
+        invariant(_engine);
+        return _engine->getDurabilityManager();
     }
 }  // namespace mongo

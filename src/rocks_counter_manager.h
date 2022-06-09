@@ -37,8 +37,8 @@
 
 #include <rocksdb/db.h>
 #include <rocksdb/slice.h>
-#include <rocksdb/utilities/totransaction.h>
-#include <rocksdb/utilities/totransaction_db.h>
+#include "mongo/db/modules/rocks/src/totdb/totransaction.h"
+#include "mongo/db/modules/rocks/src/totdb/totransaction_db.h"
 
 #include "mongo/base/string_data.h"
 #include "mongo/platform/mutex.h"
@@ -60,8 +60,6 @@ namespace mongo {
 
     private:
         static rocksdb::Slice _encodeCounter(long long counter, int64_t* storage);
-
-        std::unique_ptr<rocksdb::TOTransaction> _makeTxn();
 
         rocksdb::TOTransactionDB* _db;  // not owned
 

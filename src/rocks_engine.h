@@ -135,6 +135,8 @@ namespace mongo {
             return (SnapshotManager*)&_snapshotManager;
         }
 
+        RocksSnapshotManager* getRocksSnapshotManager() { return &_snapshotManager; }
+
         void setJournalListener(JournalListener* jl);
 
         void setStableTimestamp(Timestamp stableTimestamp, bool force) override;
@@ -301,7 +303,7 @@ namespace mongo {
         StorageEngine::OldestActiveTransactionTimestampCallback
             _oldestActiveTransactionTimestampCallback;
 
-        rocksdb::Options _options(bool isOplog) const;
+        rocksdb::Options _options(bool isOplog, bool trimHisotry) const;
 
         void _initDatabase();
 
@@ -363,6 +365,7 @@ namespace mongo {
         std::unique_ptr<RocksOplogManager> _oplogManager;
 
         static const std::string kMetadataPrefix;
+        static const std::string kStablePrefix;
 
         std::unique_ptr<RocksDurabilityManager> _durabilityManager;
         class RocksJournalFlusher;
