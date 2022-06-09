@@ -67,6 +67,9 @@ class TOTransaction {
   virtual Status Delete(ColumnFamilyHandle* column_family, const Slice& key) = 0;
   virtual Status Delete(const Slice& key) = 0;
 
+  virtual Status GetForUpdate(ColumnFamilyHandle* column_family, const Slice& key) = 0;
+  virtual Status GetForUpdate(const Slice& key) = 0;
+
   virtual WriteBatchWithIndex* GetWriteBatch() = 0;
 
   virtual Status SetName(const TransactionName& name) = 0;

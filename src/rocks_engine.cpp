@@ -150,6 +150,9 @@ namespace mongo {
             if (ns.startsWith("local.")) {
                 return false;
             }
+            if (ns == "_mdb_catalog") {
+                return false;
+            }
             return true;
         }
     }  // namespace
@@ -578,7 +581,7 @@ namespace mongo {
             index = new RocksUniqueIndex(_db.get(), _defaultCf.get(), prefix, ident.toString(),
                                          Ordering::make(desc->keyPattern()), std::move(config),
                                          desc->parentNS().toString(), desc->indexName(),
-                                         desc->keyPattern(), desc->isPartial());
+                                         desc->keyPattern(), desc->isPartial(), desc->isIdIndex());
         } else {
             auto si = new RocksStandardIndex(_db.get(), _defaultCf.get(), prefix, ident.toString(),
                                              Ordering::make(desc->keyPattern()), std::move(config));
